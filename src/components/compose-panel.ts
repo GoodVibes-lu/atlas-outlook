@@ -60,12 +60,18 @@ export class ComposePanel {
         </div>
 
         <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
-          <button class="btn btn-primary btn-block" id="insert-btn" disabled>
-            Insérer au curseur
-          </button>
-          <button class="btn btn-secondary btn-block" id="replace-btn" disabled style="font-size:11px;">
-            Remplacer tout le contenu
-          </button>
+          ${this.isReply ? `
+            <button class="btn btn-primary btn-block" id="reply-btn" disabled style="font-size:14px;">
+              Repondre avec ce template
+            </button>
+          ` : `
+            <button class="btn btn-primary btn-block" id="insert-btn" disabled>
+              Inserer au curseur
+            </button>
+            <button class="btn btn-secondary btn-block" id="replace-btn" disabled style="font-size:11px;">
+              Remplacer tout le contenu
+            </button>
+          `}
         </div>
       </div>
     `;
@@ -77,6 +83,7 @@ export class ComposePanel {
 
     document.getElementById('insert-btn')?.addEventListener('click', () => this.insertIntoEmail('cursor'));
     document.getElementById('replace-btn')?.addEventListener('click', () => this.insertIntoEmail('replace'));
+    document.getElementById('reply-btn')?.addEventListener('click', () => this.replyWithTemplate());
   }
 
   private async loadContext(): Promise<void> {
@@ -85,49 +92,50 @@ export class ComposePanel {
     try {
       const item = Office.context.mailbox.item;
       if (!item) {
-        recipientInfo.innerHTML = '<p class="empty-state">Aucun email en cours de rédaction</p>';
+        recipientInfo.innerHTML = '<p class="empty-state">Aucun email selectionne</p>';
         return;
       }
 
-      // Get recipients from compose item
-      if ((item as any).to?.getAsync) {
-        (item as any).to.getAsync((result: any) => {
-          if (result.status === Office.AsyncResultStatus.Succeeded && result.value.length > 0) {
-            const to = result.value;
+      if (this.isReply) {
+        // ── Reply mode (read mode in Inbox) ──
+        // The "recipient" of our reply is the SENDER of the current email
+        const from = item.from;
+        if (from) {
+          this.recipientEmail = from.emailAddress || '';
+          recipientInfo.innerHTML = `
+            <div style="font-size:11px;color:var(--atlas-text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Repondre a</div>
+            <div class="email-card-subject">${this.escapeHtml(from.displayName || '')} &lt;${this.escapeHtml(from.emailAddress || '')}&gt;</div>
+            <div class="email-card-meta" style="margin-top:4px;">${this.escapeHtml(typeof item.subject === 'string' ? item.subject : '')}</div>
+          `;
+          this.loadArgoProfile();
+        }
+        // Analyze the received email for tone
+        this.analyzeReceivedContent();
+      } else {
+        // ── Compose mode (new email or forward) ──
+        if ((item as any).to?.getAsync) {
+          (item as any).to.getAsync((result: any) => {
+            if (result.status === Office.AsyncResultStatus.Succeeded && result.value.length > 0) {
+              const to = result.value;
+              this.recipientEmail = to[0]?.emailAddress || '';
+              recipientInfo.innerHTML = `
+                <div class="email-card-subject">${to.map((r: any) => `${r.displayName || ''} &lt;${r.emailAddress}&gt;`).join(', ')}</div>
+              `;
+              this.loadArgoProfile();
+            } else {
+              recipientInfo.innerHTML = '<p style="font-size:12px;color:var(--atlas-text-secondary);">Ajoutez un destinataire pour activer l\'adaptation ARGO</p>';
+            }
+          });
+        } else if ((item as any).to) {
+          const to = (item as any).to;
+          if (Array.isArray(to) && to.length > 0) {
             this.recipientEmail = to[0]?.emailAddress || '';
             recipientInfo.innerHTML = `
               <div class="email-card-subject">${to.map((r: any) => `${r.displayName || ''} &lt;${r.emailAddress}&gt;`).join(', ')}</div>
             `;
             this.loadArgoProfile();
-          } else {
-            recipientInfo.innerHTML = '<p style="font-size:12px;color:var(--atlas-text-secondary);">Ajoutez un destinataire pour activer l\'adaptation ARGO</p>';
           }
-        });
-      } else if ((item as any).to) {
-        // Read mode - get "to" directly
-        const to = (item as any).to;
-        if (Array.isArray(to) && to.length > 0) {
-          this.recipientEmail = to[0]?.emailAddress || '';
-          recipientInfo.innerHTML = `
-            <div class="email-card-subject">${to.map((r: any) => `${r.displayName || ''} &lt;${r.emailAddress}&gt;`).join(', ')}</div>
-          `;
-          this.loadArgoProfile();
         }
-      }
-
-      // Check if this is a reply
-      const subject = typeof (item as any).subject === 'string'
-        ? (item as any).subject
-        : await new Promise<string>((resolve) => {
-            (item as any).subject?.getAsync?.((r: any) => resolve(r.value || ''));
-            setTimeout(() => resolve(''), 1000);
-          });
-
-      this.isReply = subject.startsWith('Re:') || subject.startsWith('RE:');
-
-      // If reply, analyze the received email
-      if (this.isReply) {
-        this.analyzeReceivedContent();
       }
 
       // Load templates
@@ -214,13 +222,13 @@ export class ComposePanel {
     this.selectedTemplate = this.templates.find(t => t.id === templateId) || null;
     const previewSection = document.getElementById('template-preview-section')!;
     const preview = document.getElementById('template-preview')!;
-    const insertBtn = document.getElementById('insert-btn') as HTMLButtonElement;
+    const actionBtn = (document.getElementById('reply-btn') || document.getElementById('insert-btn')) as HTMLButtonElement;
     const varsSection = document.getElementById('template-variables')!;
 
     if (!this.selectedTemplate) {
       previewSection.style.display = 'none';
       varsSection.style.display = 'none';
-      insertBtn.disabled = true;
+      if (actionBtn) actionBtn.disabled = true;
       return;
     }
 
@@ -249,7 +257,7 @@ export class ComposePanel {
     }
 
     previewSection.style.display = 'block';
-    insertBtn.disabled = false;
+    if (actionBtn) actionBtn.disabled = false;
     this.updatePreview();
   }
 
@@ -372,6 +380,53 @@ export class ComposePanel {
       insertBtn.disabled = false;
       replaceBtn.disabled = false;
       insertBtn.textContent = 'Inserer au curseur';
+    }
+  }
+
+  /** Reply mode: open Outlook reply form with adapted template content */
+  private async replyWithTemplate(): Promise<void> {
+    if (!this.selectedTemplate) return;
+
+    const replyBtn = document.getElementById('reply-btn') as HTMLButtonElement;
+    replyBtn.disabled = true;
+    replyBtn.textContent = 'Personnalisation IA...';
+
+    try {
+      const content = this.getTemplateContent();
+      let body = content.body;
+
+      // Replace variables
+      document.querySelectorAll('.var-input').forEach((input) => {
+        const varName = (input as HTMLInputElement).getAttribute('data-var')!;
+        const value = (input as HTMLInputElement).value || '';
+        body = body.replaceAll(`{{${varName}}}`, value);
+      });
+
+      // Apply ARGO salutation + closing
+      const salutation = getSalutation(this.argoProfile, this.userName);
+      const closing = getClosing(this.argoProfile, this.userName);
+      let fullHtml = `<p>${salutation}</p>${body}<p>${closing}</p><p>${this.userName}<br/>GOOD VIBES events &amp; communications</p>`;
+
+      // Full AI adaptation if Anthropic key available
+      if (this.argoProfile && localStorage.getItem('atlas_addin_anthropic_key')) {
+        try {
+          fullHtml = await adaptEmailBody(fullHtml, this.argoProfile, this.userName);
+        } catch { /* fallback */ }
+      }
+
+      // Open Outlook reply form with the adapted content
+      const item = Office.context.mailbox.item;
+      if (item) {
+        (item as any).displayReplyForm?.({
+          htmlBody: fullHtml,
+        });
+        showToast('Reponse ouverte avec le template adapte', 'success');
+      }
+    } catch (err) {
+      showToast(`Erreur : ${(err as Error).message}`, 'error');
+    } finally {
+      replyBtn.disabled = false;
+      replyBtn.textContent = 'Repondre avec ce template';
     }
   }
 

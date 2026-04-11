@@ -162,7 +162,7 @@ export class LinkPanel {
     if (projetMatch) {
       const noProjet = projetMatch[1];
       const projets = await getAllProjets();
-      const found = projets.find(p => p.noProjet === noProjet);
+      const found = projets.find(p => String(p.noProjet) === noProjet);
       if (found) {
         autoSection.style.display = 'block';
         // Hide direct search, show collapsible toggle instead
