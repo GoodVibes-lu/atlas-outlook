@@ -4,6 +4,7 @@
 
 import { getLinkedConversationIds, getAllLinkedEmailIds, linkEmailToProject, linkEmailToContact, getAllProjets, resolveClientIdInProjetsBase, getFolderMapping, saveFolderMapping } from '../api/airtable';
 import { getGraphToken, getMessageForLinking, convertToRestId, moveMessageToFolder, ensureFolderPath, resolveFolderPath } from '../api/graph';
+import { summarizeEmail } from '../api/argo';
 import { SearchPicker } from './search-picker';
 import type { SearchResult, MailMessageFull, Projet } from '../types';
 import { showToast } from '../taskpane';
@@ -41,6 +42,14 @@ export class LinkPanel {
         <div class="section-heading">Email courant</div>
         <div id="email-info-card" class="email-card">
           <div class="spinner" style="margin: 12px auto;"></div>
+        </div>
+
+        <div id="ai-summary" style="display:none;">
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
+            <span style="font-size:12px;">✨</span>
+            <span class="section-heading" style="margin:0; font-size:10px;">RESUME IA</span>
+          </div>
+          <div id="ai-summary-content" style="font-size:12px; color:var(--atlas-text-secondary); line-height:1.5; padding:10px 12px; background:linear-gradient(135deg, rgba(99,102,241,0.05), rgba(139,92,246,0.05)); border:1px solid rgba(99,102,241,0.15); border-radius:var(--atlas-radius);"></div>
         </div>
 
         <div id="link-status" style="display:none;"></div>
@@ -144,9 +153,40 @@ export class LinkPanel {
       // Auto-detect project from subject (#NNN)
       await this.autoDetect();
 
+      // Generate AI summary (non-blocking)
+      this.loadAiSummary();
+
     } catch (err) {
       card.innerHTML = `<p class="empty-state">Erreur : ${(err as Error).message}</p>`;
     }
+  }
+
+  private async loadAiSummary(): Promise<void> {
+    if (!this.emailInfo || !localStorage.getItem('atlas_addin_anthropic_key')) return;
+    try {
+      // Get email body via Office.js for summary
+      const item = Office.context.mailbox.item;
+      if (!item) return;
+      const bodyText = await new Promise<string>((resolve) => {
+        (item as any).body?.getAsync?.(Office.CoercionType.Text, (r: any) => {
+          resolve(r?.status === Office.AsyncResultStatus.Succeeded ? r.value || '' : '');
+        });
+        setTimeout(() => resolve(''), 3000);
+      });
+      if (!bodyText || bodyText.length < 20) return;
+
+      const summary = await summarizeEmail(
+        this.emailInfo.subject,
+        bodyText,
+        this.emailInfo.from
+      );
+      if (summary) {
+        const el = document.getElementById('ai-summary')!;
+        const content = document.getElementById('ai-summary-content')!;
+        el.style.display = 'block';
+        content.textContent = summary;
+      }
+    } catch { /* non-blocking */ }
   }
 
   private async autoDetect(): Promise<void> {

@@ -93,6 +93,104 @@ UNIQUEMENT le JSON, sans markdown.`;
   }
 }
 
+// ── Email Summary ──
+
+export async function summarizeEmail(subject: string, body: string, senderName: string): Promise<string> {
+  const key = getAnthropicKey();
+  if (!key) return '';
+
+  const prompt = `Resume cet email en 2-3 lignes concises et utiles pour un gestionnaire de projet. Mentionne l'action demandee s'il y en a une. Pas de guillemets, pas de prefixe "Resume:", juste le texte.
+
+De: ${senderName}
+Sujet: ${subject}
+Corps: ${body.slice(0, 1500)}`;
+
+  try {
+    return await callClaude(prompt, 200);
+  } catch { return ''; }
+}
+
+// ── Quick Reply Suggestions ──
+
+export interface QuickReplySuggestion {
+  label: string;
+  tone: string;
+  body: string;
+}
+
+export async function generateQuickReplies(
+  subject: string, body: string, senderName: string, profile: ArgoProfile | null, userName: string
+): Promise<QuickReplySuggestion[]> {
+  const key = getAnthropicKey();
+  if (!key) return [];
+
+  const isTu = profile?.tonPrefere === 'Amical' ||
+    (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
+  const lang = profile?.languePreferee || 'FR';
+  const prenom = profile?.prenom || senderName.split(' ')[0] || '';
+
+  const prompt = `Tu es un assistant email pour une agence de communication luxembourgeoise (GOOD VIBES).
+Genere exactement 3 reponses courtes et naturelles a cet email.
+
+De: ${senderName}
+Sujet: ${subject}
+Corps: ${body.slice(0, 800)}
+
+Contexte:
+- Repondre en ${lang === 'EN' ? 'anglais' : lang === 'DE' ? 'allemand' : 'francais'}
+- ${isTu ? 'Tutoyer' : 'Vouvoyer'} le destinataire (prenom: ${prenom})
+- Ton professionnel mais chaleureux (agence de com)
+- Signer: ${userName}
+
+Retourne un JSON array de 3 objets: [{"label": "2-3 mots max (emoji + description)", "tone": "positif|neutre|formel", "body": "le HTML de la reponse complete avec <p> tags, salutation et closing inclus"}]
+
+UNIQUEMENT le JSON, sans markdown.`;
+
+  try {
+    const raw = await callClaude(prompt, 1500);
+    const parsed = JSON.parse(raw.replace(/```json?\s*\n?/i, '').replace(/\n?```\s*$/i, ''));
+    return Array.isArray(parsed) ? parsed.slice(0, 3) : [];
+  } catch { return []; }
+}
+
+// ── Free-form AI Reply ──
+
+export async function generateFreeReply(
+  subject: string, body: string, senderName: string,
+  instruction: string, profile: ArgoProfile | null, userName: string
+): Promise<string> {
+  const key = getAnthropicKey();
+  if (!key) throw new Error('Cle API Anthropic requise');
+
+  const isTu = profile?.tonPrefere === 'Amical' ||
+    (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
+  const lang = profile?.languePreferee || 'FR';
+  const prenom = profile?.prenom || senderName.split(' ')[0] || '';
+
+  const prompt = `Tu es ${userName} de GOOD VIBES events & communications (agence de com au Luxembourg).
+Redige une reponse a cet email en suivant l'instruction ci-dessous.
+
+Email recu:
+De: ${senderName}
+Sujet: ${subject}
+Corps: ${body.slice(0, 1200)}
+
+Instruction de ${userName}: "${instruction}"
+
+Regles:
+- Langue: ${lang === 'EN' ? 'anglais' : lang === 'DE' ? 'allemand' : 'francais'}
+- ${isTu ? `Tutoyer ${prenom}` : `Vouvoyer ${prenom}`}
+- Ton: professionnel mais chaleureux
+- Inclure salutation et closing
+- Signer: ${userName}, GOOD VIBES events & communications
+- Format: HTML avec <p> tags
+
+Retourne UNIQUEMENT le HTML, sans markdown.`;
+
+  const raw = await callClaude(prompt, 1500);
+  return raw.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+}
+
 // ── Tone Adaptation ──
 
 export function getSalutation(profile: ArgoProfile | null, senderName?: string): string {

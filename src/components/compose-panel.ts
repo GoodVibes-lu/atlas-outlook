@@ -3,7 +3,7 @@
  */
 
 import { getEmailTemplates, fetchContactArgoProfile } from '../api/airtable';
-import { getSalutation, getClosing, adaptEmailBody, analyzeReceivedEmail } from '../api/argo';
+import { getSalutation, getClosing, adaptEmailBody, analyzeReceivedEmail, generateQuickReplies, generateFreeReply } from '../api/argo';
 import type { EmailTemplate, ArgoProfile } from '../types';
 import { showToast } from '../taskpane';
 
@@ -38,9 +38,43 @@ export class ComposePanel {
         </div>
 
         <div id="received-analysis" style="display:none;">
-          <div class="section-heading">Analyse du mail reçu</div>
+          <div class="section-heading">Analyse du mail recu</div>
           <div id="received-analysis-info" class="email-card"></div>
         </div>
+
+        ${this.isReply ? `
+        <div id="quick-replies-section" style="display:none;">
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+            <span style="font-size:14px;">⚡</span>
+            <span class="section-heading" style="margin:0;">Reponses rapides IA</span>
+          </div>
+          <div id="quick-replies-container" style="display:flex; flex-direction:column; gap:6px;"></div>
+        </div>
+
+        <div id="free-reply-section">
+          <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
+            <span style="font-size:14px;">✨</span>
+            <span class="section-heading" style="margin:0;">Reponse libre IA</span>
+          </div>
+          <div class="form-group" style="margin-bottom:8px;">
+            <textarea class="form-input" id="free-reply-instruction" rows="2" placeholder="Ex: Confirmer la date, demander un devis, proposer un rdv mardi..."></textarea>
+          </div>
+          <button class="btn btn-primary btn-block" id="free-reply-btn" style="font-size:13px;">
+            ✨ Generer la reponse
+          </button>
+          <div id="free-reply-preview" style="display:none; margin-top:10px;">
+            <div class="section-heading" style="font-size:10px;">APERCU</div>
+            <div id="free-reply-content" class="template-preview"></div>
+            <button class="btn btn-primary btn-block" id="free-reply-send-btn" style="margin-top:8px; font-size:14px;">
+              Repondre avec ce texte
+            </button>
+          </div>
+        </div>
+
+        <div style="border-top:1px solid var(--atlas-border); margin:16px 0 8px; padding-top:12px;">
+          <div class="section-heading" style="font-size:10px; color:var(--atlas-text-muted);">OU UTILISER UN TEMPLATE</div>
+        </div>
+        ` : ''}
 
         <div class="section-heading">Template</div>
         <div class="form-group">
@@ -84,6 +118,8 @@ export class ComposePanel {
     document.getElementById('insert-btn')?.addEventListener('click', () => this.insertIntoEmail('cursor'));
     document.getElementById('replace-btn')?.addEventListener('click', () => this.insertIntoEmail('replace'));
     document.getElementById('reply-btn')?.addEventListener('click', () => this.replyWithTemplate());
+    document.getElementById('free-reply-btn')?.addEventListener('click', () => this.generateFreeReplyContent());
+    document.getElementById('free-reply-send-btn')?.addEventListener('click', () => this.sendFreeReply());
   }
 
   private async loadContext(): Promise<void> {
@@ -109,8 +145,9 @@ export class ComposePanel {
           `;
           this.loadArgoProfile();
         }
-        // Analyze the received email for tone
+        // Analyze the received email for tone + generate quick replies
         this.analyzeReceivedContent();
+        this.loadQuickReplies();
       } else {
         // ── Compose mode (new email or forward) ──
         if ((item as any).to?.getAsync) {
@@ -294,7 +331,11 @@ export class ComposePanel {
     const salutation = getSalutation(this.argoProfile, this.userName);
     const closing = getClosing(this.argoProfile, this.userName);
 
+    const hasAI = !!localStorage.getItem('atlas_addin_anthropic_key') && !!this.argoProfile;
+    const langBadge = content.lang !== 'FR' ? `<span style="display:inline-block;background:var(--atlas-primary);color:#fff;border-radius:3px;padding:1px 6px;font-size:9px;margin-left:6px;">${content.lang}</span>` : '';
+
     preview.innerHTML = `
+      ${hasAI ? `<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;font-size:10px;color:var(--atlas-primary);"><span>✨</span> Sera adapte par ARGO (${this.argoProfile!.tonPrefere === 'Amical' ? 'tu' : 'vous'}, ${content.lang})${langBadge}</div>` : ''}
       <div style="margin-bottom:8px;font-weight:600;font-size:12px;">Objet: ${this.escapeHtml(subject)}</div>
       <hr style="border:none;border-top:1px solid var(--atlas-border);margin:8px 0;"/>
       <p>${salutation}</p>
@@ -381,6 +422,95 @@ export class ComposePanel {
       replaceBtn.disabled = false;
       insertBtn.textContent = 'Inserer au curseur';
     }
+  }
+
+  private freeReplyHtml = '';
+
+  /** Load 3 quick reply suggestions from AI */
+  private async loadQuickReplies(): Promise<void> {
+    if (!localStorage.getItem('atlas_addin_anthropic_key')) return;
+    try {
+      const item = Office.context.mailbox.item;
+      if (!item) return;
+      const subject = typeof item.subject === 'string' ? item.subject : '';
+      const bodyText = await new Promise<string>((resolve) => {
+        (item as any).body?.getAsync?.(Office.CoercionType.Text, (r: any) => {
+          resolve(r?.status === Office.AsyncResultStatus.Succeeded ? r.value || '' : '');
+        });
+        setTimeout(() => resolve(''), 3000);
+      });
+      if (!bodyText) return;
+
+      const senderName = item.from?.displayName || '';
+      const replies = await generateQuickReplies(subject, bodyText, senderName, this.argoProfile, this.userName);
+      if (replies.length === 0) return;
+
+      const section = document.getElementById('quick-replies-section')!;
+      const container = document.getElementById('quick-replies-container')!;
+      section.style.display = 'block';
+
+      container.innerHTML = replies.map((r, i) => `
+        <button class="btn btn-secondary btn-block quick-reply-btn" data-idx="${i}" style="text-align:left; padding:10px 12px; font-size:12px; line-height:1.4;">
+          <strong>${this.escapeHtml(r.label)}</strong>
+        </button>
+      `).join('');
+
+      container.querySelectorAll('.quick-reply-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = parseInt(btn.getAttribute('data-idx')!);
+          const reply = replies[idx];
+          if (reply) {
+            const mailItem = Office.context.mailbox.item;
+            (mailItem as any)?.displayReplyForm?.({ htmlBody: reply.body });
+            showToast('Reponse rapide ouverte', 'success');
+          }
+        });
+      });
+    } catch { /* non-blocking */ }
+  }
+
+  /** Generate a free-form reply from user instruction */
+  private async generateFreeReplyContent(): Promise<void> {
+    const instruction = (document.getElementById('free-reply-instruction') as HTMLTextAreaElement)?.value?.trim();
+    if (!instruction) { showToast('Decrivez ce que vous voulez repondre', 'error'); return; }
+
+    const btn = document.getElementById('free-reply-btn') as HTMLButtonElement;
+    btn.disabled = true;
+    btn.textContent = '✨ Generation en cours...';
+
+    try {
+      const item = Office.context.mailbox.item;
+      if (!item) return;
+      const subject = typeof item.subject === 'string' ? item.subject : '';
+      const bodyText = await new Promise<string>((resolve) => {
+        (item as any).body?.getAsync?.(Office.CoercionType.Text, (r: any) => {
+          resolve(r?.status === Office.AsyncResultStatus.Succeeded ? r.value || '' : '');
+        });
+        setTimeout(() => resolve(''), 3000);
+      });
+
+      const senderName = item.from?.displayName || '';
+      this.freeReplyHtml = await generateFreeReply(subject, bodyText, senderName, instruction, this.argoProfile, this.userName);
+
+      // Show preview
+      const previewSection = document.getElementById('free-reply-preview')!;
+      const previewContent = document.getElementById('free-reply-content')!;
+      previewSection.style.display = 'block';
+      previewContent.innerHTML = this.freeReplyHtml;
+    } catch (err) {
+      showToast(`Erreur IA : ${(err as Error).message}`, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '✨ Generer la reponse';
+    }
+  }
+
+  /** Send the free-form generated reply */
+  private async sendFreeReply(): Promise<void> {
+    if (!this.freeReplyHtml) return;
+    const item = Office.context.mailbox.item;
+    (item as any)?.displayReplyForm?.({ htmlBody: this.freeReplyHtml });
+    showToast('Reponse ouverte', 'success');
   }
 
   /** Reply mode: open Outlook reply form with adapted template content */
