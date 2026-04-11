@@ -49,14 +49,14 @@ const EF = {
 
 // ── Projet Field IDs ──
 const PF = {
-  NO_PROJET: 'fldGjQVMntdHceWLa',
-  DENOMINATION: 'fld5BANf7QEyrq8ht',
-  CLIENT: 'fldp9w3j8YbCNKFsR',
-  STATUT: 'fld1uAMt7D1BbbCyq',
-  COMMERCIAL: 'fldURG6EyZzAp0kCJ',
-  CHEF_PROJET: 'fld40rRjWRHqZZvYT',
-  DATE_DEBUT: 'fldL0t5D0w2JCQNrT',
-  DATE_FIN: 'fldKHl6w0JEFUlmn2',
+  NO_PROJET: 'fldGjQVMntdHceWLa',       // No Projet (autoNumber)
+  DENOMINATION: 'fldaVDut8RijfsorS',     // Dénomination du projet (singleLineText)
+  CLIENT: 'fld7Aa90eAmcYvY71',           // Client (multipleRecordLinks)
+  STATUT: 'fld0JYd0AHLcVfhaT',           // Statut (singleSelect)
+  EN_CHARGE: 'fldwyFpDMHjNUT2Cr',        // En charge (multipleRecordLinks)
+  NOM_CLIENT: 'fld0giuubfxZd45sq',        // NomClient (singleLineText)
+  DATE_DEBUT: 'fld1UJIUV8yNmWhxL',       // Début (date)
+  DATE_FIN: 'fldtTsomztPLywxf0',         // Fin (date)
 } as const;
 
 // ── Contact ARGO Profile Field IDs ──
@@ -147,10 +147,10 @@ export async function getAllProjets(): Promise<Projet[]> {
         id: r.id,
         noProjet: f[PF.NO_PROJET] || '',
         denomination: f[PF.DENOMINATION] || '',
-        client: selectName(f[PF.CLIENT]),
+        client: f[PF.NOM_CLIENT] || selectName(f[PF.CLIENT]),
         statut: selectName(f[PF.STATUT]),
-        commercial: selectName(f[PF.COMMERCIAL]),
-        chefDeProjet: selectName(f[PF.CHEF_PROJET]),
+        commercial: selectName(f[PF.EN_CHARGE]),
+        chefDeProjet: '',
         dateDebut: f[PF.DATE_DEBUT] || '',
         dateFin: f[PF.DATE_FIN] || '',
       };
@@ -179,10 +179,10 @@ export async function getAllTiers(): Promise<Tier[]> {
       const f = r.fields || {};
       return {
         id: r.id,
-        relation: f['fldp9w3j8YbCNKFsR'] || Object.values(f)[0] || '', // primary field
-        categorie: selectName(f['fld8yDAo7vCmoVss8'] || ''),
-        email: f['fldGhFOAEoZZZGN16'] || '',
-        telephone: f['fld2nyhbAzt5jdoU9'] || '',
+        relation: f['fldYyVtj5Rh5TDgOb'] || f['fldq4OWNWYiS7XUIg'] || '', // Relation or Nom
+        categorie: selectName(f['fldQZFM9TuuIEvcgD'] || ''),               // Secteur
+        email: f['fldCNqiCExXOpLQuI'] || '',                                // Email
+        telephone: '',
       };
     }));
     offset = data.offset || '';
@@ -209,10 +209,10 @@ export async function getAllContacts(): Promise<Contact[]> {
       const f = r.fields || {};
       return {
         id: r.id,
-        personneDeContact: Object.values(f)[0] as string || '', // primary field
-        email: '',
-        relationSociete: '',
-        fonction: '',
+        personneDeContact: f['fldDFZzW5cris8sva'] || '',  // Personne de contact
+        email: f['fldzZSIPtUkkKJtVi'] || '',               // Email
+        relationSociete: f['fldlSSa8wDIQvoSey'] || '',     // Société
+        fonction: f['fldHiZeUeyv4913jv'] || '',             // Fonction
       };
     }));
     offset = data.offset || '';
