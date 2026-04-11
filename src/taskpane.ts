@@ -50,24 +50,16 @@ function getUrlParams(): { mode: AddinMode; tab: string | null } {
 }
 
 /**
- * Detect if this email is related to an existing project.
- * Checks: #NNN in subject, OR conversationId already linked.
- * Returns true if project context detected.
+ * Detect if this email references an existing project (#NNN in subject).
+ * "Créer" tab is hidden ONLY when a real project is detected, not for Re:/Fwd:.
  */
-function detectProjectContext(): boolean {
+function detectProjectInSubject(): boolean {
   try {
     const item = Office.context.mailbox?.item;
     if (!item) return false;
-    // Check #NNN in subject
     const subject: string | undefined = (item as any).subject;
     if (typeof subject === 'string' && /#\s*\d{2,4}/.test(subject)) return true;
-    // If email is already linked (shown as "Déjà lié"), also hide Créer
-    // Note: conversationId check is async, so we also check subject patterns
-    // that indicate this is part of an existing thread (Re: / Fwd:)
-    if (typeof subject === 'string' && /^(Re|RE|Fwd|FW|TR):/i.test(subject)) return true;
-  } catch {
-    // Outside Office or no item — ignore
-  }
+  } catch { /* ignore */ }
   return false;
 }
 
@@ -84,7 +76,7 @@ function renderApp(): void {
 
   // Detect project in subject before building tabs
   const isCompose = mode === 'compose';
-  const hasDetectedProject = !isCompose ? detectProjectContext() : false;
+  const hasDetectedProject = !isCompose ? detectProjectInSubject() : false;
 
   // Determine available tabs based on mode
   let tabs: Array<{ id: string; label: string; icon: string }>;
