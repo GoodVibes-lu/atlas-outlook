@@ -715,8 +715,9 @@ export async function getAllEmployes(): Promise<Employe[]> {
 
 export async function countLinkedEmails(projetRecordId: string): Promise<number> {
   try {
-    const formula = encodeURIComponent(`FIND("${projetRecordId}", ARRAYJOIN({${EF.PROJET}}))`);
-    const url = `${API_URL}/${PROJETS_BASE}/${TABLES.EMAILS_PROJET}?filterByFormula=${formula}&fields%5B%5D=${EF.SUJET}&returnFieldsByFieldId=true`;
+    // Use SEARCH on linked record field — Airtable stores linked records as comma-separated IDs
+    const formula = encodeURIComponent(`SEARCH("${projetRecordId}", ARRAYJOIN(${EF.PROJET}, ","))`);
+    const url = `${API_URL}/${PROJETS_BASE}/${TABLES.EMAILS_PROJET}?filterByFormula=${formula}&fields%5B%5D=${EF.SUJET}&returnFieldsByFieldId=true&pageSize=100`;
     const data = await airtableFetch<{ records: any[] }>(url);
     return data.records.length;
   } catch { return 0; }
