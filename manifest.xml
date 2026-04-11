@@ -40,6 +40,14 @@
     <Rule xsi:type="ItemIs" ItemType="Message" FormType="ReadOrEdit" />
   </Rule>
 
+  <AppDomains>
+    <AppDomain>https://api.airtable.com</AppDomain>
+    <AppDomain>https://content.airtable.com</AppDomain>
+    <AppDomain>https://api.anthropic.com</AppDomain>
+    <AppDomain>https://graph.microsoft.com</AppDomain>
+    <AppDomain>https://login.microsoftonline.com</AppDomain>
+  </AppDomains>
+
   <DisableEntityHighlighting>true</DisableEntityHighlighting>
 
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">

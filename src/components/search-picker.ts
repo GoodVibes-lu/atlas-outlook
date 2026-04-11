@@ -71,8 +71,10 @@ export class SearchPicker {
 
       this.loaded = true;
       this.searchInput.placeholder = `Rechercher parmi ${this.allResults.length} éléments...`;
-    } catch (err) {
-      this.resultsList.innerHTML = '<p class="empty-state">Erreur de chargement. Vérifiez le token Airtable.</p>';
+    } catch (err: any) {
+      console.error('[SearchPicker] loadData failed:', err);
+      const msg = err?.message || String(err);
+      this.resultsList.innerHTML = `<p class="empty-state">Erreur de chargement.<br/><small style="opacity:0.7">${msg.length > 120 ? msg.slice(0, 120) + '...' : msg}</small></p>`;
     }
   }
 
