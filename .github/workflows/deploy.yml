@@ -3,8 +3,6 @@ name: Deploy Outlook Add-in to GitHub Pages
 on:
   push:
     branches: [main]
-    paths:
-      - 'outlook-addin/**'
   workflow_dispatch:
 
 permissions:
@@ -32,18 +30,14 @@ jobs:
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: outlook-addin/package-lock.json
 
       - name: Install dependencies
-        working-directory: outlook-addin
         run: npm ci
 
       - name: Build
-        working-directory: outlook-addin
         run: npm run build
 
       - name: Copy manifest and assets to dist
-        working-directory: outlook-addin
         run: |
           cp manifest.xml dist/
           cp manifest.json dist/
@@ -55,7 +49,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: outlook-addin/dist
+          path: dist
 
       - name: Deploy to GitHub Pages
         id: deployment
