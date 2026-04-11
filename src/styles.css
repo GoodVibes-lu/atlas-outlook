@@ -1,0 +1,459 @@
+/* ── ATLAS Outlook Add-in — Fluent UI-inspired styles ── */
+
+:root {
+  --atlas-primary: #6366f1;
+  --atlas-primary-hover: #4f46e5;
+  --atlas-success: #10b981;
+  --atlas-warning: #f59e0b;
+  --atlas-danger: #ef4444;
+  --atlas-bg: #ffffff;
+  --atlas-bg-secondary: #f8fafc;
+  --atlas-bg-hover: #f1f5f9;
+  --atlas-border: #e2e8f0;
+  --atlas-text: #1e293b;
+  --atlas-text-secondary: #64748b;
+  --atlas-text-muted: #94a3b8;
+  --atlas-radius: 6px;
+  --atlas-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  --atlas-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--atlas-font);
+  font-size: 13px;
+  color: var(--atlas-text);
+  background: var(--atlas-bg);
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+/* ── Loading ── */
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  gap: 12px;
+  color: var(--atlas-text-secondary);
+}
+
+.spinner {
+  width: 24px; height: 24px;
+  border: 3px solid var(--atlas-border);
+  border-top-color: var(--atlas-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--atlas-border);
+  background: var(--atlas-bg);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.header-logo {
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--atlas-primary);
+}
+
+.header-subtitle {
+  font-size: 11px;
+  color: var(--atlas-text-muted);
+  margin-left: auto;
+}
+
+/* ── Navigation tabs ── */
+.nav-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--atlas-border);
+  background: var(--atlas-bg-secondary);
+  padding: 0 8px;
+}
+
+.nav-tab {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--atlas-text-secondary);
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s;
+}
+
+.nav-tab:hover { color: var(--atlas-text); background: var(--atlas-bg-hover); }
+.nav-tab.active {
+  color: var(--atlas-primary);
+  border-bottom-color: var(--atlas-primary);
+}
+
+/* ── Content area ── */
+.content { padding: 16px; }
+
+/* ── Setup screen ── */
+.setup-card {
+  background: var(--atlas-bg-secondary);
+  border: 1px solid var(--atlas-border);
+  border-radius: var(--atlas-radius);
+  padding: 20px;
+  text-align: center;
+}
+
+.setup-card h3 {
+  font-size: 15px;
+  margin-bottom: 8px;
+}
+
+.setup-card p {
+  font-size: 12px;
+  color: var(--atlas-text-secondary);
+  margin-bottom: 16px;
+}
+
+/* ── Forms ── */
+.form-group {
+  margin-bottom: 12px;
+}
+
+.form-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--atlas-text);
+  margin-bottom: 4px;
+}
+
+.form-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--atlas-border);
+  border-radius: var(--atlas-radius);
+  font-size: 13px;
+  font-family: var(--atlas-font);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.form-input:focus {
+  border-color: var(--atlas-primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.form-input::placeholder { color: var(--atlas-text-muted); }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border-radius: var(--atlas-radius);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--atlas-font);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.btn-primary {
+  background: var(--atlas-primary);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--atlas-primary-hover); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-secondary {
+  background: var(--atlas-bg);
+  color: var(--atlas-text);
+  border-color: var(--atlas-border);
+}
+.btn-secondary:hover { background: var(--atlas-bg-hover); }
+
+.btn-success {
+  background: var(--atlas-success);
+  color: #fff;
+}
+
+.btn-sm { padding: 4px 8px; font-size: 11px; }
+.btn-block { width: 100%; justify-content: center; }
+
+/* ── Email info card ── */
+.email-card {
+  background: var(--atlas-bg-secondary);
+  border: 1px solid var(--atlas-border);
+  border-radius: var(--atlas-radius);
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.email-card-subject {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+
+.email-card-meta {
+  font-size: 11px;
+  color: var(--atlas-text-secondary);
+}
+
+/* ── Suggestions ── */
+.suggestion-list {
+  list-style: none;
+}
+
+.suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--atlas-border);
+  border-radius: var(--atlas-radius);
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.suggestion-item:hover {
+  border-color: var(--atlas-primary);
+  background: rgba(99, 102, 241, 0.04);
+}
+
+.suggestion-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 10px;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.badge-projet { background: #d97706; }
+.badge-tiers { background: #6366f1; }
+.badge-contact { background: #8b5cf6; }
+
+.suggestion-name {
+  font-weight: 500;
+  font-size: 12px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggestion-detail {
+  font-size: 11px;
+  color: var(--atlas-text-muted);
+}
+
+/* ── Search input ── */
+.search-wrapper {
+  position: relative;
+  margin-bottom: 10px;
+}
+
+.search-input {
+  width: 100%;
+  padding: 8px 10px 8px 32px;
+  border: 1px solid var(--atlas-border);
+  border-radius: var(--atlas-radius);
+  font-size: 13px;
+  font-family: var(--atlas-font);
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: var(--atlas-primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.search-icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 14px;
+  color: var(--atlas-text-muted);
+}
+
+/* ── Dropdown ── */
+.dropdown {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.dropdown-select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--atlas-border);
+  border-radius: var(--atlas-radius);
+  font-size: 13px;
+  font-family: var(--atlas-font);
+  background: var(--atlas-bg);
+  cursor: pointer;
+  appearance: none;
+  outline: none;
+}
+
+.dropdown-select:focus { border-color: var(--atlas-primary); }
+
+/* ── Toast ── */
+.toast {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  padding: 10px 14px;
+  border-radius: var(--atlas-radius);
+  font-size: 12px;
+  font-weight: 500;
+  color: #fff;
+  z-index: 100;
+  animation: slideUp 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.toast-success { background: var(--atlas-success); }
+.toast-error { background: var(--atlas-danger); }
+.toast-info { background: var(--atlas-primary); }
+
+@keyframes slideUp {
+  from { transform: translateY(20px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* ── Project info ── */
+.project-info {
+  padding: 12px;
+  background: var(--atlas-bg-secondary);
+  border: 1px solid var(--atlas-border);
+  border-radius: var(--atlas-radius);
+  margin-bottom: 12px;
+}
+
+.project-info h4 {
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: var(--atlas-primary);
+}
+
+.project-info-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--atlas-border);
+}
+
+.project-info-row:last-child { border-bottom: none; }
+.project-info-label { color: var(--atlas-text-secondary); }
+.project-info-value { font-weight: 500; }
+
+/* ── Template preview ── */
+.template-preview {
+  background: var(--atlas-bg-secondary);
+  border: 1px solid var(--atlas-border);
+  border-radius: var(--atlas-radius);
+  padding: 12px;
+  font-size: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+/* ── Private toggle ── */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.toggle-switch {
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--atlas-border);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.toggle-switch.active { background: var(--atlas-primary); }
+
+.toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+}
+
+.toggle-switch.active::after { transform: translateX(16px); }
+
+/* ── Status badge ── */
+.status-linked {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--atlas-success);
+  font-weight: 600;
+}
+
+/* ── Empty state ── */
+.empty-state {
+  text-align: center;
+  padding: 24px 16px;
+  color: var(--atlas-text-secondary);
+}
+
+.empty-state-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.empty-state p {
+  font-size: 12px;
+}
+
+/* ── Section heading ── */
+.section-heading {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--atlas-text-muted);
+  margin-bottom: 8px;
+  margin-top: 16px;
+}
+
+.section-heading:first-child { margin-top: 0; }
+
+/* ── Scrollable content ── */
+.panel-scroll {
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  padding: 16px;
+}

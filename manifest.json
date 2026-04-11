@@ -1,0 +1,113 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/vDevPreview/MicrosoftTeams.schema.json",
+  "manifestVersion": "devPreview",
+  "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "version": "1.0.0",
+  "name": {
+    "short": "ATLAS",
+    "full": "ATLAS — GOOD VIBES"
+  },
+  "description": {
+    "short": "Liaison emails ↔ projets ATLAS",
+    "full": "Plugin Outlook pour lier les emails aux projets, tiers et contacts ATLAS. Inclut templates email avec adaptation de tonalité ARGO."
+  },
+  "developer": {
+    "name": "GOOD VIBES events & communications",
+    "websiteUrl": "https://vibes.lu",
+    "privacyUrl": "https://vibes.lu/privacy",
+    "termsOfUseUrl": "https://vibes.lu/terms"
+  },
+  "icons": {
+    "outline": "assets/icon-outline.png",
+    "color": "assets/icon-color.png"
+  },
+  "accentColor": "#6366F1",
+  "extensions": [
+    {
+      "requirements": {
+        "capabilities": [
+          { "name": "Mailbox", "minVersion": "1.5" }
+        ]
+      },
+      "ribbons": [
+        {
+          "contexts": ["mailRead"],
+          "tabs": [
+            {
+              "builtInTabId": "TabDefault",
+              "groups": [
+                {
+                  "id": "atlasReadGroup",
+                  "label": "ATLAS",
+                  "controls": [
+                    {
+                      "id": "openAtlasRead",
+                      "type": "button",
+                      "label": "ATLAS",
+                      "icons": [
+                        { "size": 16, "url": "assets/icon-16.png" },
+                        { "size": 32, "url": "assets/icon-32.png" },
+                        { "size": 80, "url": "assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Ouvrir ATLAS",
+                        "description": "Lier cet email à un projet, voir les infos ou créer un nouveau projet"
+                      },
+                      "actionId": "openTaskpaneRead"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "contexts": ["mailCompose"],
+          "tabs": [
+            {
+              "builtInTabId": "TabDefault",
+              "groups": [
+                {
+                  "id": "atlasComposeGroup",
+                  "label": "ATLAS",
+                  "controls": [
+                    {
+                      "id": "openAtlasCompose",
+                      "type": "button",
+                      "label": "Templates",
+                      "icons": [
+                        { "size": 16, "url": "assets/icon-16.png" },
+                        { "size": 32, "url": "assets/icon-32.png" },
+                        { "size": 80, "url": "assets/icon-80.png" }
+                      ],
+                      "supertip": {
+                        "title": "Templates ATLAS",
+                        "description": "Insérer un template email avec adaptation de tonalité automatique"
+                      },
+                      "actionId": "openTaskpaneCompose"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "runtimes": [
+        {
+          "id": "taskpaneRuntime",
+          "type": "general",
+          "code": {
+            "page": "https://good-vibes-lu.github.io/atlas-outlook/index.html"
+          },
+          "actions": [
+            { "id": "openTaskpaneRead", "type": "openPage", "view": "taskpane" },
+            { "id": "openTaskpaneCompose", "type": "openPage", "view": "taskpane" },
+            { "id": "openTaskpaneLink", "type": "openPage", "view": "taskpane" },
+            { "id": "openTaskpaneCreate", "type": "openPage", "view": "taskpane" }
+          ]
+        }
+      ]
+    }
+  ]
+}
