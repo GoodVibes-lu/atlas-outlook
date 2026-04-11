@@ -111,6 +111,76 @@
               </OfficeTab>
             </ExtensionPoint>
 
+            <!-- ── Context menu on message (right-click) ── -->
+            <ExtensionPoint xsi:type="MessageReadCommandSurface">
+              <OfficeTab id="TabDefault">
+                <Group id="atlasContextGroup">
+                  <Label resid="groupLabel" />
+
+                  <Control xsi:type="Menu" id="atlasContextMenu">
+                    <Label resid="ctxMenuLabel" />
+                    <Supertip>
+                      <Title resid="ctxMenuTitle" />
+                      <Description resid="ctxMenuDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Items>
+                      <Item id="ctxLinkProjet">
+                        <Label resid="ctxLinkLabel" />
+                        <Supertip>
+                          <Title resid="ctxLinkLabel" />
+                          <Description resid="ctxLinkDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ShowTaskpane">
+                          <SourceLocation resid="ctxLinkUrl" />
+                        </Action>
+                      </Item>
+                      <Item id="ctxVoirProjet">
+                        <Label resid="ctxInfoLabel" />
+                        <Supertip>
+                          <Title resid="ctxInfoLabel" />
+                          <Description resid="ctxInfoDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ShowTaskpane">
+                          <SourceLocation resid="ctxInfoUrl" />
+                        </Action>
+                      </Item>
+                      <Item id="ctxCreerProjet">
+                        <Label resid="ctxCreateLabel" />
+                        <Supertip>
+                          <Title resid="ctxCreateLabel" />
+                          <Description resid="ctxCreateDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ShowTaskpane">
+                          <SourceLocation resid="ctxCreateUrl" />
+                        </Action>
+                      </Item>
+                    </Items>
+                  </Control>
+
+                </Group>
+              </OfficeTab>
+            </ExtensionPoint>
+
           </DesktopFormFactor>
         </Host>
       </Hosts>
@@ -124,6 +194,9 @@
         <bt:Urls>
           <bt:Url id="taskpaneReadUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read" />
           <bt:Url id="taskpaneComposeUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=compose" />
+          <bt:Url id="ctxLinkUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=link" />
+          <bt:Url id="ctxInfoUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=info" />
+          <bt:Url id="ctxCreateUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=create" />
         </bt:Urls>
         <bt:ShortStrings>
           <bt:String id="groupLabel" DefaultValue="ATLAS" />
@@ -131,10 +204,19 @@
           <bt:String id="readBtnTitle" DefaultValue="Ouvrir ATLAS" />
           <bt:String id="composeBtnLabel" DefaultValue="Templates" />
           <bt:String id="composeBtnTitle" DefaultValue="Templates ATLAS" />
+          <bt:String id="ctxMenuLabel" DefaultValue="ATLAS" />
+          <bt:String id="ctxMenuTitle" DefaultValue="Actions ATLAS" />
+          <bt:String id="ctxLinkLabel" DefaultValue="Lier a un projet ATLAS" />
+          <bt:String id="ctxInfoLabel" DefaultValue="Voir le projet" />
+          <bt:String id="ctxCreateLabel" DefaultValue="Creer un projet" />
         </bt:ShortStrings>
         <bt:LongStrings>
           <bt:String id="readBtnDesc" DefaultValue="Lier cet email à un projet, voir les infos ou créer un nouveau projet ATLAS" />
           <bt:String id="composeBtnDesc" DefaultValue="Insérer un template email avec adaptation de tonalité automatique (ARGO)" />
+          <bt:String id="ctxMenuDesc" DefaultValue="Lier, consulter ou créer un projet ATLAS depuis le menu contextuel" />
+          <bt:String id="ctxLinkDesc" DefaultValue="Lier cet email à un projet existant dans ATLAS" />
+          <bt:String id="ctxInfoDesc" DefaultValue="Afficher les informations du projet lié à cet email" />
+          <bt:String id="ctxCreateDesc" DefaultValue="Créer un nouveau projet ATLAS à partir de cet email" />
         </bt:LongStrings>
       </Resources>
 

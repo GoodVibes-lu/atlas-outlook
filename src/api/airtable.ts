@@ -68,18 +68,63 @@ const CF = {
   TUTOIEMENT_AVEC: 'fldiGoJ5p41KvSUQW',
 } as const;
 
-// ── Communications Field IDs ──
+// ── Communications Field IDs (verified 2026-04-11) ──
 const COMMS = {
-  NOM: 'fldZHHGiNclP9x3vR',
-  TYPE: 'fldGcXqLaP1w3ccQ2',
-  TON: 'fldJlQlFiBMqspqif',
-  MARQUE: 'fldfEDDbRqzc9qnEt',
-  STATUT: 'flddJ48SsOXj3qJ8R',
-  OBJET_FR: 'fld5rMGYjK6rnd3xC',
-  CORPS_FR: 'fldH0tQ7SoVtDKsDe',
-  OBJET_EN: 'fldEaEn5Ehma9PE00',
-  CORPS_EN: 'fldbVEfyksg8k9UxP',
-  VARIABLES: 'fldA9eojxIBUElgxk',
+  NOM: 'fldgAZ4fpwPzNws3n',         // Nom (singleLineText)
+  TYPE: 'fld4zgRXS0vHC65x9',         // Type (singleSelect)
+  TON: 'fldJlQlFiBMqspqif',          // Ton (singleSelect) ✓
+  MARQUE: 'fldfEDDbRqzc9qnEt',       // Marque (singleSelect) ✓
+  STATUT: 'flda4SlFpeHuQfY0M',       // Statut (singleSelect)
+  CATEGORIE: 'fldQxDsh9coxZN9Sk',    // Categorie (singleSelect)
+  OBJET_FR: 'fld5rMGYjK6rnd3xC',     // ✓
+  CORPS_FR: 'fldH0tQ7SoVtDKsDe',     // ✓
+  OBJET_EN: 'fldEaEn5Ehma9PE00',     // ✓
+  CORPS_EN: 'fldbVEfyksg8k9UxP',     // ✓
+  OBJET_DE: 'fldyJs1RdRSU9Cn10',     // Objet_DE
+  CORPS_DE: 'fldm7fYSCeG1ZZtPi',     // Corps_DE
+  OBJET_LU: 'fldKRsMj1CfjlBiFZ',     // Objet_LU
+  CORPS_LU: 'fldk1a0LCvuw4IE7p',     // Corps_LU
+  VARIABLES: 'fldA9eojxIBUElgxk',    // ✓
+  DESTINATAIRES: 'fldSDwAhN3dUzoCIl', // Destinataires (multipleSelects)
+  TAGS: 'fld3vQ65xIfem0Wcx',         // Tags (multipleSelects)
+} as const;
+
+// ── Client Field IDs (Projets base Clients table) ──
+const CLF = {
+  RELATION: 'fldYyVtj5Rh5TDgOb',     // Relation (company name)
+  NOM: 'fldq4OWNWYiS7XUIg',          // Nom
+  EMAIL: 'fldCNqiCExXOpLQuI',         // Email
+  STATUT: 'fld3JlvlZP7t0aa80',       // Statut (singleSelect)
+  SECTEUR: 'fldQZFM9TuuIEvcgD',      // Secteur (multipleSelects)
+} as const;
+
+// ── Contact Client Field IDs (Projets base Contacts_Clients table) ──
+const CCF = {
+  PERSONNE: 'fldDFZzW5cris8sva',     // Personne de contact
+  EMAIL: 'fldzZSIPtUkkKJtVi',         // Email
+  SOCIETE: 'fldlSSa8wDIQvoSey',      // Société
+  FONCTION: 'fldHiZeUeyv4913jv',     // Fonction
+  PRENOM: 'fldGnI3ERmuztxoX2',       // Prénom
+  NOM: 'fldTTEiu6sS3Bf8rU',          // Nom
+  STATUT: 'fld8hB9syCzrX5o0k',       // Statut
+} as const;
+
+// ── Projet creation additional fields ──
+const PCF = {
+  TYPE: 'fldzcy1D0UhFDnusK',              // Type (multipleSelects)
+  FOURCHETTE_BUDGET: 'fldB7LExyJIQySlG6', // Fourchette budgetaire
+  MOIS_REALISATION: 'flduVRo1sbIYv8uOY',  // Mois_Realisation_prévue
+  ANNEE_REALISATION: 'fldyouUoKmDFIUL7O', // Année_Realisation_prévue
+  CONTACT_CLIENTS: 'fldJiH0bNfUmiHKyh',   // Contact clients (multipleRecordLinks)
+  DESCRIPTIF: 'fldo2A4Ja7UaiQ3QO',        // Descriptif (multilineText)
+} as const;
+
+// ── Employés table (Projets base) for "En charge" dropdown ──
+const EMPLOYES_TABLE = 'tblajI3x4CuLW0tBO';
+const EMF = {
+  NAME: 'fld8MMLPqgx14wgpz',         // Name (primary)
+  NOM_TXT: 'fldyX4SPWldcSxGvW',       // Nom_TXT (formula)
+  EMAIL: 'fldB28x4sPa5QVp6L',         // Email
 } as const;
 
 // ── Helpers ──
@@ -179,9 +224,9 @@ export async function getAllTiers(): Promise<Tier[]> {
       const f = r.fields || {};
       return {
         id: r.id,
-        relation: f['fldYyVtj5Rh5TDgOb'] || f['fldq4OWNWYiS7XUIg'] || '', // Relation or Nom
-        categorie: selectName(f['fldQZFM9TuuIEvcgD'] || ''),               // Secteur
-        email: f['fldCNqiCExXOpLQuI'] || '',                                // Email
+        relation: f[CLF.RELATION] || f[CLF.NOM] || '',
+        categorie: selectName(f[CLF.SECTEUR] || ''),
+        email: f[CLF.EMAIL] || '',
         telephone: '',
       };
     }));
@@ -209,10 +254,10 @@ export async function getAllContacts(): Promise<Contact[]> {
       const f = r.fields || {};
       return {
         id: r.id,
-        personneDeContact: f['fldDFZzW5cris8sva'] || '',  // Personne de contact
-        email: f['fldzZSIPtUkkKJtVi'] || '',               // Email
-        relationSociete: f['fldlSSa8wDIQvoSey'] || '',     // Société
-        fonction: f['fldHiZeUeyv4913jv'] || '',             // Fonction
+        personneDeContact: f[CCF.PERSONNE] || '',
+        email: f[CCF.EMAIL] || '',
+        relationSociete: f[CCF.SOCIETE] || '',
+        fonction: f[CCF.FONCTION] || '',
       };
     }));
     offset = data.offset || '';
@@ -558,4 +603,114 @@ export async function saveFolderMapping(
       body: JSON.stringify({ fields, returnFieldsByFieldId: true }),
     });
   }
+}
+
+// ── Create new Tiers (Client) ──
+
+export async function createTiers(
+  relation: string,
+  email?: string,
+): Promise<{ id: string; relation: string }> {
+  const fields: Record<string, unknown> = {
+    [CLF.RELATION]: relation,
+    [CLF.STATUT]: 'Actif',
+  };
+  if (email) fields[CLF.EMAIL] = email;
+
+  const result = await airtableFetch<{ id: string; fields: Record<string, unknown> }>(
+    `${API_URL}/${PROJETS_BASE}/${TABLES.CLIENTS}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ fields, typecast: true, returnFieldsByFieldId: true }),
+    },
+  );
+
+  // Invalidate tiers cache
+  cache.delete('tiers');
+  return { id: result.id, relation };
+}
+
+// ── Create new Projet ──
+
+export interface CreateProjetInput {
+  denomination: string;
+  clientRecordId: string;
+  types?: string[];
+  budget?: string;
+  mois?: string;
+  annee?: string;
+  enChargeRecordId?: string;
+  contactClientRecordId?: string;
+  dateDebut?: string;
+  descriptif?: string;
+}
+
+export async function createProjet(input: CreateProjetInput): Promise<{ id: string; noProjet: number }> {
+  const fields: Record<string, unknown> = {
+    [PF.DENOMINATION]: input.denomination,
+    [PF.CLIENT]: [input.clientRecordId],
+    [PF.STATUT]: 'Demande',
+  };
+
+  if (input.types?.length) fields[PCF.TYPE] = input.types;
+  if (input.budget) fields[PCF.FOURCHETTE_BUDGET] = input.budget;
+  if (input.mois) fields[PCF.MOIS_REALISATION] = input.mois;
+  if (input.annee) fields[PCF.ANNEE_REALISATION] = input.annee;
+  if (input.enChargeRecordId) fields[PF.EN_CHARGE] = [input.enChargeRecordId];
+  if (input.contactClientRecordId) fields[PCF.CONTACT_CLIENTS] = [input.contactClientRecordId];
+  if (input.dateDebut) fields[PF.DATE_DEBUT] = input.dateDebut;
+  if (input.descriptif) fields[PCF.DESCRIPTIF] = input.descriptif;
+
+  const result = await airtableFetch<{ id: string; fields: Record<string, unknown> }>(
+    `${API_URL}/${PROJETS_BASE}/${TABLES.PROJETS}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ fields, typecast: true, returnFieldsByFieldId: true }),
+    },
+  );
+
+  // Invalidate projets cache
+  cache.delete('projets');
+  const noProjet = result.fields?.[PF.NO_PROJET] as number || 0;
+  return { id: result.id, noProjet };
+}
+
+// ── Get Employés for "En charge" dropdown ──
+
+export interface Employe {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export async function getAllEmployes(): Promise<Employe[]> {
+  const cached = getCached<Employe[]>('employes');
+  if (cached) return cached;
+
+  const fields = [EMF.NAME, EMF.NOM_TXT, EMF.EMAIL].map(f => `fields%5B%5D=${f}`).join('&');
+  const url = `${API_URL}/${PROJETS_BASE}/${EMPLOYES_TABLE}?returnFieldsByFieldId=true&${fields}`;
+  const data = await airtableFetch<{ records: any[] }>(url);
+
+  const employes = data.records.map((r: any) => {
+    const f = r.fields || {};
+    return {
+      id: r.id,
+      name: f[EMF.NOM_TXT] || f[EMF.NAME] || '',
+      email: f[EMF.EMAIL] || '',
+    };
+  }).filter(e => e.name);
+
+  setCache('employes', employes);
+  return employes;
+}
+
+// ── Count linked emails for a project ──
+
+export async function countLinkedEmails(projetRecordId: string): Promise<number> {
+  try {
+    const formula = encodeURIComponent(`FIND("${projetRecordId}", ARRAYJOIN({${EF.PROJET}}))`);
+    const url = `${API_URL}/${PROJETS_BASE}/${TABLES.EMAILS_PROJET}?filterByFormula=${formula}&fields%5B%5D=${EF.SUJET}&returnFieldsByFieldId=true`;
+    const data = await airtableFetch<{ records: any[] }>(url);
+    return data.records.length;
+  } catch { return 0; }
 }

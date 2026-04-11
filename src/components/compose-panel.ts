@@ -16,9 +16,10 @@ export class ComposePanel {
   private recipientEmail = '';
   private isReply = false;
 
-  constructor(container: HTMLElement, userName: string) {
+  constructor(container: HTMLElement, userName: string, options?: { isReply?: boolean }) {
     this.container = container;
     this.userName = userName;
+    this.isReply = options?.isReply ?? false;
     this.render();
     this.loadContext();
   }

@@ -3,6 +3,7 @@
  *
  * Detects context (read/compose) and renders the appropriate panel.
  * Manages navigation between tabs and handles Office.js initialization.
+ * Supports ?mode=read|compose and ?tab=link|info|create|compose|reply|settings URL params.
  */
 
 import { LinkPanel } from './components/link-panel';
@@ -41,16 +42,18 @@ function getUserName(): string {
   return localStorage.getItem('atlas_addin_user_name') || 'Utilisateur';
 }
 
-function getMode(): AddinMode {
+function getUrlParams(): { mode: AddinMode; tab: string | null } {
   const params = new URLSearchParams(window.location.search);
-  return (params.get('mode') as AddinMode) || 'read';
+  const mode = (params.get('mode') as AddinMode) || 'read';
+  const tab = params.get('tab');
+  return { mode, tab };
 }
 
 // ── Rendering ──
 
 function renderApp(): void {
   const app = document.getElementById('app')!;
-  const mode = getMode();
+  const { mode, tab } = getUrlParams();
 
   if (!isConfigured()) {
     renderSetup(app);
@@ -61,17 +64,24 @@ function renderApp(): void {
   const isCompose = mode === 'compose';
   const tabs = isCompose
     ? [
-        { id: 'compose', label: '📝 Templates', icon: '' },
-        { id: 'settings', label: '⚙️', icon: '' },
+        { id: 'compose', label: '\uD83D\uDCDD Templates', icon: '' },
+        { id: 'settings', label: '\u2699\uFE0F', icon: '' },
       ]
     : [
-        { id: 'link', label: '🔗 Lier', icon: '' },
-        { id: 'info', label: '📁 Projet', icon: '' },
-        { id: 'create', label: '➕ Créer', icon: '' },
-        { id: 'settings', label: '⚙️', icon: '' },
+        { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
+        { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
+        { id: 'create', label: '\u2795 Cr\u00e9er', icon: '' },
+        { id: 'reply', label: '\uD83D\uDCAC R\u00e9pondre', icon: '' },
+        { id: 'settings', label: '\u2699\uFE0F', icon: '' },
       ];
 
-  const defaultTab = isCompose ? 'compose' : 'link';
+  // Determine which tab to activate: URL param > default
+  let defaultTab: string;
+  if (tab && tabs.some(t => t.id === tab)) {
+    defaultTab = tab;
+  } else {
+    defaultTab = isCompose ? 'compose' : 'link';
+  }
 
   app.innerHTML = `
     <div class="header">
@@ -89,9 +99,9 @@ function renderApp(): void {
   `;
 
   // Tab click handlers
-  app.querySelectorAll('.nav-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      const tabId = tab.getAttribute('data-tab')!;
+  app.querySelectorAll('.nav-tab').forEach(tabEl => {
+    tabEl.addEventListener('click', () => {
+      const tabId = tabEl.getAttribute('data-tab')!;
       switchTab(tabId);
     });
   });
@@ -104,8 +114,8 @@ function switchTab(tabId: string): void {
   currentTab = tabId;
 
   // Update active tab styling
-  document.querySelectorAll('.nav-tab').forEach(tab => {
-    tab.classList.toggle('active', tab.getAttribute('data-tab') === tabId);
+  document.querySelectorAll('.nav-tab').forEach(tabEl => {
+    tabEl.classList.toggle('active', tabEl.getAttribute('data-tab') === tabId);
   });
 
   // Destroy current panel
@@ -123,10 +133,14 @@ function switchTab(tabId: string): void {
       currentPanel = new ProjectInfoPanel(content);
       break;
     case 'create':
-      currentPanel = new CreateProjectPanel(content);
+      currentPanel = new CreateProjectPanel(content, userName);
       break;
     case 'compose':
       currentPanel = new ComposePanel(content, userName);
+      break;
+    case 'reply':
+      // Reply tab reuses ComposePanel in reply mode
+      currentPanel = new ComposePanel(content, userName, { isReply: true });
       break;
     case 'settings':
       currentPanel = new SettingsPanel(content, () => {
@@ -146,7 +160,7 @@ function renderSetup(app: HTMLElement): void {
     <div class="content">
       <div class="setup-card">
         <h3>Bienvenue dans ATLAS</h3>
-        <p>Configurez votre accès pour lier vos emails aux projets GOOD VIBES.</p>
+        <p>Configurez votre acc\u00e8s pour lier vos emails aux projets GOOD VIBES.</p>
       </div>
     </div>
     <div id="panel-content" class="content"></div>
