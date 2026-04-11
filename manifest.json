@@ -98,7 +98,7 @@
           "id": "taskpaneRuntime",
           "type": "general",
           "code": {
-            "page": "https://good-vibes-lu.github.io/atlas-outlook/index.html"
+            "page": "https://goodvibes-lu.github.io/atlas-outlook/index.html"
           },
           "actions": [
             { "id": "openTaskpaneRead", "type": "openPage", "view": "taskpane" },

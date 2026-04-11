@@ -11,8 +11,8 @@
   <DefaultLocale>fr-FR</DefaultLocale>
   <DisplayName DefaultValue="ATLAS" />
   <Description DefaultValue="Liaison emails ↔ projets ATLAS — GOOD VIBES" />
-  <IconUrl DefaultValue="https://good-vibes-lu.github.io/atlas-outlook/assets/icon-64.png" />
-  <HighResolutionIconUrl DefaultValue="https://good-vibes-lu.github.io/atlas-outlook/assets/icon-128.png" />
+  <IconUrl DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-64.png" />
+  <HighResolutionIconUrl DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-128.png" />
   <SupportUrl DefaultValue="https://vibes.lu" />
 
   <Hosts>
@@ -28,7 +28,7 @@
   <FormSettings>
     <Form xsi:type="ItemRead">
       <DesktopSettings>
-        <SourceLocation DefaultValue="https://good-vibes-lu.github.io/atlas-outlook/index.html?mode=read" />
+        <SourceLocation DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read" />
         <RequestedHeight>450</RequestedHeight>
       </DesktopSettings>
     </Form>
@@ -109,13 +109,13 @@
 
       <Resources>
         <bt:Images>
-          <bt:Image id="icon16" DefaultValue="https://good-vibes-lu.github.io/atlas-outlook/assets/icon-16.png" />
-          <bt:Image id="icon32" DefaultValue="https://good-vibes-lu.github.io/atlas-outlook/assets/icon-32.png" />
-          <bt:Image id="icon80" DefaultValue="https://good-vibes-lu.github.io/atlas-outlook/assets/icon-80.png" />
+          <bt:Image id="icon16" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-16.png" />
+          <bt:Image id="icon32" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-32.png" />
+          <bt:Image id="icon80" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-80.png" />
         </bt:Images>
         <bt:Urls>
-          <bt:Url id="taskpaneReadUrl" DefaultValue="https://good-vibes-lu.github.io/atlas-outlook/index.html?mode=read" />
-          <bt:Url id="taskpaneComposeUrl" DefaultValue="https://good-vibes-lu.github.io/atlas-outlook/index.html?mode=compose" />
+          <bt:Url id="taskpaneReadUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read" />
+          <bt:Url id="taskpaneComposeUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=compose" />
         </bt:Urls>
         <bt:ShortStrings>
           <bt:String id="groupLabel" DefaultValue="ATLAS" />
