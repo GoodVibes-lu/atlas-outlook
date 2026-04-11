@@ -5,7 +5,7 @@
 import { getLinkedConversationIds, getAllLinkedEmailIds, linkEmailToProject, linkEmailToContact, getAllProjets, resolveClientIdInProjetsBase, getFolderMapping, saveFolderMapping } from '../api/airtable';
 import { getGraphToken, getMessageForLinking, convertToRestId, moveMessageToFolder, ensureFolderPath, resolveFolderPath } from '../api/graph';
 import { SearchPicker } from './search-picker';
-import type { SearchResult, MailMessageFull } from '../types';
+import type { SearchResult, MailMessageFull, Projet } from '../types';
 import { showToast } from '../taskpane';
 
 interface EmailInfo {
@@ -26,6 +26,7 @@ export class LinkPanel {
   private emailInfo: EmailInfo | null = null;
   private isPrive = false;
   private searchPicker: SearchPicker | null = null;
+  private searchExpanded = false;
 
   constructor(container: HTMLElement, userName: string) {
     this.container = container;
@@ -45,17 +46,19 @@ export class LinkPanel {
         <div id="link-status" style="display:none;"></div>
 
         <div id="auto-suggestions" style="display:none;">
-          <div class="section-heading">Suggestion automatique</div>
           <div id="auto-suggestion-content"></div>
         </div>
 
         <div id="link-search-section">
-          <div class="section-heading">Lier à...</div>
           <div class="toggle-row">
             <div class="toggle-switch" id="prive-toggle"></div>
             <span>🔒 Marquer comme privé</span>
           </div>
-          <div id="search-container"></div>
+          <div id="search-toggle-section" style="display:none;">
+            <a href="#" id="search-toggle-link" style="font-size:12px; color:var(--atlas-primary); text-decoration:none; display:inline-block; margin-bottom:8px;">Rechercher un autre projet, tiers ou contact ▼</a>
+            <div id="search-container" style="display:none;"></div>
+          </div>
+          <div id="search-direct-container"></div>
         </div>
       </div>
     `;
@@ -67,9 +70,28 @@ export class LinkPanel {
       el.classList.toggle('active', this.isPrive);
     });
 
-    // Init search picker
+    // Search toggle link
+    document.getElementById('search-toggle-link')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      this.searchExpanded = !this.searchExpanded;
+      const link = e.currentTarget as HTMLElement;
+      const searchContainer = document.getElementById('search-container')!;
+      if (this.searchExpanded) {
+        link.textContent = 'Rechercher un autre projet, tiers ou contact ▲';
+        searchContainer.style.display = 'block';
+      } else {
+        link.textContent = 'Rechercher un autre projet, tiers ou contact ▼';
+        searchContainer.style.display = 'none';
+      }
+    });
+
+    // Init search picker in the collapsible container
     const searchContainer = document.getElementById('search-container')!;
     this.searchPicker = new SearchPicker(searchContainer, (result) => this.handleLink(result));
+
+    // Also init a second search picker for the direct (no auto-detect) case
+    const directContainer = document.getElementById('search-direct-container')!;
+    this.searchPicker = new SearchPicker(directContainer, (result) => this.handleLink(result));
   }
 
   private async loadEmailInfo(): Promise<void> {
@@ -132,6 +154,8 @@ export class LinkPanel {
 
     const autoSection = document.getElementById('auto-suggestions')!;
     const autoContent = document.getElementById('auto-suggestion-content')!;
+    const searchToggleSection = document.getElementById('search-toggle-section')!;
+    const directContainer = document.getElementById('search-direct-container')!;
 
     // 1. Check #NNN in subject
     const projetMatch = this.emailInfo.subject.match(/#\s*(\d{2,4})/);
@@ -141,16 +165,52 @@ export class LinkPanel {
       const found = projets.find(p => p.noProjet === noProjet);
       if (found) {
         autoSection.style.display = 'block';
+        // Hide direct search, show collapsible toggle instead
+        directContainer.style.display = 'none';
+        searchToggleSection.style.display = 'block';
+
+        const isLinked = this.emailInfo.isAlreadyLinked;
+
         autoContent.innerHTML = `
-          <div class="suggestion-item" id="auto-projet-suggestion">
-            <span class="suggestion-badge badge-projet">📁</span>
-            <span class="suggestion-name">#${found.noProjet} ${this.escapeHtml(found.denomination)}</span>
-            <button class="btn btn-primary btn-sm" id="auto-link-btn">Lier</button>
+          <div class="detected-project-card" style="
+            border-left: 4px solid var(--atlas-primary);
+            background: var(--atlas-bg-secondary);
+            border-radius: var(--atlas-radius);
+            padding: 14px 16px;
+            margin-bottom: 12px;
+          ">
+            <div style="font-size:11px; color:var(--atlas-text-secondary); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Projet détecté</div>
+            <div style="font-size:16px; font-weight:700; color:var(--atlas-text-primary); margin-bottom:2px;">
+              #${this.escapeHtml(found.noProjet)} ${this.escapeHtml(found.denomination)}
+            </div>
+            <div style="font-size:12px; color:var(--atlas-text-secondary); margin-bottom:4px;">
+              ${this.escapeHtml(found.client || '')}
+            </div>
+            ${found.enCharge ? `<div style="font-size:11px; color:var(--atlas-text-secondary);">En charge : ${this.escapeHtml(found.enCharge)}</div>` : ''}
+            <div style="margin-top:12px;">
+              ${isLinked
+                ? `<div style="
+                    display:inline-flex; align-items:center; gap:6px;
+                    background:var(--atlas-success-bg, rgba(40,167,69,0.1));
+                    color:var(--atlas-success, #28a745);
+                    border:1px solid var(--atlas-success, #28a745);
+                    border-radius:var(--atlas-radius);
+                    padding:6px 12px;
+                    font-size:13px; font-weight:600;
+                  ">✓ Email déjà lié à ce projet</div>`
+                : `<button class="btn btn-primary" id="auto-link-btn" style="width:100%; padding:10px; font-size:14px; font-weight:600;">
+                    Lier cet email au projet #${this.escapeHtml(noProjet)}
+                  </button>`
+              }
+            </div>
           </div>
         `;
-        document.getElementById('auto-link-btn')?.addEventListener('click', () => {
-          this.handleLink({ type: 'projet', id: found.id, label: found.denomination, detail: found.client });
-        });
+
+        if (!isLinked) {
+          document.getElementById('auto-link-btn')?.addEventListener('click', () => {
+            this.handleLink({ type: 'projet', id: found.id, label: found.denomination, detail: found.client });
+          });
+        }
         return;
       }
     }
@@ -161,11 +221,28 @@ export class LinkPanel {
       const match = convMap.get(this.emailInfo.conversationId);
       if (match) {
         autoSection.style.display = 'block';
+        // Hide direct search, show collapsible toggle
+        directContainer.style.display = 'none';
+        searchToggleSection.style.display = 'block';
+
         autoContent.innerHTML = `
-          <div class="suggestion-item" id="auto-conv-suggestion">
-            <span class="suggestion-badge badge-projet">📁</span>
-            <span class="suggestion-name">Même conversation que : ${this.escapeHtml(match.projetName)}</span>
-            <button class="btn btn-primary btn-sm" id="auto-conv-btn">Lier</button>
+          <div class="detected-project-card" style="
+            border-left: 4px solid var(--atlas-primary);
+            background: var(--atlas-bg-secondary);
+            border-radius: var(--atlas-radius);
+            padding: 14px 16px;
+            margin-bottom: 12px;
+          ">
+            <div style="font-size:11px; color:var(--atlas-text-secondary); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Conversation liée</div>
+            <div style="font-size:16px; font-weight:700; color:var(--atlas-text-primary); margin-bottom:2px;">
+              ${this.escapeHtml(match.projetName)}
+            </div>
+            <div style="font-size:12px; color:var(--atlas-text-secondary); margin-bottom:4px;">Même fil de conversation</div>
+            <div style="margin-top:12px;">
+              <button class="btn btn-primary" id="auto-conv-btn" style="width:100%; padding:10px; font-size:14px; font-weight:600;">
+                Lier cet email au projet
+              </button>
+            </div>
           </div>
         `;
         document.getElementById('auto-conv-btn')?.addEventListener('click', () => {
@@ -174,6 +251,10 @@ export class LinkPanel {
         return;
       }
     }
+
+    // No auto-detection — show direct search, hide collapsible toggle
+    directContainer.style.display = 'block';
+    searchToggleSection.style.display = 'none';
   }
 
   private async handleLink(result: SearchResult): Promise<void> {

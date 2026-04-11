@@ -6,8 +6,8 @@ export interface Projet {
   denomination: string;
   client: string;
   statut: string;
-  commercial: string;
-  chefDeProjet: string;
+  enCharge: string;
+  refProjet: string;
   dateDebut: string;
   dateFin: string;
 }

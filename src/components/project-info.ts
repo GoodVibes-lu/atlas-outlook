@@ -192,14 +192,16 @@ export class ProjectInfoPanel {
     container.innerHTML = `
       <div class="project-info" style="position:relative;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <h4 style="margin:0;flex:1;font-size:14px;">#${escapeHtml(String(p.noProjet))} ${escapeHtml(p.denomination)}</h4>
+          <h4 style="margin:0;flex:1;font-size:14px;">${p.refProjet ? escapeHtml(p.refProjet) : '#' + escapeHtml(String(p.noProjet))} ${escapeHtml(p.denomination)}</h4>
           ${getStatusBadge(p.statut)}
         </div>
 
+        ${p.client ? `
         <div class="project-info-row">
           <span class="project-info-label">Client</span>
-          <span class="project-info-value">${escapeHtml(p.client || '\u2014')}</span>
+          <span class="project-info-value">${escapeHtml(p.client)}</span>
         </div>
+        ` : ''}
 
         ${extra.type ? `
         <div class="project-info-row">
@@ -215,22 +217,26 @@ export class ProjectInfoPanel {
         </div>
         ` : ''}
 
+        ${p.enCharge ? `
         <div class="project-info-row">
-          <span class="project-info-label">Commercial</span>
-          <span class="project-info-value">${escapeHtml(p.commercial || '\u2014')}</span>
+          <span class="project-info-label">En charge</span>
+          <span class="project-info-value">${escapeHtml(p.enCharge)}</span>
         </div>
-        <div class="project-info-row">
-          <span class="project-info-label">Chef de projet</span>
-          <span class="project-info-value">${escapeHtml(p.chefDeProjet || '\u2014')}</span>
-        </div>
+        ` : ''}
+
+        ${p.dateDebut ? `
         <div class="project-info-row">
           <span class="project-info-label">D&eacute;but</span>
-          <span class="project-info-value">${p.dateDebut ? new Date(p.dateDebut).toLocaleDateString('fr-LU') : '\u2014'}</span>
+          <span class="project-info-value">${new Date(p.dateDebut).toLocaleDateString('fr-LU', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
         </div>
+        ` : ''}
+
+        ${p.dateFin ? `
         <div class="project-info-row">
           <span class="project-info-label">Fin</span>
-          <span class="project-info-value">${p.dateFin ? new Date(p.dateFin).toLocaleDateString('fr-LU') : '\u2014'}</span>
+          <span class="project-info-value">${new Date(p.dateFin).toLocaleDateString('fr-LU', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
         </div>
+        ` : ''}
 
         ${descriptifDisplay ? `
         <div style="margin-top:8px;padding:6px 8px;background:var(--atlas-bg-hover,#f5f5f5);border-radius:6px;font-size:11px;color:var(--atlas-text-secondary,#666);line-height:1.4;">

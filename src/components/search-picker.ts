@@ -14,8 +14,10 @@ export class SearchPicker {
   private onSelect: (result: SearchResult) => void;
   private searchInput!: HTMLInputElement;
   private resultsList!: HTMLElement;
+  private skeletonContainer!: HTMLElement;
   private allResults: SearchResult[] = [];
   private loaded = false;
+  private searchTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(container: HTMLElement, onSelect: (result: SearchResult) => void) {
     this.container = container;
@@ -27,17 +29,23 @@ export class SearchPicker {
   private render(): void {
     this.container.innerHTML = `
       <div class="search-wrapper">
-        <span class="search-icon">🔍</span>
-        <input type="text" class="search-input" placeholder="Rechercher projet, tiers, contact..." />
+        <span class="search-icon">&#128269;</span>
+        <input type="text" class="search-input" placeholder="Chargement des donn\u00e9es..." disabled />
       </div>
-      <div class="search-results"></div>
+      <div class="search-skeleton">
+        <p class="empty-state" style="margin-bottom:8px;opacity:0.6;">Chargement des donn\u00e9es...</p>
+        <div class="skeleton-line skeleton-lg"></div>
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line skeleton-sm"></div>
+      </div>
+      <div class="search-results" style="display:none;"></div>
     `;
 
     this.searchInput = this.container.querySelector('.search-input')!;
     this.resultsList = this.container.querySelector('.search-results')!;
+    this.skeletonContainer = this.container.querySelector('.search-skeleton')!;
 
-    this.searchInput.addEventListener('input', () => this.search());
-    this.searchInput.focus();
+    this.searchInput.addEventListener('input', () => this.onSearchInput());
   }
 
   private async loadData(): Promise<void> {
@@ -70,12 +78,39 @@ export class SearchPicker {
       ];
 
       this.loaded = true;
-      this.searchInput.placeholder = `Rechercher parmi ${this.allResults.length} éléments...`;
+
+      // Remove skeletons, enable input, show results area
+      this.skeletonContainer.style.display = 'none';
+      this.resultsList.style.display = '';
+      this.searchInput.disabled = false;
+      this.searchInput.placeholder = `Rechercher parmi ${this.allResults.length} \u00e9l\u00e9ments...`;
+      this.searchInput.focus();
     } catch (err: any) {
       console.error('[SearchPicker] loadData failed:', err);
       const msg = err?.message || String(err);
+      // Replace skeleton with error
+      this.skeletonContainer.style.display = 'none';
+      this.resultsList.style.display = '';
       this.resultsList.innerHTML = `<p class="empty-state">Erreur de chargement.<br/><small style="opacity:0.7">${msg.length > 120 ? msg.slice(0, 120) + '...' : msg}</small></p>`;
     }
+  }
+
+  private onSearchInput(): void {
+    // Debounce search and show a small loading indicator
+    if (this.searchTimeout) clearTimeout(this.searchTimeout);
+
+    const query = this.searchInput.value.trim();
+    if (!query || query.length < 1) {
+      this.resultsList.innerHTML = '';
+      return;
+    }
+
+    // Brief loading indicator for perceived responsiveness
+    this.resultsList.innerHTML = '<p class="empty-state" style="opacity:0.5;">Recherche...</p>';
+
+    this.searchTimeout = setTimeout(() => {
+      this.search();
+    }, 80);
   }
 
   private search(): void {
@@ -90,13 +125,13 @@ export class SearchPicker {
       .slice(0, 15);
 
     if (matches.length === 0) {
-      this.resultsList.innerHTML = '<p class="empty-state">Aucun résultat</p>';
+      this.resultsList.innerHTML = '<p class="empty-state">Aucun r\u00e9sultat</p>';
       return;
     }
 
     this.resultsList.innerHTML = matches.map(r => `
       <div class="suggestion-item" data-id="${r.id}" data-type="${r.type}" data-label="${this.escapeAttr(r.label)}" data-detail="${this.escapeAttr(r.detail)}">
-        <span class="suggestion-badge badge-${r.type}">${r.type === 'projet' ? '📁' : r.type === 'tiers' ? '🏢' : '👤'}</span>
+        <span class="suggestion-badge badge-${r.type}">${r.type === 'projet' ? '&#128193;' : r.type === 'tiers' ? '&#127970;' : '&#128100;'}</span>
         <span class="suggestion-name">${this.highlight(r.label, query)}</span>
         <span class="suggestion-detail">${r.detail}</span>
       </div>
@@ -133,6 +168,7 @@ export class SearchPicker {
   }
 
   destroy(): void {
+    if (this.searchTimeout) clearTimeout(this.searchTimeout);
     this.container.innerHTML = '';
   }
 }

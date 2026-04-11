@@ -49,6 +49,26 @@ function getUrlParams(): { mode: AddinMode; tab: string | null } {
   return { mode, tab };
 }
 
+/**
+ * Detect #NNN project reference in email subject.
+ * Returns the matched project number string or null.
+ */
+function detectProjectInSubject(): string | null {
+  try {
+    const item = Office.context.mailbox?.item;
+    if (!item) return null;
+    // In read mode, subject is a direct string property
+    const subject: string | undefined = (item as any).subject;
+    if (typeof subject === 'string') {
+      const match = subject.match(/#\s*(\d{2,4})/);
+      if (match) return match[1];
+    }
+  } catch {
+    // Outside Office or no item — ignore
+  }
+  return null;
+}
+
 // ── Rendering ──
 
 function renderApp(): void {
@@ -60,20 +80,35 @@ function renderApp(): void {
     return;
   }
 
-  // Determine available tabs based on mode
+  // Detect project in subject before building tabs
   const isCompose = mode === 'compose';
-  const tabs = isCompose
-    ? [
-        { id: 'compose', label: '\uD83D\uDCDD Templates', icon: '' },
-        { id: 'settings', label: '\u2699\uFE0F', icon: '' },
-      ]
-    : [
-        { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
-        { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
-        { id: 'create', label: '\u2795 Cr\u00e9er', icon: '' },
-        { id: 'reply', label: '\uD83D\uDCAC R\u00e9pondre', icon: '' },
-        { id: 'settings', label: '\u2699\uFE0F', icon: '' },
-      ];
+  const hasDetectedProject = !isCompose ? detectProjectInSubject() : null;
+
+  // Determine available tabs based on mode
+  let tabs: Array<{ id: string; label: string; icon: string }>;
+
+  if (isCompose) {
+    tabs = [
+      { id: 'compose', label: '\uD83D\uDCDD Templates', icon: '' },
+      { id: 'settings', label: '\u2699\uFE0F', icon: '' },
+    ];
+  } else if (hasDetectedProject) {
+    // Project detected in subject: remove "Créer" tab, default to link
+    tabs = [
+      { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
+      { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
+      { id: 'reply', label: '\uD83D\uDCAC R\u00e9pondre', icon: '' },
+      { id: 'settings', label: '\u2699\uFE0F', icon: '' },
+    ];
+  } else {
+    tabs = [
+      { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
+      { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
+      { id: 'create', label: '\u2795 Cr\u00e9er', icon: '' },
+      { id: 'reply', label: '\uD83D\uDCAC R\u00e9pondre', icon: '' },
+      { id: 'settings', label: '\u2699\uFE0F', icon: '' },
+    ];
+  }
 
   // Determine which tab to activate: URL param > default
   let defaultTab: string;

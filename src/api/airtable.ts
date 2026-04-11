@@ -54,6 +54,8 @@ const PF = {
   CLIENT: 'fld7Aa90eAmcYvY71',           // Client (multipleRecordLinks)
   STATUT: 'fld0JYd0AHLcVfhaT',           // Statut (singleSelect)
   EN_CHARGE: 'fldwyFpDMHjNUT2Cr',        // En charge (multipleRecordLinks)
+  NOM_EN_CHARGE: 'fldW3ycEJFPMsKGyB',    // Nom_prénom_en_charge (formula — nom lisible)
+  REF_PROJET: 'fldORNsU9KLxxGxAN',       // Ref Projet (formula — ex: "GV-724")
   NOM_CLIENT: 'fld0giuubfxZd45sq',        // NomClient (singleLineText)
   DATE_DEBUT: 'fld1UJIUV8yNmWhxL',       // Début (date)
   DATE_FIN: 'fldtTsomztPLywxf0',         // Fin (date)
@@ -194,8 +196,8 @@ export async function getAllProjets(): Promise<Projet[]> {
         denomination: f[PF.DENOMINATION] || '',
         client: f[PF.NOM_CLIENT] || selectName(f[PF.CLIENT]),
         statut: selectName(f[PF.STATUT]),
-        commercial: selectName(f[PF.EN_CHARGE]),
-        chefDeProjet: '',
+        enCharge: f[PF.NOM_EN_CHARGE] || '',
+        refProjet: f[PF.REF_PROJET] || '',
         dateDebut: f[PF.DATE_DEBUT] || '',
         dateFin: f[PF.DATE_FIN] || '',
       };
