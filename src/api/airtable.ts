@@ -508,11 +508,16 @@ export async function getEmailTemplates(): Promise<EmailTemplate[]> {
         type: selectName(f[COMMS.TYPE]),
         ton: selectName(f[COMMS.TON]),
         marque: selectName(f[COMMS.MARQUE]),
+        categorie: selectName(f[COMMS.CATEGORIE]),
         statut: selectName(f[COMMS.STATUT]),
         sujetFR: f[COMMS.OBJET_FR] || '',
         corpsFR: f[COMMS.CORPS_FR] || '',
         sujetEN: f[COMMS.OBJET_EN] || '',
         corpsEN: f[COMMS.CORPS_EN] || '',
+        sujetDE: f[COMMS.OBJET_DE] || '',
+        corpsDE: f[COMMS.CORPS_DE] || '',
+        sujetLU: f[COMMS.OBJET_LU] || '',
+        corpsLU: f[COMMS.CORPS_LU] || '',
         variables: f[COMMS.VARIABLES] || '',
       };
     })

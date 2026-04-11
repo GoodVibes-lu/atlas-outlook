@@ -68,10 +68,15 @@ export interface EmailTemplate {
   type: string;
   ton: string;
   marque: string;
+  categorie: string;
   sujetFR: string;
   corpsFR: string;
   sujetEN: string;
   corpsEN: string;
+  sujetDE: string;
+  corpsDE: string;
+  sujetLU: string;
+  corpsLU: string;
   variables: string;
   statut: string;
 }

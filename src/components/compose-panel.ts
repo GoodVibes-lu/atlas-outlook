@@ -59,9 +59,12 @@ export class ComposePanel {
           <div id="template-preview" class="template-preview"></div>
         </div>
 
-        <div style="margin-top:16px; display:flex; gap:8px;">
+        <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
           <button class="btn btn-primary btn-block" id="insert-btn" disabled>
-            Insérer dans le mail
+            Insérer au curseur
+          </button>
+          <button class="btn btn-secondary btn-block" id="replace-btn" disabled style="font-size:11px;">
+            Remplacer tout le contenu
           </button>
         </div>
       </div>
@@ -72,7 +75,8 @@ export class ComposePanel {
       this.selectTemplate(id);
     });
 
-    document.getElementById('insert-btn')?.addEventListener('click', () => this.insertIntoEmail());
+    document.getElementById('insert-btn')?.addEventListener('click', () => this.insertIntoEmail('cursor'));
+    document.getElementById('replace-btn')?.addEventListener('click', () => this.insertIntoEmail('replace'));
   }
 
   private async loadContext(): Promise<void> {
@@ -249,12 +253,26 @@ export class ComposePanel {
     this.updatePreview();
   }
 
+  /** Pick the right language version of the template based on ARGO profile */
+  private getTemplateContent(): { body: string; subject: string; lang: string } {
+    if (!this.selectedTemplate) return { body: '', subject: '', lang: 'FR' };
+    const lang = this.argoProfile?.languePreferee || 'FR';
+    const t = this.selectedTemplate;
+    switch (lang) {
+      case 'EN': return { body: t.corpsEN || t.corpsFR || '', subject: t.sujetEN || t.sujetFR || '', lang: 'EN' };
+      case 'DE': return { body: (t as any).corpsDE || t.corpsFR || '', subject: (t as any).sujetDE || t.sujetFR || '', lang: 'DE' };
+      case 'LU': return { body: (t as any).corpsLU || t.corpsFR || '', subject: (t as any).sujetLU || t.sujetFR || '', lang: 'LU' };
+      default: return { body: t.corpsFR || '', subject: t.sujetFR || '', lang: 'FR' };
+    }
+  }
+
   private updatePreview(): void {
     if (!this.selectedTemplate) return;
 
     const preview = document.getElementById('template-preview')!;
-    let body = this.selectedTemplate.corpsFR || '';
-    let subject = this.selectedTemplate.sujetFR || '';
+    const content = this.getTemplateContent();
+    let body = content.body;
+    let subject = content.subject;
 
     // Replace variables
     document.querySelectorAll('.var-input').forEach((input) => {
@@ -278,53 +296,73 @@ export class ComposePanel {
     `;
   }
 
-  private async insertIntoEmail(): Promise<void> {
+  private async insertIntoEmail(mode: 'cursor' | 'replace' = 'cursor'): Promise<void> {
     if (!this.selectedTemplate) return;
 
     const insertBtn = document.getElementById('insert-btn') as HTMLButtonElement;
+    const replaceBtn = document.getElementById('replace-btn') as HTMLButtonElement;
     insertBtn.disabled = true;
-    insertBtn.textContent = 'Insertion...';
+    replaceBtn.disabled = true;
+    insertBtn.textContent = 'Personnalisation IA...';
 
     try {
-      let body = this.selectedTemplate.corpsFR || '';
-      let subject = this.selectedTemplate.sujetFR || '';
+      const content = this.getTemplateContent();
+      let body = content.body;
+      let subject = content.subject;
 
       // Replace variables
       document.querySelectorAll('.var-input').forEach((input) => {
         const varName = (input as HTMLInputElement).getAttribute('data-var')!;
         const value = (input as HTMLInputElement).value || '';
         body = body.replaceAll(`{{${varName}}}`, value);
-        body = body.replaceAll(`{{${varName.replace(/_/g, '\\_')}}}`, value);
         subject = subject.replaceAll(`{{${varName}}}`, value);
       });
 
-      // Apply ARGO adaptation
+      // Apply ARGO salutation + closing
       const salutation = getSalutation(this.argoProfile, this.userName);
       const closing = getClosing(this.argoProfile, this.userName);
 
       let fullHtml = `<p>${salutation}</p>${body}<p>${closing}</p><p>${this.userName}<br/>GOOD VIBES events &amp; communications</p>`;
 
-      // Full AI adaptation if Anthropic key available
+      // Full AI adaptation if Anthropic key available — Claude rewrites naturally
       if (this.argoProfile && localStorage.getItem('atlas_addin_anthropic_key')) {
         try {
           fullHtml = await adaptEmailBody(fullHtml, this.argoProfile, this.userName);
-        } catch { /* fallback to simple version */ }
+        } catch { /* fallback to assembled version */ }
       }
 
       // Insert into Outlook compose window
       const item = Office.context.mailbox.item;
-      if (item) {
-        // Set subject
-        if (subject) {
-          (item as any).subject?.setAsync?.(subject);
-        }
+      if (!item) { showToast('Aucun email ouvert', 'error'); return; }
 
-        // Set body
+      // Set subject (only if template has one and it's not a reply)
+      if (subject && !this.isReply) {
+        (item as any).subject?.setAsync?.(subject);
+      }
+
+      if (mode === 'replace') {
+        // Replace entire body
         (item as any).body?.setAsync?.(fullHtml, { coercionType: Office.CoercionType.Html }, (result: any) => {
           if (result.status === Office.AsyncResultStatus.Succeeded) {
-            showToast('Template inséré avec succès', 'success');
+            showToast('Template applique — contenu remplace', 'success');
           } else {
             showToast('Erreur d\'insertion', 'error');
+          }
+        });
+      } else {
+        // Insert at cursor position (keeps existing content)
+        (item as any).body?.setSelectedDataAsync?.(fullHtml, { coercionType: Office.CoercionType.Html }, (result: any) => {
+          if (result.status === Office.AsyncResultStatus.Succeeded) {
+            showToast('Template insere au curseur', 'success');
+          } else {
+            // Fallback: prepend if setSelectedDataAsync not supported
+            (item as any).body?.prependAsync?.(fullHtml, { coercionType: Office.CoercionType.Html }, (r2: any) => {
+              if (r2.status === Office.AsyncResultStatus.Succeeded) {
+                showToast('Template insere en debut de mail', 'success');
+              } else {
+                showToast('Erreur d\'insertion', 'error');
+              }
+            });
           }
         });
       }
@@ -332,7 +370,8 @@ export class ComposePanel {
       showToast(`Erreur : ${(err as Error).message}`, 'error');
     } finally {
       insertBtn.disabled = false;
-      insertBtn.textContent = 'Insérer dans le mail';
+      replaceBtn.disabled = false;
+      insertBtn.textContent = 'Inserer au curseur';
     }
   }
 
