@@ -15,6 +15,14 @@
   <HighResolutionIconUrl DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-128.png" />
   <SupportUrl DefaultValue="https://vibes.lu" />
 
+  <AppDomains>
+    <AppDomain>https://api.airtable.com</AppDomain>
+    <AppDomain>https://content.airtable.com</AppDomain>
+    <AppDomain>https://api.anthropic.com</AppDomain>
+    <AppDomain>https://graph.microsoft.com</AppDomain>
+    <AppDomain>https://login.microsoftonline.com</AppDomain>
+  </AppDomains>
+
   <Hosts>
     <Host Name="Mailbox" />
   </Hosts>
@@ -39,14 +47,6 @@
     <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read" />
     <Rule xsi:type="ItemIs" ItemType="Message" FormType="ReadOrEdit" />
   </Rule>
-
-  <AppDomains>
-    <AppDomain>https://api.airtable.com</AppDomain>
-    <AppDomain>https://content.airtable.com</AppDomain>
-    <AppDomain>https://api.anthropic.com</AppDomain>
-    <AppDomain>https://graph.microsoft.com</AppDomain>
-    <AppDomain>https://login.microsoftonline.com</AppDomain>
-  </AppDomains>
 
   <DisableEntityHighlighting>true</DisableEntityHighlighting>
 
