@@ -722,3 +722,125 @@ export async function countLinkedEmails(projetRecordId: string): Promise<number>
     return data.records.length;
   } catch { return 0; }
 }
+
+// ── Email Tags (Inbound Scanner IA) ──────────────────────────────────────────
+
+const ATLAS_EMAIL_TAGS_TABLE = 'tblZsl8roAPbydyYH';
+const ETF = {
+  EMAIL_ID:        'fldmsOwKA0G13CYtQ',
+  CONVERSATION_ID: 'fld4iM2eL4ZYJzvIN',
+  SUBJECT:         'fldmq2A4YvXaXJmyY',
+  FROM_EMAIL:      'fld1dgBaT6m5RzwDI',
+  CATEGORY:        'fldbX9OLwThezZHvT',
+  URGENCY_SCORE:   'fldWmGpEMlwDUnwsE',
+  SUMMARY:         'fldcXdX0YEbJqRDjQ',
+  INBOX_STATUS:    'fldfYly6qkcNVyCht',
+  SNOOZED_UNTIL:   'fldtJPsIRxbcKLx9f',
+  ACTIONED_AT:     'fldb3sfQUmy2BngIw',
+  ARCHIVED:        'fldHcDBghYdZl8FUE',
+  USER_EMAIL:      'fldlMxGx7ovezklHH',
+} as const;
+
+export interface EmailTag {
+  id: string;
+  emailId: string;
+  category: string;        // EmailTagCategory
+  urgencyScore: number;    // 1-5
+  summary: string;
+  inboxStatus: 'inbox' | 'done' | 'snoozed' | 'archived';
+}
+
+/** Récupère le tag IA pour un email (par EmailId Outlook). Null si pas encore taggé. */
+export async function getEmailTagByEmailId(emailId: string): Promise<EmailTag | null> {
+  if (!emailId) return null;
+  const formula = encodeURIComponent(`{${ETF.EMAIL_ID}} = "${emailId.replace(/"/g, '\\"')}"`);
+  const url = `${API_URL}/${ATLAS_BASE}/${ATLAS_EMAIL_TAGS_TABLE}?returnFieldsByFieldId=true&filterByFormula=${formula}&pageSize=1`;
+  try {
+    const data = await airtableFetch<{ records: any[] }>(url);
+    if (!data.records?.length) return null;
+    const r = data.records[0];
+    const f = r.fields || {};
+    return {
+      id: r.id,
+      emailId: f[ETF.EMAIL_ID] || '',
+      category: selectName(f[ETF.CATEGORY]) || 'autre',
+      urgencyScore: Number(f[ETF.URGENCY_SCORE]) || 2,
+      summary: f[ETF.SUMMARY] || '',
+      inboxStatus: (f[ETF.INBOX_STATUS] || 'inbox') as EmailTag['inboxStatus'],
+    };
+  } catch { return null; }
+}
+
+/** Marque un tag comme "Traité" (Done) + actioned_at = now. */
+export async function markTagDone(tagRecordId: string): Promise<boolean> {
+  if (!tagRecordId) return false;
+  const url = `${API_URL}/${ATLAS_BASE}/${ATLAS_EMAIL_TAGS_TABLE}/${tagRecordId}`;
+  try {
+    await airtableFetch(url, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        fields: { [ETF.INBOX_STATUS]: 'done', [ETF.ACTIONED_AT]: new Date().toISOString() },
+        returnFieldsByFieldId: true,
+      }),
+    });
+    return true;
+  } catch (e) { console.warn('[addin] markTagDone failed:', e); return false; }
+}
+
+/** Snooze un tag jusqu'à `until` (par défaut : demain matin 8h). */
+export async function snoozeTag(tagRecordId: string, until?: Date): Promise<boolean> {
+  if (!tagRecordId) return false;
+  const target = until || (() => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d; })();
+  const url = `${API_URL}/${ATLAS_BASE}/${ATLAS_EMAIL_TAGS_TABLE}/${tagRecordId}`;
+  try {
+    await airtableFetch(url, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        fields: {
+          [ETF.INBOX_STATUS]: 'snoozed',
+          [ETF.SNOOZED_UNTIL]: target.toISOString(),
+          [ETF.ACTIONED_AT]: new Date().toISOString(),
+        },
+        returnFieldsByFieldId: true,
+      }),
+    });
+    return true;
+  } catch (e) { console.warn('[addin] snoozeTag failed:', e); return false; }
+}
+
+/** Archive un tag + ARCHIVED=true (legacy). */
+export async function archiveTag(tagRecordId: string): Promise<boolean> {
+  if (!tagRecordId) return false;
+  const url = `${API_URL}/${ATLAS_BASE}/${ATLAS_EMAIL_TAGS_TABLE}/${tagRecordId}`;
+  try {
+    await airtableFetch(url, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        fields: {
+          [ETF.INBOX_STATUS]: 'archived',
+          [ETF.ARCHIVED]: true,
+          [ETF.ACTIONED_AT]: new Date().toISOString(),
+        },
+        returnFieldsByFieldId: true,
+      }),
+    });
+    return true;
+  } catch (e) { console.warn('[addin] archiveTag failed:', e); return false; }
+}
+
+/** Override la catégorie d'un tag (apprentissage). */
+export async function correctTagCategory(tagRecordId: string, newCategory: string): Promise<boolean> {
+  if (!tagRecordId || !newCategory) return false;
+  const url = `${API_URL}/${ATLAS_BASE}/${ATLAS_EMAIL_TAGS_TABLE}/${tagRecordId}`;
+  try {
+    await airtableFetch(url, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        fields: { [ETF.CATEGORY]: newCategory },
+        returnFieldsByFieldId: true,
+        typecast: true,
+      }),
+    });
+    return true;
+  } catch (e) { console.warn('[addin] correctTagCategory failed:', e); return false; }
+}

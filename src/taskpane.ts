@@ -11,6 +11,7 @@ import { ComposePanel } from './components/compose-panel';
 import { ProjectInfoPanel } from './components/project-info';
 import { CreateProjectPanel } from './components/create-project';
 import { SettingsPanel } from './components/settings';
+import { IAPanel } from './components/ia-panel';
 import type { AddinMode } from './types';
 
 // ── State ──
@@ -89,6 +90,7 @@ function renderApp(): void {
   } else if (hasDetectedProject) {
     // Project detected in subject: remove "Créer" tab, default to link
     tabs = [
+      { id: 'ia', label: '\u2728 IA', icon: '' },
       { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
       { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
       { id: 'reply', label: '\uD83D\uDCAC R\u00e9pondre', icon: '' },
@@ -96,6 +98,7 @@ function renderApp(): void {
     ];
   } else {
     tabs = [
+      { id: 'ia', label: '\u2728 IA', icon: '' },
       { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
       { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
       { id: 'create', label: '\u2795 Cr\u00e9er', icon: '' },
@@ -104,12 +107,12 @@ function renderApp(): void {
     ];
   }
 
-  // Determine which tab to activate: URL param > default
+  // Determine which tab to activate: URL param > IA (mode lecture) > compose (mode compose).
   let defaultTab: string;
   if (tab && tabs.some(t => t.id === tab)) {
     defaultTab = tab;
   } else {
-    defaultTab = isCompose ? 'compose' : 'link';
+    defaultTab = isCompose ? 'compose' : 'ia';
   }
 
   app.innerHTML = `
@@ -155,6 +158,9 @@ function switchTab(tabId: string): void {
   const userName = getUserName();
 
   switch (tabId) {
+    case 'ia':
+      currentPanel = new IAPanel(content);
+      break;
     case 'link':
       currentPanel = new LinkPanel(content, userName);
       break;

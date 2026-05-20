@@ -471,8 +471,9 @@ export class LinkPanel {
     });
   }
 
-  private escapeHtml(str: string): string {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  private escapeHtml(str: string | undefined | null): string {
+    if (!str) return '';
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
   destroy(): void {

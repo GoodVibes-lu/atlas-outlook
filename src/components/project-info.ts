@@ -40,8 +40,9 @@ function getStatusBadge(statut: string): string {
   ">${escapeHtml(statut || '—')}</span>`;
 }
 
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function escapeHtml(str: string | undefined | null): string {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 export class ProjectInfoPanel {
