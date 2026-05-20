@@ -337,47 +337,69 @@ export class IAPanel {
       return false;
     }
     try {
-      const item = Office.context.mailbox?.item;
+      const item = Office.context.mailbox?.item as any;
       if (!item) { showToast('Aucun mail sélectionné', 'error'); return false; }
       const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
-      const ewsId = (item as any).itemId;
-      if (!ewsId) { showToast('Pas d\'ID de message Outlook (itemId)', 'error'); return false; }
       if (!userEmail) { showToast('Pas d\'email utilisateur Office.js', 'error'); return false; }
 
-      // 1. Fetch le mail complet via Graph (corps + recipients)
-      const { getGraphToken, convertToRestId } = await import('../api/graph');
-      let token: string;
+      // 1. Récupère les infos du mail via Office.js (pas besoin de token Graph)
+      const ewsId: string = item.itemId || '';
+      const subject: string = item.subject || '';
+      const from = {
+        name: item.from?.displayName || '',
+        email: item.from?.emailAddress || '',
+      };
+      const toRecipients = (item.to || []).map((r: any) => ({
+        name: r.displayName || '',
+        email: r.emailAddress || '',
+      }));
+      const ccRecipients = (item.cc || []).map((r: any) => ({
+        name: r.displayName || '',
+        email: r.emailAddress || '',
+      }));
+      const receivedAt = item.dateTimeCreated
+        ? new Date(item.dateTimeCreated).toISOString()
+        : new Date().toISOString();
+      const conversationId: string = item.conversationId || '';
+
+      // Convertit l'EWS itemId en Graph REST ID pour cohérence avec le scanner backend
+      let restEmailId = ewsId;
       try {
-        token = await getGraphToken();
-      } catch (e) {
-        showToast(`Token Graph manquant : ${(e as Error).message?.slice(0, 100)}`, 'error');
-        return false;
-      }
-      const restId = convertToRestId(ewsId);
-      const msg = await getMessageForLinking(token, restId);
+        const { convertToRestId } = await import('../api/graph');
+        restEmailId = convertToRestId(ewsId);
+      } catch { /* fallback ewsId brut */ }
+
+      // Récupère le body via Office.js (text plain — propre pour Claude)
+      const body: string = await new Promise((resolve) => {
+        try {
+          item.body.getAsync(Office.CoercionType.Text, (res: any) => {
+            resolve(res?.status === Office.AsyncResultStatus.Succeeded ? (res.value || '') : '');
+          });
+        } catch { resolve(''); }
+      });
 
       showToast('Analyse Claude en cours…', 'info');
 
       // 2. Appelle Claude
       const analysis = await analyzeEmailWithClaude({
-        subject: msg.subject,
-        from: { name: msg.from.name, email: msg.from.email },
-        toRecipients: (msg.toRecipients || []).map((r) => ({ name: r.name, email: r.email })),
-        ccRecipients: (msg.ccRecipients || []).map((r) => ({ name: r.name, email: r.email })),
-        body: msg.bodyText || msg.bodyPreview || '',
-        receivedAt: msg.receivedAt,
+        subject,
+        from,
+        toRecipients,
+        ccRecipients,
+        body,
+        receivedAt,
         userEmail,
       });
 
       // 3. Upsert le tag dans Airtable (DELETE ancien + CREATE nouveau)
       const upserted = await upsertEmailTag({
         oldTagId: this.tag?.id,
-        emailId: msg.id,
-        conversationId: msg.conversationId || '',
-        subject: msg.subject,
-        fromEmail: msg.from.email,
-        fromName: msg.from.name,
-        receivedAt: msg.receivedAt,
+        emailId: restEmailId,
+        conversationId,
+        subject,
+        fromEmail: from.email,
+        fromName: from.name,
+        receivedAt,
         category: analysis.category,
         urgencyScore: analysis.urgencyScore,
         summary: analysis.summary,
@@ -388,7 +410,7 @@ export class IAPanel {
       // 4. Refresh local
       this.tag = {
         id: upserted.id,
-        emailId: msg.id,
+        emailId: restEmailId,
         category: analysis.category,
         urgencyScore: analysis.urgencyScore,
         summary: analysis.summary,
