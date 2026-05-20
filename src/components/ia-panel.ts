@@ -188,14 +188,37 @@ export class IAPanel {
   }
 
   private renderNotTagged(): void {
+    const hasKey = hasAnthropicToken();
     this.root.innerHTML = `
-      <div style="padding: 16px;">
+      <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
         <div style="padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; color: #9a3412;">
           <strong>Pas encore taggé par l'IA</strong>
-          <p style="margin: 6px 0 0; font-size: 12px;">L'inbound scanner ATLAS (côté serveur) n'a pas encore analysé ce mail. Cela peut prendre 1-2 min après réception. Reviens dans un instant.</p>
+          <p style="margin: 6px 0 0; font-size: 12px;">Le scanner ATLAS ne l'a pas (encore) analysé. Tu peux forcer l'analyse maintenant — résultat en ~3 sec.</p>
         </div>
+        <button data-action="analyze-now" class="ia-btn ia-btn-secondary" ${hasKey ? '' : 'disabled title="Configure Clé Anthropic dans Settings"'}
+          style="padding: 10px 16px; font-size: 14px; font-weight: 600;">
+          ✨ Analyser maintenant
+        </button>
+        ${hasKey ? '' : '<div style="font-size: 11px; color: #9a3412;">⚠️ Clé Anthropic manquante — onglet Settings ⚙️.</div>'}
       </div>
     `;
+    this.root.querySelector<HTMLButtonElement>('button[data-action="analyze-now"]')
+      ?.addEventListener('click', async (ev) => {
+        const btn = ev.currentTarget as HTMLButtonElement;
+        btn.disabled = true;
+        btn.textContent = '⏳ Analyse en cours…';
+        try {
+          const ok = await this.reanalyzeNow();
+          if (ok) this.render(); // bascule sur la vue taggée
+          else {
+            btn.disabled = false;
+            btn.textContent = '✨ Analyser maintenant';
+          }
+        } catch {
+          btn.disabled = false;
+          btn.textContent = '✨ Analyser maintenant';
+        }
+      });
   }
 
   private render(): void {
