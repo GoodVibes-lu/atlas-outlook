@@ -67,16 +67,16 @@
                  les ExecuteFunction (Traité / Reporter / Archiver) sans ouvrir de pane. ── -->
             <FunctionFile resid="commandsFileUrl" />
 
-            <!-- ── Reading an email: Toolbar buttons (always visible in ribbon) ── -->
-            <!-- 4 boutons : ouvrir pane + Traité + Reporter + Archiver. Les 3 derniers
-                 sont des FunctionCommand qui s'exécutent SANS ouvrir de pane — actions
-                 immédiates sur le mail courant. Compense l'absence de pin sur Mac. -->
+            <!-- ── Reading an email: 1 bouton ATLAS qui ouvre un menu dropdown ── -->
+            <!-- Le nouveau Outlook for Mac ne montre qu'1 bouton/addin dans la ribbon.
+                 Solution : un seul Control Menu qui expose toutes les actions ATLAS
+                 sous forme de menu déroulant. Toujours visible, 2 clics pour agir. -->
             <ExtensionPoint xsi:type="MessageReadCommandSurface">
               <OfficeTab id="TabDefault">
                 <Group id="atlasReadGroup">
                   <Label resid="groupLabel" />
 
-                  <Control xsi:type="Button" id="openAtlasRead">
+                  <Control xsi:type="Menu" id="atlasMainMenu">
                     <Label resid="readBtnLabel" />
                     <Supertip>
                       <Title resid="readBtnTitle" />
@@ -87,135 +87,149 @@
                       <bt:Image size="32" resid="icon32" />
                       <bt:Image size="80" resid="icon80" />
                     </Icon>
-                    <Action xsi:type="ShowTaskpane">
-                      <SourceLocation resid="taskpaneReadUrl" />
-                      <SupportsPinning>true</SupportsPinning>
-                    </Action>
-                  </Control>
+                    <Items>
 
-                  <!-- ✓ Traité : exécute markTagDone + catégorie verte. Pas de pane. -->
-                  <Control xsi:type="Button" id="atlasDoneBtn">
-                    <Label resid="doneBtnLabel" />
-                    <Supertip>
-                      <Title resid="doneBtnLabel" />
-                      <Description resid="doneBtnDesc" />
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="icon16" />
-                      <bt:Image size="32" resid="icon32" />
-                      <bt:Image size="80" resid="icon80" />
-                    </Icon>
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>atlasDoneCommand</FunctionName>
-                    </Action>
-                  </Control>
+                      <!-- 1. Ouvre le pane ATLAS principal -->
+                      <Item id="atlasMenuOpen">
+                        <Label resid="readBtnTitle" />
+                        <Supertip>
+                          <Title resid="readBtnTitle" />
+                          <Description resid="readBtnDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ShowTaskpane">
+                          <SourceLocation resid="taskpaneReadUrl" />
+                          <SupportsPinning>true</SupportsPinning>
+                        </Action>
+                      </Item>
 
-                  <!-- ⏰ Reporter : snooze à demain 8h + catégorie bleue. Pas de pane. -->
-                  <Control xsi:type="Button" id="atlasSnoozeBtn">
-                    <Label resid="snoozeBtnLabel" />
-                    <Supertip>
-                      <Title resid="snoozeBtnLabel" />
-                      <Description resid="snoozeBtnDesc" />
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="icon16" />
-                      <bt:Image size="32" resid="icon32" />
-                      <bt:Image size="80" resid="icon80" />
-                    </Icon>
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>atlasSnoozeCommand</FunctionName>
-                    </Action>
-                  </Control>
+                      <!-- 2. ✓ Traité -->
+                      <Item id="atlasMenuDone">
+                        <Label resid="doneBtnLabel" />
+                        <Supertip>
+                          <Title resid="doneBtnLabel" />
+                          <Description resid="doneBtnDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ExecuteFunction">
+                          <FunctionName>atlasDoneCommand</FunctionName>
+                        </Action>
+                      </Item>
 
-                  <!-- 📦 Archiver : archive + déplace dans dossier habituel. Pas de pane. -->
-                  <Control xsi:type="Button" id="atlasArchiveBtn">
-                    <Label resid="archiveBtnLabel" />
-                    <Supertip>
-                      <Title resid="archiveBtnLabel" />
-                      <Description resid="archiveBtnDesc" />
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="icon16" />
-                      <bt:Image size="32" resid="icon32" />
-                      <bt:Image size="80" resid="icon80" />
-                    </Icon>
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>atlasArchiveCommand</FunctionName>
-                    </Action>
-                  </Control>
+                      <!-- 3. ⏰ Reporter -->
+                      <Item id="atlasMenuSnooze">
+                        <Label resid="snoozeBtnLabel" />
+                        <Supertip>
+                          <Title resid="snoozeBtnLabel" />
+                          <Description resid="snoozeBtnDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ExecuteFunction">
+                          <FunctionName>atlasSnoozeCommand</FunctionName>
+                        </Action>
+                      </Item>
 
-                  <!-- 🔄 Re-analyser : force une analyse Claude. Pas de pane. -->
-                  <Control xsi:type="Button" id="atlasReanalyzeBtn">
-                    <Label resid="reanalyzeBtnLabel" />
-                    <Supertip>
-                      <Title resid="reanalyzeBtnLabel" />
-                      <Description resid="reanalyzeBtnDesc" />
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="icon16" />
-                      <bt:Image size="32" resid="icon32" />
-                      <bt:Image size="80" resid="icon80" />
-                    </Icon>
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>atlasReanalyzeCommand</FunctionName>
-                    </Action>
-                  </Control>
+                      <!-- 4. 📦 Archiver -->
+                      <Item id="atlasMenuArchive">
+                        <Label resid="archiveBtnLabel" />
+                        <Supertip>
+                          <Title resid="archiveBtnLabel" />
+                          <Description resid="archiveBtnDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ExecuteFunction">
+                          <FunctionName>atlasArchiveCommand</FunctionName>
+                        </Action>
+                      </Item>
 
-                </Group>
+                      <!-- 5. 🔄 Re-analyser -->
+                      <Item id="atlasMenuReanalyze">
+                        <Label resid="reanalyzeBtnLabel" />
+                        <Supertip>
+                          <Title resid="reanalyzeBtnLabel" />
+                          <Description resid="reanalyzeBtnDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ExecuteFunction">
+                          <FunctionName>atlasReanalyzeCommand</FunctionName>
+                        </Action>
+                      </Item>
 
-                <!-- 2e groupe : Projets — ouvre le pane sur le tab voulu -->
-                <Group id="atlasProjetGroup">
-                  <Label resid="projetGroupLabel" />
+                      <!-- 6. Lier projet -->
+                      <Item id="atlasMenuLink">
+                        <Label resid="ctxLinkLabel" />
+                        <Supertip>
+                          <Title resid="ctxLinkLabel" />
+                          <Description resid="ctxLinkDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ShowTaskpane">
+                          <SourceLocation resid="ctxLinkUrl" />
+                          <SupportsPinning>true</SupportsPinning>
+                        </Action>
+                      </Item>
 
-                  <Control xsi:type="Button" id="atlasLinkBtn">
-                    <Label resid="ctxLinkLabel" />
-                    <Supertip>
-                      <Title resid="ctxLinkLabel" />
-                      <Description resid="ctxLinkDesc" />
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="icon16" />
-                      <bt:Image size="32" resid="icon32" />
-                      <bt:Image size="80" resid="icon80" />
-                    </Icon>
-                    <Action xsi:type="ShowTaskpane">
-                      <SourceLocation resid="ctxLinkUrl" />
-                      <SupportsPinning>true</SupportsPinning>
-                    </Action>
-                  </Control>
+                      <!-- 7. Voir projet -->
+                      <Item id="atlasMenuInfo">
+                        <Label resid="ctxInfoLabel" />
+                        <Supertip>
+                          <Title resid="ctxInfoLabel" />
+                          <Description resid="ctxInfoDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ShowTaskpane">
+                          <SourceLocation resid="ctxInfoUrl" />
+                          <SupportsPinning>true</SupportsPinning>
+                        </Action>
+                      </Item>
 
-                  <Control xsi:type="Button" id="atlasInfoBtn">
-                    <Label resid="ctxInfoLabel" />
-                    <Supertip>
-                      <Title resid="ctxInfoLabel" />
-                      <Description resid="ctxInfoDesc" />
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="icon16" />
-                      <bt:Image size="32" resid="icon32" />
-                      <bt:Image size="80" resid="icon80" />
-                    </Icon>
-                    <Action xsi:type="ShowTaskpane">
-                      <SourceLocation resid="ctxInfoUrl" />
-                      <SupportsPinning>true</SupportsPinning>
-                    </Action>
-                  </Control>
+                      <!-- 8. Créer projet -->
+                      <Item id="atlasMenuCreate">
+                        <Label resid="ctxCreateLabel" />
+                        <Supertip>
+                          <Title resid="ctxCreateLabel" />
+                          <Description resid="ctxCreateDesc" />
+                        </Supertip>
+                        <Icon>
+                          <bt:Image size="16" resid="icon16" />
+                          <bt:Image size="32" resid="icon32" />
+                          <bt:Image size="80" resid="icon80" />
+                        </Icon>
+                        <Action xsi:type="ShowTaskpane">
+                          <SourceLocation resid="ctxCreateUrl" />
+                          <SupportsPinning>true</SupportsPinning>
+                        </Action>
+                      </Item>
 
-                  <Control xsi:type="Button" id="atlasCreateBtn">
-                    <Label resid="ctxCreateLabel" />
-                    <Supertip>
-                      <Title resid="ctxCreateLabel" />
-                      <Description resid="ctxCreateDesc" />
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="icon16" />
-                      <bt:Image size="32" resid="icon32" />
-                      <bt:Image size="80" resid="icon80" />
-                    </Icon>
-                    <Action xsi:type="ShowTaskpane">
-                      <SourceLocation resid="ctxCreateUrl" />
-                      <SupportsPinning>true</SupportsPinning>
-                    </Action>
+                    </Items>
                   </Control>
 
                 </Group>
