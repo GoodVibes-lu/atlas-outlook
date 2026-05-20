@@ -107,6 +107,8 @@ interface FolderSuggestion {
   projetId?: string;
   /** Pour 'sender-pattern' : nombre de mails du sender dans ce dossier (preuve). */
   patternMailCount?: number;
+  /** Diagnostic visible UI quand rien ne match (debug sans DevTools). */
+  debug?: string;
 }
 
 export class IAPanel {
@@ -476,11 +478,19 @@ export class IAPanel {
   /** Section "Dossier de classement" affichée dans le rendu IA. */
   private renderFolderSection(): string {
     const s = this.folderSuggestion;
-    if (!s || s.source === 'none') {
-      // Pas de projet lié → pas de suggestion. Section silencieuse.
-      return this.tag?.linkedProjetId
-        ? `<div style="padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; font-size: 11px; color: #64748b;">📁 Résolution du dossier en cours…</div>`
-        : '';
+    if (!s) {
+      return `<div style="padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; font-size: 11px; color: #64748b;">📁 Résolution du dossier en cours…</div>`;
+    }
+    if (s.source === 'none') {
+      // Aucune suggestion exploitable. On affiche un mini diagnostic visible pour
+      // que Charles voie POURQUOI (sans DevTools).
+      const dbg = s.debug ? escapeHtml(s.debug).slice(0, 400) : 'aucun signal';
+      return `
+        <div style="padding: 10px; background: #fafafa; border: 1px dashed #cbd5e1; border-radius: 6px;">
+          <div style="font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Aucun dossier suggéré</div>
+          <div style="font-size: 11px; color: #94a3b8; font-family: monospace;">Debug : ${dbg}</div>
+        </div>
+      `;
     }
     if (s.source === 'mapped') {
       return `
@@ -561,22 +571,26 @@ export class IAPanel {
       //    les mails de ce sender ? Continue l'existant : si les 30 derniers
       //    mails du sender sont majoritairement dans 1 dossier, c'est CE
       //    dossier qu'on suggère, peu importe le projet lié ou non.
+      let patternDebug = '';
       if (senderEmail) {
         try {
           const { getApiContext } = await import('../api/graph');
           const ctx = await getApiContext();
-          const pattern = await this.findSenderPatternFolder(ctx.token, ctx.base, senderEmail);
-          if (pattern) {
+          const apiKind = ctx.base.includes('graph.microsoft.com') ? 'Graph' : 'OutlookREST';
+          const result = await this.findSenderPatternFolderWithDebug(ctx.token, ctx.base, senderEmail);
+          patternDebug = `${apiKind} · ${result.debug}`;
+          if (result.match) {
             this.folderSuggestion = {
               source: 'sender-pattern',
-              folderId: pattern.folderId,
-              folderPath: pattern.folderPath,
+              folderId: result.match.folderId,
+              folderPath: result.match.folderPath,
               projetId: tag?.linkedProjetId,
-              patternMailCount: pattern.count,
+              patternMailCount: result.match.count,
             };
             return;
           }
         } catch (e) {
+          patternDebug = `Erreur lookup : ${(e as Error).message?.slice(0, 100)}`;
           console.warn('[IAPanel] sender-pattern lookup failed:', e);
         }
       }
@@ -608,14 +622,14 @@ export class IAPanel {
 
       // ── Stratégies 3 + 4 : nécessitent un projet lié (client + dénomination)
       if (!tag?.linkedProjetId) {
-        this.folderSuggestion = { source: 'none', folderPath: '' };
+        this.folderSuggestion = { source: 'none', folderPath: '', debug: patternDebug };
         return;
       }
       const projets = await getAllProjets();
       const projet = projets.find((p) => p.id === tag.linkedProjetId);
       this.linkedProjet = projet || null;
       if (!projet) {
-        this.folderSuggestion = { source: 'none', folderPath: '' };
+        this.folderSuggestion = { source: 'none', folderPath: '', debug: patternDebug };
         return;
       }
 
@@ -661,6 +675,31 @@ export class IAPanel {
    * Outlook (toutes localisations sauf Inbox/Sent), on compte le dossier
    * majoritaire. Si > 50% → on suggère ce dossier.
    */
+  /**
+   * Wrapper de findSenderPatternFolder qui retourne aussi un texte de debug
+   * visible dans l'UI (pour diagnostiquer sans DevTools).
+   */
+  private async findSenderPatternFolderWithDebug(
+    token: string,
+    apiBase: string,
+    senderEmail: string,
+  ): Promise<{ match: { folderId: string; folderPath: string; count: number } | null; debug: string }> {
+    const dbg: string[] = [];
+    const orig = console.info;
+    const captured: string[] = [];
+    console.info = (...args: any[]) => {
+      try { captured.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')); } catch {}
+      orig(...args);
+    };
+    try {
+      const match = await this.findSenderPatternFolder(token, apiBase, senderEmail);
+      dbg.push(...captured.filter((c) => c.includes('sender-pattern')).map((c) => c.replace('[IAPanel] sender-pattern', '').trim()));
+      return { match, debug: dbg.join(' | ') || 'aucune réponse API' };
+    } finally {
+      console.info = orig;
+    }
+  }
+
   private async findSenderPatternFolder(
     token: string,
     apiBase: string,
