@@ -81,6 +81,10 @@
                     </Icon>
                     <Action xsi:type="ShowTaskpane">
                       <SourceLocation resid="taskpaneReadUrl" />
+                      <!-- Permet à l'utilisateur d'épingler le task-pane via l'icône 📌
+                           en haut à droite du pane. Le pane reste alors ouvert et se
+                           re-render automatiquement à chaque changement de mail. -->
+                      <SupportsPinning>true</SupportsPinning>
                     </Action>
                   </Control>
                 </Group>

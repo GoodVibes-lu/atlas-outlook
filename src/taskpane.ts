@@ -211,6 +211,24 @@ Office.onReady((info) => {
   if (info.host === Office.HostType.Outlook) {
     console.log('[ATLAS] Outlook Add-in loaded');
     renderApp();
+
+    // Quand le task-pane est ÉPINGLÉ par l'utilisateur (icône 📌 en haut),
+    // il reste ouvert pendant qu'il change de mail. Sans handler, le contenu
+    // reste figé sur l'ancien mail. On écoute ItemChanged et on re-render
+    // pour rafraîchir tous les panels (tags IA, projet lié, etc.).
+    try {
+      Office.context.mailbox.addHandlerAsync(
+        Office.EventType.ItemChanged,
+        () => {
+          console.log('[ATLAS] ItemChanged → re-render');
+          // Reset tab pour repartir sur l'IA par défaut au changement de mail
+          currentTab = '';
+          renderApp();
+        },
+      );
+    } catch (e) {
+      console.warn('[ATLAS] ItemChanged handler registration failed:', e);
+    }
   } else {
     // Running outside Office (dev mode)
     console.log('[ATLAS] Running outside Office.js — dev mode');
