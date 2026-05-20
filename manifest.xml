@@ -63,11 +63,19 @@
         <Host xsi:type="MailHost">
           <DesktopFormFactor>
 
-            <!-- ── Reading an email: Toolbar button ── -->
+            <!-- ── FunctionFile : page invisible qui charge commands.js pour exécuter
+                 les ExecuteFunction (Traité / Reporter / Archiver) sans ouvrir de pane. ── -->
+            <FunctionFile resid="commandsFileUrl" />
+
+            <!-- ── Reading an email: Toolbar buttons (always visible in ribbon) ── -->
+            <!-- 4 boutons : ouvrir pane + Traité + Reporter + Archiver. Les 3 derniers
+                 sont des FunctionCommand qui s'exécutent SANS ouvrir de pane — actions
+                 immédiates sur le mail courant. Compense l'absence de pin sur Mac. -->
             <ExtensionPoint xsi:type="MessageReadCommandSurface">
               <OfficeTab id="TabDefault">
                 <Group id="atlasReadGroup">
                   <Label resid="groupLabel" />
+
                   <Control xsi:type="Button" id="openAtlasRead">
                     <Label resid="readBtnLabel" />
                     <Supertip>
@@ -81,12 +89,61 @@
                     </Icon>
                     <Action xsi:type="ShowTaskpane">
                       <SourceLocation resid="taskpaneReadUrl" />
-                      <!-- Permet à l'utilisateur d'épingler le task-pane via l'icône 📌
-                           en haut à droite du pane. Le pane reste alors ouvert et se
-                           re-render automatiquement à chaque changement de mail. -->
                       <SupportsPinning>true</SupportsPinning>
                     </Action>
                   </Control>
+
+                  <!-- ✓ Traité : exécute markTagDone + catégorie verte. Pas de pane. -->
+                  <Control xsi:type="Button" id="atlasDoneBtn">
+                    <Label resid="doneBtnLabel" />
+                    <Supertip>
+                      <Title resid="doneBtnLabel" />
+                      <Description resid="doneBtnDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>atlasDoneCommand</FunctionName>
+                    </Action>
+                  </Control>
+
+                  <!-- ⏰ Reporter : snooze à demain 8h + catégorie bleue. Pas de pane. -->
+                  <Control xsi:type="Button" id="atlasSnoozeBtn">
+                    <Label resid="snoozeBtnLabel" />
+                    <Supertip>
+                      <Title resid="snoozeBtnLabel" />
+                      <Description resid="snoozeBtnDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>atlasSnoozeCommand</FunctionName>
+                    </Action>
+                  </Control>
+
+                  <!-- 📦 Archiver : archive + déplace dans dossier habituel. Pas de pane. -->
+                  <Control xsi:type="Button" id="atlasArchiveBtn">
+                    <Label resid="archiveBtnLabel" />
+                    <Supertip>
+                      <Title resid="archiveBtnLabel" />
+                      <Description resid="archiveBtnDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>atlasArchiveCommand</FunctionName>
+                    </Action>
+                  </Control>
+
                 </Group>
               </OfficeTab>
             </ExtensionPoint>
@@ -201,6 +258,7 @@
           <bt:Url id="ctxLinkUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=link" />
           <bt:Url id="ctxInfoUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=info" />
           <bt:Url id="ctxCreateUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=create" />
+          <bt:Url id="commandsFileUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/commands.html" />
         </bt:Urls>
         <bt:ShortStrings>
           <bt:String id="groupLabel" DefaultValue="ATLAS" />
@@ -213,6 +271,9 @@
           <bt:String id="ctxLinkLabel" DefaultValue="Lier a un projet ATLAS" />
           <bt:String id="ctxInfoLabel" DefaultValue="Voir le projet" />
           <bt:String id="ctxCreateLabel" DefaultValue="Creer un projet" />
+          <bt:String id="doneBtnLabel" DefaultValue="Traite" />
+          <bt:String id="snoozeBtnLabel" DefaultValue="Reporter" />
+          <bt:String id="archiveBtnLabel" DefaultValue="Archiver" />
         </bt:ShortStrings>
         <bt:LongStrings>
           <bt:String id="readBtnDesc" DefaultValue="Lier cet email à un projet, voir les infos ou créer un nouveau projet ATLAS" />
@@ -221,6 +282,9 @@
           <bt:String id="ctxLinkDesc" DefaultValue="Lier cet email à un projet existant dans ATLAS" />
           <bt:String id="ctxInfoDesc" DefaultValue="Afficher les informations du projet lié à cet email" />
           <bt:String id="ctxCreateDesc" DefaultValue="Créer un nouveau projet ATLAS à partir de cet email" />
+          <bt:String id="doneBtnDesc" DefaultValue="Marquer ce mail comme traité (tag vert ATLAS apparait dans l'inbox)" />
+          <bt:String id="snoozeBtnDesc" DefaultValue="Reporter ce mail à demain 8h (tag bleu ATLAS apparait dans l'inbox)" />
+          <bt:String id="archiveBtnDesc" DefaultValue="Archiver et ranger automatiquement ce mail dans son dossier habituel" />
         </bt:LongStrings>
       </Resources>
 
