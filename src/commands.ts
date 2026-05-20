@@ -24,14 +24,36 @@ import {
   markTagDone,
   snoozeTag,
   archiveTag,
+  upsertEmailTag,
 } from './api/airtable';
+import { analyzeEmailWithClaude, hasAnthropicToken } from './api/claude';
 import {
   convertToRestId,
   setMessageCategories,
   moveMessageToFolder,
   ATLAS_CATEGORIES,
+  ATLAS_IA_CATEGORIES,
 } from './api/graph';
 import { lookupSenderFolder, recordSenderFolder } from './api/sender-folder-index';
+
+/**
+ * Construit la liste des catégories à appliquer pour un état donné.
+ * Inclut : type IA + urgence (si >= 4) + état (snoozed/done/archived).
+ */
+function buildCategoriesFor(tag: any, state: 'done' | 'snoozed' | 'archived'): string[] {
+  const cats: string[] = [];
+  if (tag?.category) {
+    const ia = ATLAS_IA_CATEGORIES[tag.category];
+    if (ia) cats.push(ia.name);
+  }
+  const u = tag?.urgencyScore || 0;
+  if (u >= 5) cats.push(ATLAS_CATEGORIES.URGENCE_5.name);
+  else if (u === 4) cats.push(ATLAS_CATEGORIES.URGENCE_4.name);
+  if (state === 'snoozed') cats.push(ATLAS_CATEGORIES.SNOOZED.name);
+  else if (state === 'done') cats.push(ATLAS_CATEGORIES.DONE.name);
+  else if (state === 'archived') cats.push(ATLAS_CATEGORIES.ARCHIVED.name);
+  return cats;
+}
 
 // Office.js doit être prêt avant que les commandes soient invoquées.
 // On register les handlers globalement (window) — manifest les référence par nom.
@@ -41,10 +63,12 @@ Office.onReady(() => {
   (window as any).atlasDoneCommand = atlasDoneCommand;
   (window as any).atlasSnoozeCommand = atlasSnoozeCommand;
   (window as any).atlasArchiveCommand = atlasArchiveCommand;
+  (window as any).atlasReanalyzeCommand = atlasReanalyzeCommand;
   try {
     Office.actions.associate('atlasDoneCommand', atlasDoneCommand);
     Office.actions.associate('atlasSnoozeCommand', atlasSnoozeCommand);
     Office.actions.associate('atlasArchiveCommand', atlasArchiveCommand);
+    Office.actions.associate('atlasReanalyzeCommand', atlasReanalyzeCommand);
   } catch (e) {
     console.warn('[ATLAS commands] Office.actions.associate not available:', e);
   }
@@ -114,7 +138,7 @@ export async function atlasDoneCommand(event: Office.AddinCommands.Event): Promi
 
     // Catégorie ✓ verte
     try {
-      await setMessageCategories(ctx.restId, [ATLAS_CATEGORIES.DONE.name]);
+      await setMessageCategories(ctx.restId, buildCategoriesFor(tag, 'done'));
     } catch (e) {
       console.warn('[ATLAS commands] setCategories done failed:', e);
     }
@@ -147,7 +171,7 @@ export async function atlasSnoozeCommand(event: Office.AddinCommands.Event): Pro
     if (!ok) { showInfoBar('Échec snooze', true); event.completed(); return; }
 
     try {
-      await setMessageCategories(ctx.restId, [ATLAS_CATEGORIES.SNOOZED.name]);
+      await setMessageCategories(ctx.restId, buildCategoriesFor(tag, 'snoozed'));
     } catch (e) {
       console.warn('[ATLAS commands] setCategories snooze failed:', e);
     }
@@ -155,6 +179,83 @@ export async function atlasSnoozeCommand(event: Office.AddinCommands.Event): Pro
     showInfoBar('⏰ Reporté à demain 8h — tag bleu visible dans l\'inbox');
   } catch (e) {
     showInfoBar(`Erreur : ${(e as Error).message?.slice(0, 80)}`, true);
+  } finally {
+    event.completed();
+  }
+}
+
+/**
+ * 🔄 Re-analyser — Force l'analyse Claude sur le mail courant.
+ * Crée ou met à jour le tag IA. Applique ensuite la catégorie correspondante.
+ */
+export async function atlasReanalyzeCommand(event: Office.AddinCommands.Event): Promise<void> {
+  try {
+    if (!hasAnthropicToken()) {
+      showInfoBar('Clé Anthropic non configurée (Settings ATLAS)', true);
+      event.completed();
+      return;
+    }
+    const item = Office.context.mailbox?.item as any;
+    if (!item) { showInfoBar('Aucun mail sélectionné', true); event.completed(); return; }
+    const ctx = getCurrentMailContext();
+    if (!ctx) { showInfoBar('Mail non identifiable', true); event.completed(); return; }
+
+    const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
+    const subject: string = item.subject || '';
+    const from = {
+      name: item.from?.displayName || '',
+      email: item.from?.emailAddress || '',
+    };
+    const toRecipients = (item.to || []).map((r: any) => ({ name: r.displayName || '', email: r.emailAddress || '' }));
+    const ccRecipients = (item.cc || []).map((r: any) => ({ name: r.displayName || '', email: r.emailAddress || '' }));
+    const receivedAt = item.dateTimeCreated ? new Date(item.dateTimeCreated).toISOString() : new Date().toISOString();
+
+    // Body via Office.js
+    const body: string = await new Promise((resolve) => {
+      try {
+        item.body.getAsync(Office.CoercionType.Text, (res: any) => {
+          resolve(res?.status === Office.AsyncResultStatus.Succeeded ? (res.value || '') : '');
+        });
+      } catch { resolve(''); }
+    });
+
+    showInfoBar('Analyse Claude en cours…');
+
+    const analysis = await analyzeEmailWithClaude({
+      subject, from, toRecipients, ccRecipients, body, receivedAt, userEmail,
+    });
+
+    const existing = await findTagForCurrentMail(ctx.restId, ctx.conversationId);
+    const upserted = await upsertEmailTag({
+      oldTagId: existing?.id,
+      emailId: ctx.restId,
+      conversationId: ctx.conversationId,
+      subject,
+      fromEmail: from.email,
+      fromName: from.name,
+      receivedAt,
+      category: analysis.category,
+      urgencyScore: analysis.urgencyScore,
+      summary: analysis.summary,
+      detectedLanguage: analysis.detectedLanguage,
+      userEmail,
+    });
+
+    // Applique les catégories (type IA + urgence si haute)
+    const newTag = { id: upserted.id, category: analysis.category, urgencyScore: analysis.urgencyScore };
+    try {
+      await setMessageCategories(ctx.restId, buildCategoriesFor(newTag, 'done' as any).filter((c) =>
+        // Pour le re-analyze : on applique IA + urgence, PAS d'état
+        !c.includes('Traité') && !c.includes('Reporté') && !c.includes('Archivé')
+      ));
+    } catch (e) {
+      console.warn('[ATLAS commands] setCategories reanalyze failed:', e);
+    }
+
+    const iaCat = ATLAS_IA_CATEGORIES[analysis.category]?.name || analysis.category;
+    showInfoBar(`✓ Analysé : ${iaCat} (urgence ${analysis.urgencyScore}/5)`);
+  } catch (e) {
+    showInfoBar(`Erreur re-analyse : ${(e as Error).message?.slice(0, 80)}`, true);
   } finally {
     event.completed();
   }
@@ -180,7 +281,7 @@ export async function atlasArchiveCommand(event: Office.AddinCommands.Event): Pr
     if (!ok) { showInfoBar('Échec archive', true); event.completed(); return; }
 
     try {
-      await setMessageCategories(ctx.restId, [ATLAS_CATEGORIES.ARCHIVED.name]);
+      await setMessageCategories(ctx.restId, buildCategoriesFor(tag, 'archived'));
     } catch (e) {
       console.warn('[ATLAS commands] setCategories archive failed:', e);
     }

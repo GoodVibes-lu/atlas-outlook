@@ -318,17 +318,43 @@ export async function ensureFolderPath(
  * 9=maroon, 10-24 = autres tons. On choisit les plus contrastés pour
  * que chaque état soit immédiatement reconnaissable.
  */
+// État du mail (couleurs vives pour signaler les actions)
 export const ATLAS_CATEGORIES = {
-  URGENCE_5: { name: '🚨 ATLAS · Urgence 5', color: 'preset0' },   // red
-  URGENCE_4: { name: '🔥 ATLAS · Urgence 4', color: 'preset1' },   // orange
-  URGENCE_3: { name: '⚡ ATLAS · Urgence 3', color: 'preset3' },   // yellow
-  SNOOZED:   { name: '⏰ ATLAS · Reporté',   color: 'preset7' },   // blue
-  DONE:      { name: '✅ ATLAS · Traité',    color: 'preset4' },   // green
-  ARCHIVED:  { name: '📦 ATLAS · Archivé',  color: 'preset8' },   // purple
+  URGENCE_5: { name: '🚨 Urgence 5', color: 'preset0' },     // red
+  URGENCE_4: { name: '🔥 Urgence 4', color: 'preset1' },     // orange
+  URGENCE_3: { name: '⚡ Urgence 3', color: 'preset3' },     // yellow
+  SNOOZED:   { name: '⏰ Reporté',   color: 'preset7' },     // blue
+  DONE:      { name: '✅ Traité',    color: 'preset4' },     // green
+  ARCHIVED:  { name: '📦 Archivé',  color: 'preset8' },     // purple
 };
 
-/** Liste tous les noms de catégories ATLAS pour cleanup. */
-const ALL_ATLAS_NAMES = Object.values(ATLAS_CATEGORIES).map((c) => c.name);
+/**
+ * Catégories IA — mêmes labels que CATEGORY_LABELS dans ia-panel.ts.
+ * Une couleur preset différente par catégorie pour distinguer les types
+ * de mails dans la vue liste Outlook.
+ */
+export const ATLAS_IA_CATEGORIES: Record<string, { name: string; color: string }> = {
+  demande_devis:          { name: '💼 Demande devis',          color: 'preset11' },  // steel
+  validation_client:      { name: '✅ Validation client',      color: 'preset4' },   // green
+  refus_client:           { name: '❌ Refus client',           color: 'preset0' },   // red
+  question_staff:         { name: '👥 Question staff',         color: 'preset12' },  // dark steel
+  facture_fournisseur:    { name: '🧾 Facture fournisseur',    color: 'preset9' },   // maroon
+  prospection_entrante:   { name: '📞 Prospection entrante',   color: 'preset2' },   // peach
+  rdv_planning:           { name: '📅 RDV / Planning',         color: 'preset6' },   // olive
+  newsletter:             { name: '📰 Newsletter',             color: 'preset14' },  // dark green
+  notification_systeme:   { name: '🤖 Notification système',   color: 'preset13' },  // dark olive
+  spam:                   { name: '🚫 Spam',                   color: 'preset16' },  // dark red
+  autre:                  { name: '📩 Autre',                  color: 'preset15' },  // dark teal
+  federation_association: { name: '🏛 Fédération / Association', color: 'preset8' }, // purple
+  demande_interne_staff:  { name: '🏠 Interne staff',          color: 'preset5' },   // teal
+  fournisseur:            { name: '🚚 Fournisseur',            color: 'preset10' },  // dark maroon
+};
+
+/** Liste tous les noms de catégories ATLAS pour cleanup (states + IA). */
+const ALL_ATLAS_NAMES = [
+  ...Object.values(ATLAS_CATEGORIES).map((c) => c.name),
+  ...Object.values(ATLAS_IA_CATEGORIES).map((c) => c.name),
+];
 
 /**
  * S'assure que les catégories ATLAS existent dans la mailbox (sinon les
@@ -349,7 +375,8 @@ async function ensureAtlasCategories(token: string, base: string): Promise<void>
     }
     const data: any = await res.json();
     const existing = new Set((data.value || []).map((c: any) => c.displayName || c.DisplayName));
-    for (const def of Object.values(ATLAS_CATEGORIES)) {
+    const allDefs = [...Object.values(ATLAS_CATEGORIES), ...Object.values(ATLAS_IA_CATEGORIES)];
+    for (const def of allDefs) {
       if (existing.has(def.name)) continue;
       try {
         await fetch(url, {

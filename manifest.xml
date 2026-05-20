@@ -144,6 +144,80 @@
                     </Action>
                   </Control>
 
+                  <!-- 🔄 Re-analyser : force une analyse Claude. Pas de pane. -->
+                  <Control xsi:type="Button" id="atlasReanalyzeBtn">
+                    <Label resid="reanalyzeBtnLabel" />
+                    <Supertip>
+                      <Title resid="reanalyzeBtnLabel" />
+                      <Description resid="reanalyzeBtnDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>atlasReanalyzeCommand</FunctionName>
+                    </Action>
+                  </Control>
+
+                </Group>
+
+                <!-- 2e groupe : Projets — ouvre le pane sur le tab voulu -->
+                <Group id="atlasProjetGroup">
+                  <Label resid="projetGroupLabel" />
+
+                  <Control xsi:type="Button" id="atlasLinkBtn">
+                    <Label resid="ctxLinkLabel" />
+                    <Supertip>
+                      <Title resid="ctxLinkLabel" />
+                      <Description resid="ctxLinkDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Action xsi:type="ShowTaskpane">
+                      <SourceLocation resid="ctxLinkUrl" />
+                      <SupportsPinning>true</SupportsPinning>
+                    </Action>
+                  </Control>
+
+                  <Control xsi:type="Button" id="atlasInfoBtn">
+                    <Label resid="ctxInfoLabel" />
+                    <Supertip>
+                      <Title resid="ctxInfoLabel" />
+                      <Description resid="ctxInfoDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Action xsi:type="ShowTaskpane">
+                      <SourceLocation resid="ctxInfoUrl" />
+                      <SupportsPinning>true</SupportsPinning>
+                    </Action>
+                  </Control>
+
+                  <Control xsi:type="Button" id="atlasCreateBtn">
+                    <Label resid="ctxCreateLabel" />
+                    <Supertip>
+                      <Title resid="ctxCreateLabel" />
+                      <Description resid="ctxCreateDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Action xsi:type="ShowTaskpane">
+                      <SourceLocation resid="ctxCreateUrl" />
+                      <SupportsPinning>true</SupportsPinning>
+                    </Action>
+                  </Control>
+
                 </Group>
               </OfficeTab>
             </ExtensionPoint>
@@ -274,6 +348,8 @@
           <bt:String id="doneBtnLabel" DefaultValue="Traite" />
           <bt:String id="snoozeBtnLabel" DefaultValue="Reporter" />
           <bt:String id="archiveBtnLabel" DefaultValue="Archiver" />
+          <bt:String id="reanalyzeBtnLabel" DefaultValue="Re-analyser" />
+          <bt:String id="projetGroupLabel" DefaultValue="Projet" />
         </bt:ShortStrings>
         <bt:LongStrings>
           <bt:String id="readBtnDesc" DefaultValue="Lier cet email à un projet, voir les infos ou créer un nouveau projet ATLAS" />
@@ -285,6 +361,7 @@
           <bt:String id="doneBtnDesc" DefaultValue="Marquer ce mail comme traité (tag vert ATLAS apparait dans l'inbox)" />
           <bt:String id="snoozeBtnDesc" DefaultValue="Reporter ce mail à demain 8h (tag bleu ATLAS apparait dans l'inbox)" />
           <bt:String id="archiveBtnDesc" DefaultValue="Archiver et ranger automatiquement ce mail dans son dossier habituel" />
+          <bt:String id="reanalyzeBtnDesc" DefaultValue="Forcer une nouvelle analyse Claude (corrige une mauvaise classification)" />
         </bt:LongStrings>
       </Resources>
 

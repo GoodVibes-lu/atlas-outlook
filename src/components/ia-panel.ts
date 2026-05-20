@@ -39,6 +39,7 @@ import {
   setMessageCategories,
   clearAtlasCategories,
   ATLAS_CATEGORIES,
+  ATLAS_IA_CATEGORIES,
 } from '../api/graph';
 
 const CATEGORIES = [
@@ -1094,18 +1095,31 @@ export class IAPanel {
     if (!rawId) return;
     const restId = convertToRestId(rawId);
 
-    // Choisit la catégorie selon l'état (priorité d'affichage)
+    // On applique simultanément plusieurs catégories (Outlook les affiche
+    // toutes côte-à-côte dans la vue liste) :
+    //   - IA (type de mail : "💼 Demande devis", "🏛 Fédération / Association"...)
+    //   - Urgence si >= 4 (signaux visuels forts pour ne rien rater)
+    //   - État (Reporté / Traité / Archivé) si pas en inbox
     const cats: string[] = [];
-    if (state === 'snoozed') cats.push(ATLAS_CATEGORIES.SNOOZED.name);
-    else if (state === 'done') cats.push(ATLAS_CATEGORIES.DONE.name);
-    else if (state === 'archived') cats.push(ATLAS_CATEGORIES.ARCHIVED.name);
-    else if (state === 'tagged' && this.tag) {
-      // Catégorie urgence si >= 3
+
+    // 1) Catégorie IA (toujours, dès qu'on a un tag)
+    if (this.tag?.category) {
+      const ia = ATLAS_IA_CATEGORIES[this.tag.category];
+      if (ia) cats.push(ia.name);
+    }
+
+    // 2) Urgence haute (>= 4)
+    if (this.tag) {
       const u = this.tag.urgencyScore || 0;
       if (u >= 5) cats.push(ATLAS_CATEGORIES.URGENCE_5.name);
       else if (u === 4) cats.push(ATLAS_CATEGORIES.URGENCE_4.name);
-      else if (u === 3) cats.push(ATLAS_CATEGORIES.URGENCE_3.name);
     }
+
+    // 3) État
+    if (state === 'snoozed') cats.push(ATLAS_CATEGORIES.SNOOZED.name);
+    else if (state === 'done') cats.push(ATLAS_CATEGORIES.DONE.name);
+    else if (state === 'archived') cats.push(ATLAS_CATEGORIES.ARCHIVED.name);
+
     try {
       await setMessageCategories(restId, cats);
     } catch (e) {
