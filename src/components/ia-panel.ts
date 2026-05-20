@@ -20,8 +20,14 @@ import {
   snoozeTag,
   archiveTag,
   correctTagCategory,
+  upsertEmailTag,
   type EmailTag,
 } from '../api/airtable';
+import {
+  analyzeEmailWithClaude,
+  hasAnthropicToken,
+} from '../api/claude';
+import { getMessageForLinking } from '../api/graph';
 import type { Projet } from '../types';
 import {
   getGraphToken,
@@ -225,6 +231,7 @@ export class IAPanel {
             <button data-action="done" class="ia-btn ia-btn-success">✓ Traité</button>
             <button data-action="snooze" class="ia-btn ia-btn-warning">⏰ Reporter (demain 8h)</button>
             <button data-action="archive" class="ia-btn ia-btn-muted">📦 Archiver</button>
+            <button data-action="reanalyze" class="ia-btn ia-btn-secondary" ${hasAnthropicToken() ? '' : 'disabled title="Configure Clé Anthropic dans Settings"'}>🔄 Re-analyser</button>
           </div>
         </div>
 
@@ -244,6 +251,7 @@ export class IAPanel {
         .ia-btn-warning { background: #f59e0b; color: #fff; }
         .ia-btn-muted { background: #94a3b8; color: #fff; }
         .ia-btn-primary { background: #cc2200; color: #fff; }
+        .ia-btn-secondary { background: #6366f1; color: #fff; }
         .ia-btn:hover { opacity: 0.9; }
         .ia-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       </style>
@@ -297,6 +305,10 @@ export class IAPanel {
           }
           break;
         }
+        case 'reanalyze': {
+          ok = await this.reanalyzeNow();
+          break;
+        }
       }
       if (!ok) showToast('Échec de l\'action', 'error');
       this.render();
@@ -305,6 +317,80 @@ export class IAPanel {
       showToast('Erreur', 'error');
     } finally {
       buttons.forEach(b => b.disabled = false);
+    }
+  }
+
+  /**
+   * Force une re-analyse Claude pour le mail courant. Purge l'ancien tag +
+   * écrit le nouveau résultat. Résultat immédiat — pas d'attente du scan
+   * périodique côté app desktop. Nécessite ANTHROPIC_API_KEY configurée
+   * dans Settings de l'addin.
+   */
+  private async reanalyzeNow(): Promise<boolean> {
+    if (!hasAnthropicToken()) {
+      showToast('Configure Clé Anthropic dans Settings de l\'addin', 'error');
+      return false;
+    }
+    try {
+      const item = Office.context.mailbox?.item;
+      if (!item) return false;
+      const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
+      const ewsId = (item as any).itemId;
+      if (!ewsId || !userEmail) return false;
+
+      // 1. Fetch le mail complet via Graph (corps + recipients)
+      const { getGraphToken, convertToRestId } = await import('../api/graph');
+      const token = await getGraphToken();
+      const restId = convertToRestId(ewsId);
+      const msg = await getMessageForLinking(token, restId);
+
+      showToast('Analyse Claude en cours…', 'info');
+
+      // 2. Appelle Claude
+      const analysis = await analyzeEmailWithClaude({
+        subject: msg.subject,
+        from: { name: msg.from.name, email: msg.from.email },
+        toRecipients: (msg.toRecipients || []).map((r) => ({ name: r.name, email: r.email })),
+        ccRecipients: (msg.ccRecipients || []).map((r) => ({ name: r.name, email: r.email })),
+        body: msg.bodyText || msg.bodyPreview || '',
+        receivedAt: msg.receivedAt,
+        userEmail,
+      });
+
+      // 3. Upsert le tag dans Airtable (DELETE ancien + CREATE nouveau)
+      const upserted = await upsertEmailTag({
+        oldTagId: this.tag?.id,
+        emailId: msg.id,
+        conversationId: msg.conversationId || '',
+        subject: msg.subject,
+        fromEmail: msg.from.email,
+        fromName: msg.from.name,
+        receivedAt: msg.receivedAt,
+        category: analysis.category,
+        urgencyScore: analysis.urgencyScore,
+        summary: analysis.summary,
+        detectedLanguage: analysis.detectedLanguage,
+        userEmail,
+      });
+
+      // 4. Refresh local
+      this.tag = {
+        id: upserted.id,
+        emailId: msg.id,
+        category: analysis.category,
+        urgencyScore: analysis.urgencyScore,
+        summary: analysis.summary,
+        inboxStatus: 'inbox',
+        linkedProjetId: this.tag?.linkedProjetId,
+      };
+      showToast(`Re-analysé ✓ : ${CATEGORY_LABELS[analysis.category] || analysis.category}`, 'success');
+      // Re-résout aussi le dossier de classement (la catégorie a peut-être changé)
+      this.resolveFolderSuggestion().then(() => this.render()).catch(() => {});
+      return true;
+    } catch (e) {
+      console.warn('[IAPanel] reanalyze failed:', e);
+      showToast(`Erreur re-analyse : ${(e as Error).message || 'inconnue'}`, 'error');
+      return false;
     }
   }
 

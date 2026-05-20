@@ -853,6 +853,52 @@ export async function archiveTag(tagRecordId: string): Promise<boolean> {
   } catch (e) { console.warn('[addin] archiveTag failed:', e); return false; }
 }
 
+/**
+ * Crée ou remplace un tag email dans Airtable.
+ * Utilisé par le bouton "Re-analyser" : on supprime l'ancien tag puis on
+ * écrit le nouveau résultat Claude. Si pas d'ancien tag → simple création.
+ */
+export async function upsertEmailTag(input: {
+  oldTagId?: string;
+  emailId: string;
+  conversationId: string;
+  subject: string;
+  fromEmail: string;
+  fromName: string;
+  receivedAt: string;
+  category: string;
+  urgencyScore: number;
+  summary: string;
+  detectedLanguage: string;
+  userEmail: string;
+}): Promise<{ id: string }> {
+  // 1. DELETE ancien (best-effort)
+  if (input.oldTagId) {
+    try {
+      await airtableFetch(`${API_URL}/${ATLAS_BASE}/${ATLAS_EMAIL_TAGS_TABLE}/${input.oldTagId}`, { method: 'DELETE' });
+    } catch (e) { console.warn('[upsertEmailTag] DELETE old failed:', e); }
+  }
+
+  // 2. CREATE nouveau
+  const fields = {
+    [ETF.EMAIL_ID]: input.emailId,
+    [ETF.CONVERSATION_ID]: input.conversationId,
+    [ETF.SUBJECT]: input.subject,
+    [ETF.FROM_EMAIL]: input.fromEmail,
+    [ETF.CATEGORY]: input.category,
+    [ETF.URGENCY_SCORE]: input.urgencyScore,
+    [ETF.SUMMARY]: input.summary,
+    [ETF.USER_EMAIL]: input.userEmail,
+    [ETF.INBOX_STATUS]: 'inbox',
+    [ETF.ACTIONED_AT]: new Date().toISOString(),
+  };
+  const res = await airtableFetch<{ id: string }>(`${API_URL}/${ATLAS_BASE}/${ATLAS_EMAIL_TAGS_TABLE}`, {
+    method: 'POST',
+    body: JSON.stringify({ fields, returnFieldsByFieldId: true, typecast: true }),
+  });
+  return { id: res.id };
+}
+
 /** Override la catégorie d'un tag (apprentissage). */
 export async function correctTagCategory(tagRecordId: string, newCategory: string): Promise<boolean> {
   if (!tagRecordId || !newCategory) return false;
