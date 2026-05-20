@@ -532,8 +532,9 @@ export class IAPanel {
       //    dossier qu'on suggère, peu importe le projet lié ou non.
       if (senderEmail) {
         try {
-          const token = await getGraphToken();
-          const pattern = await this.findSenderPatternFolder(token, senderEmail);
+          const { getApiContext } = await import('../api/graph');
+          const ctx = await getApiContext();
+          const pattern = await this.findSenderPatternFolder(ctx.token, ctx.base, senderEmail);
           if (pattern) {
             this.folderSuggestion = {
               source: 'sender-pattern',
@@ -606,11 +607,12 @@ export class IAPanel {
    */
   private async findSenderPatternFolder(
     token: string,
+    apiBase: string,
     senderEmail: string,
   ): Promise<{ folderId: string; folderPath: string; count: number } | null> {
-    // Filtre Graph : from = senderEmail. On exclut côté JS les mails encore en Inbox.
+    // Filtre : from = senderEmail. On exclut côté JS les mails encore en Inbox.
     const filter = encodeURIComponent(`from/emailAddress/address eq '${senderEmail.replace(/'/g, "''")}'`);
-    const url = `https://graph.microsoft.com/v1.0/me/messages?$filter=${filter}&$top=30&$select=id,parentFolderId,subject&$orderby=receivedDateTime desc`;
+    const url = `${apiBase}/me/messages?$filter=${filter}&$top=30&$select=id,parentFolderId,subject&$orderby=receivedDateTime desc`;
     const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) return null;
     const data: any = await res.json();
@@ -618,7 +620,7 @@ export class IAPanel {
     if (msgs.length < 3) return null;
 
     // Récupère l'ID du dossier Inbox pour l'exclure
-    const inboxRes = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders/inbox?$select=id', {
+    const inboxRes = await fetch(`${apiBase}/me/mailFolders/inbox?$select=id`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const inboxId = inboxRes.ok ? (await inboxRes.json()).id : '';
@@ -644,7 +646,7 @@ export class IAPanel {
     // Résoudre le path lisible du folder (1 niveau parent suffit pour le contexte)
     let folderPath = bestId.slice(0, 8); // fallback ID si pas de nom
     try {
-      const fres = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${bestId}?$select=displayName,parentFolderId`, {
+      const fres = await fetch(`${apiBase}/me/mailFolders/${bestId}?$select=displayName,parentFolderId`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (fres.ok) {
@@ -652,7 +654,7 @@ export class IAPanel {
         folderPath = f.displayName || folderPath;
         // Tente de récupérer le parent pour afficher "Parent/Folder"
         if (f.parentFolderId && f.parentFolderId !== inboxId) {
-          const pres = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${f.parentFolderId}?$select=displayName`, {
+          const pres = await fetch(`${apiBase}/me/mailFolders/${f.parentFolderId}?$select=displayName`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           if (pres.ok) {

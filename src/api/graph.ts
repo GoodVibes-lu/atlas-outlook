@@ -7,54 +7,117 @@ import type { MailMessageFull, MailAttachment } from '../types';
 
 const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 
-// ── Token Management ──
+// ── Token + API Base Management ──
+//
+// L'addin a 2 sources d'authentification possibles :
+//   A. CALLBACK TOKEN Office.js — toujours dispo, ZÉRO config, mais ne marche
+//      QUE sur l'endpoint Outlook REST (outlook.office.com/api/v2.0). Limité à
+//      la mailbox courante de l'utilisateur. Parfait pour nos besoins :
+//      list folders, scan messages d'un sender, move, create folder.
+//   B. GRAPH TOKEN custom — stocké en localStorage (SSO ou token desktop).
+//      Plus puissant (toute la Graph API) mais nécessite config utilisateur.
+//
+// On essaie d'abord A (gratuit, immédiat). Si échec → fallback B. Le base URL
+// retourné dépend de la source.
+//
+// Outlook REST v2.0 a une shape quasi-identique à Graph v1.0 pour
+// /me/messages et /me/mailFolders, donc nos helpers marchent sur les 2.
 
 let cachedToken: string | null = null;
+let cachedBase: string | null = null;
 let tokenExpiry = 0;
 
-/**
- * Get a valid Graph API token.
- * 1. Try Office.js SSO (getAccessToken)
- * 2. Fallback to stored token from ATLAS desktop app
- */
-export async function getGraphToken(): Promise<string> {
-  // Check cached token
-  if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
+interface ApiContext {
+  token: string;
+  base: string; // ex: "https://graph.microsoft.com/v1.0" ou "https://outlook.office.com/api/v2.0"
+}
 
-  // Try Office.js SSO
+/**
+ * Récupère un token + base URL utilisables pour les appels mailbox.
+ * Préfère le callback token Office.js (gratuit, immédiat).
+ */
+export async function getApiContext(): Promise<ApiContext> {
+  if (cachedToken && cachedBase && Date.now() < tokenExpiry) {
+    return { token: cachedToken, base: cachedBase };
+  }
+
+  // ── A. Callback token Office.js (préféré — toujours dispo) ──
+  try {
+    if (typeof Office !== 'undefined' && Office.context?.mailbox?.getCallbackTokenAsync) {
+      const result = await new Promise<Office.AsyncResult<string>>((resolve) => {
+        try {
+          Office.context.mailbox.getCallbackTokenAsync({ isRest: true }, (res) => resolve(res));
+        } catch {
+          resolve({ status: Office.AsyncResultStatus.Failed, value: '' } as Office.AsyncResult<string>);
+        }
+      });
+      if (result.status === Office.AsyncResultStatus.Succeeded && result.value) {
+        const restUrl = (Office.context.mailbox as any).restUrl || 'https://outlook.office.com/api';
+        const base = `${String(restUrl).replace(/\/$/, '')}/v2.0`;
+        cachedToken = result.value;
+        cachedBase = base;
+        tokenExpiry = Date.now() + 50 * 60 * 1000;
+        return { token: cachedToken, base };
+      }
+    }
+  } catch (err) {
+    console.warn('[Mailbox API] callback token failed:', err);
+  }
+
+  // ── B. SSO Office.auth.getAccessToken (Graph) ──
   try {
     if (typeof Office !== 'undefined' && Office.auth) {
       const ssoToken = await Office.auth.getAccessToken({ allowSignInPrompt: true });
       if (ssoToken) {
         cachedToken = ssoToken;
-        tokenExpiry = Date.now() + 50 * 60 * 1000; // ~50 min
-        return ssoToken;
+        cachedBase = GRAPH_URL;
+        tokenExpiry = Date.now() + 50 * 60 * 1000;
+        return { token: ssoToken, base: GRAPH_URL };
       }
     }
   } catch (err) {
-    console.warn('[Graph] SSO failed, falling back to stored token:', err);
+    console.warn('[Mailbox API] SSO failed:', err);
   }
 
-  // Fallback: token stored in localStorage (from ATLAS desktop or manual entry)
+  // ── C. Token Graph stocké en localStorage ──
   const stored = localStorage.getItem('atlas_addin_graph_token');
   if (stored) {
     cachedToken = stored;
-    tokenExpiry = Date.now() + 30 * 60 * 1000; // assume 30 min validity
-    return stored;
+    cachedBase = GRAPH_URL;
+    tokenExpiry = Date.now() + 30 * 60 * 1000;
+    return { token: stored, base: GRAPH_URL };
   }
 
-  throw new Error('No Graph token available. Please configure in Settings.');
+  throw new Error('Aucun token mailbox disponible (callback Office.js échoué).');
+}
+
+/**
+ * @deprecated Utilise getApiContext() — retourne juste le token pour compat.
+ * Conservé pour code legacy. Le base URL est implicite (Graph si token Graph,
+ * sinon doit utiliser le base retourné par getApiContext).
+ */
+export async function getGraphToken(): Promise<string> {
+  const ctx = await getApiContext();
+  return ctx.token;
+}
+
+/** Retourne le base URL associé au token courant (Graph ou Outlook REST). */
+export async function getApiBase(): Promise<string> {
+  const ctx = await getApiContext();
+  return ctx.base;
 }
 
 // ── Graph API Helpers ──
 
-async function graphFetch<T>(path: string, token: string): Promise<T> {
-  const res = await fetch(`${GRAPH_URL}${path}`, {
+async function graphFetch<T>(path: string, token: string, baseOverride?: string): Promise<T> {
+  // Si on a un token mais pas de base override → résout via getApiBase
+  const base = baseOverride || await getApiBase();
+  const res = await fetch(`${base}${path}`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`Graph API ${res.status}: ${JSON.stringify(err)}`);
+    throw new Error(`Mailbox API ${res.status}: ${JSON.stringify(err).slice(0, 200)}`);
   }
   return res.json();
 }
@@ -189,11 +252,12 @@ export async function resolveFolderPath(token: string, folderPath: string): Prom
 export async function createMailFolder(
   token: string, displayName: string, parentFolderId?: string
 ): Promise<{ id: string; displayName: string }> {
-  const base = parentFolderId
+  const sub = parentFolderId
     ? `/me/mailFolders/${parentFolderId}/childFolders`
     : '/me/mailFolders';
+  const base = await getApiBase();
 
-  const res = await fetch(`${GRAPH_URL}${base}`, {
+  const res = await fetch(`${base}${sub}`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -231,7 +295,8 @@ export async function ensureFolderPath(
 export async function moveMessageToFolder(
   token: string, messageId: string, folderId: string
 ): Promise<void> {
-  const res = await fetch(`${GRAPH_URL}/me/messages/${messageId}/move`, {
+  const base = await getApiBase();
+  const res = await fetch(`${base}/me/messages/${messageId}/move`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -246,7 +311,8 @@ export async function moveMessageToFolder(
 export async function copyMessageToFolder(
   token: string, messageId: string, folderId: string
 ): Promise<void> {
-  const res = await fetch(`${GRAPH_URL}/me/messages/${messageId}/copy`, {
+  const base = await getApiBase();
+  const res = await fetch(`${base}/me/messages/${messageId}/copy`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
