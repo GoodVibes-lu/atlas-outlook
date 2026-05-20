@@ -3,6 +3,8 @@
  */
 
 import { showToast } from '../taskpane';
+import { scanMailboxBuildIndex } from '../api/scan-mailbox';
+import { indexStats, clearIndex } from '../api/sender-folder-index';
 
 export class SettingsPanel {
   private container: HTMLElement;
@@ -73,6 +75,21 @@ export class SettingsPanel {
           Enregistrer
         </button>
 
+        <div style="margin-top:24px;padding:12px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;">
+          <div style="font-weight:700;color:#047857;font-size:13px;margin-bottom:6px;">📚 Index sender → dossier</div>
+          <div id="index-stats" style="font-size:11px;color:#065f46;margin-bottom:8px;">${this.renderIndexStats()}</div>
+          <p style="font-size:11px;color:#047857;line-height:1.4;margin:0 0 8px;">
+            Scan complet de ta boîte mail pour apprendre où tu ranges chaque
+            expéditeur. À faire 1 fois au début (~30 sec à 2 min), puis
+            l'index s'enrichit automatiquement à chaque action.
+          </p>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-primary btn-sm" id="scan-mailbox-btn" style="flex:1;">🔍 Scanner ma boîte</button>
+            <button class="btn btn-secondary btn-sm" id="clear-index-btn">Vider</button>
+          </div>
+          <div id="scan-progress" style="font-size:11px;color:#047857;margin-top:6px;display:none;"></div>
+        </div>
+
         <div style="margin-top:24px;">
           <div class="section-heading">À propos</div>
           <p style="font-size:11px;color:var(--atlas-text-secondary);">
@@ -89,6 +106,39 @@ export class SettingsPanel {
     `;
 
     document.getElementById('save-settings-btn')?.addEventListener('click', () => this.saveSettings());
+
+    document.getElementById('scan-mailbox-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('scan-mailbox-btn') as HTMLButtonElement;
+      const progDiv = document.getElementById('scan-progress');
+      btn.disabled = true;
+      btn.textContent = '⏳ Scan en cours…';
+      if (progDiv) { progDiv.style.display = 'block'; progDiv.textContent = 'Initialisation…'; }
+      try {
+        const r = await scanMailboxBuildIndex((p) => {
+          if (progDiv) {
+            progDiv.textContent = `📁 ${p.foldersScanned}/${p.foldersTotal} dossiers · ${p.mailsIndexed} mails indexés · ${p.currentFolder.slice(0, 30)}`;
+          }
+        });
+        showToast(`✓ Scan terminé : ${r.foldersScanned} dossiers, ${r.mailsIndexed} mails indexés`, 'success');
+        // Refresh stats
+        const stats = document.getElementById('index-stats');
+        if (stats) stats.innerHTML = this.renderIndexStats();
+      } catch (e) {
+        showToast(`Erreur scan : ${(e as Error).message?.slice(0, 100)}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 Re-scanner';
+      }
+    });
+
+    document.getElementById('clear-index-btn')?.addEventListener('click', () => {
+      if (confirm('Vider tout l\'index sender → dossier ?')) {
+        clearIndex();
+        showToast('Index vidé', 'info');
+        const stats = document.getElementById('index-stats');
+        if (stats) stats.innerHTML = this.renderIndexStats();
+      }
+    });
     document.getElementById('clear-cache-btn')?.addEventListener('click', () => {
       // Clear only plugin cache, not settings
       const keysToKeep = ['atlas_addin_airtable_token', 'atlas_addin_anthropic_key', 'atlas_addin_user_name', 'atlas_addin_user_email'];
@@ -128,6 +178,15 @@ export class SettingsPanel {
 
     showToast('Configuration enregistrée ✓', 'success');
     this.onSave();
+  }
+
+  private renderIndexStats(): string {
+    const s = indexStats();
+    if (s.senders === 0 && s.domains === 0) {
+      return '<em>Index vide — lance un scan pour commencer.</em>';
+    }
+    const lastUpdate = s.lastUpdate ? new Date(s.lastUpdate).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : 'jamais';
+    return `<strong>${s.senders}</strong> expéditeurs · <strong>${s.domains}</strong> domaines · <strong>${s.totalMails}</strong> mails<br/>Dernière maj : ${lastUpdate}`;
   }
 
   private escapeAttr(str: string): string {

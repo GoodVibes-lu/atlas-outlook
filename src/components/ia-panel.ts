@@ -27,6 +27,7 @@ import {
   analyzeEmailWithClaude,
   hasAnthropicToken,
 } from '../api/claude';
+import { lookupSenderFolder, recordSenderFolder } from '../api/sender-folder-index';
 import { getMessageForLinking } from '../api/graph';
 import type { Projet } from '../types';
 import {
@@ -98,7 +99,7 @@ interface FolderSuggestion {
    *   - create : aucun match → on propose un nouveau dossier à créer
    *   - none : aucun signal exploitable
    */
-  source: 'mapped' | 'sender-pattern' | 'category-match' | 'match' | 'create' | 'manual-override' | 'none';
+  source: 'index-sender' | 'mapped' | 'sender-pattern' | 'category-match' | 'match' | 'create' | 'manual-override' | 'none';
   /** ID Outlook si dossier existant. */
   folderId?: string;
   /** Chemin lisible (ex: "Markcom/Creativity Camp"). */
@@ -540,6 +541,17 @@ export class IAPanel {
     `;
     const picker = this.folderPickerOpen ? this.renderFolderPicker() : '';
 
+    if (s.source === 'index-sender') {
+      return `
+        <div style="padding: 10px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px; color: #047857;">
+          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Tu ranges déjà ces mails ici ✓</div>
+          <div style="font-size: 13px; font-weight: 600; color: #065f46;">${escapeHtml(s.folderPath)}</div>
+          <div style="font-size: 11px; margin-top: 4px;">Index local : ${s.patternMailCount} mail${(s.patternMailCount || 0) > 1 ? 's' : ''} de cet expéditeur déjà rangés ici. ATLAS suit ton habitude.</div>
+          ${changeBtn}
+        </div>
+        ${picker}
+      `;
+    }
     if (s.source === 'mapped') {
       return `
         <div style="padding: 10px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px; color: #047857;">
@@ -656,6 +668,24 @@ export class IAPanel {
     const senderEmail = (Office.context.mailbox?.item as any)?.from?.emailAddress || '';
 
     try {
+      // ── Stratégie 0 : Index local sender → dossier ──
+      //   Source de vérité primaire. Construit une fois par le scan initial
+      //   (bouton "Scanner ma boîte" en Settings) et enrichi à chaque action.
+      //   Lookup O(1) — pas d'appel API à chaque ouverture de mail.
+      if (senderEmail) {
+        const hit = lookupSenderFolder(senderEmail);
+        if (hit && hit.count >= 2) {
+          this.folderSuggestion = {
+            source: 'index-sender',
+            folderId: hit.folderId,
+            folderPath: hit.folderPath,
+            projetId: tag?.linkedProjetId,
+            patternMailCount: hit.count,
+          };
+          return;
+        }
+      }
+
       // ── Stratégie 1 : Folder mapping appris (Airtable) pour le projet lié ──
       if (tag?.linkedProjetId && userEmail) {
         const mapping = await getFolderMapping(userEmail, 'projet', tag.linkedProjetId);
@@ -1007,6 +1037,15 @@ export class IAPanel {
 
       // Move
       await moveMessageToFolder(token, restId, folderId);
+
+      // Apprentissage local : enrichit l'index sender → dossier IMMÉDIATEMENT.
+      // Lookup O(1) à la prochaine ouverture d'un mail du même sender.
+      const senderEmail = (item as any)?.from?.emailAddress || '';
+      if (senderEmail) {
+        // +2 si manual-override (signal fort de Charles), +1 sinon
+        const weight = suggestion.source === 'manual-override' ? 2 : 1;
+        recordSenderFolder(senderEmail, folderId, suggestion.folderPath, weight);
+      }
 
       // Apprentissage : sauvegarde le mapping si c'était un match, une création
       // ou un manual-override (Charles a corrigé). Sur 'mapped' on ne sauve pas
