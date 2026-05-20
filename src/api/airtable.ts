@@ -750,6 +750,18 @@ export interface EmailTag {
   inboxStatus: 'inbox' | 'done' | 'snoozed' | 'archived';
 }
 
+function parseTagRecord(r: any): EmailTag {
+  const f = r.fields || {};
+  return {
+    id: r.id,
+    emailId: f[ETF.EMAIL_ID] || '',
+    category: selectName(f[ETF.CATEGORY]) || 'autre',
+    urgencyScore: Number(f[ETF.URGENCY_SCORE]) || 2,
+    summary: f[ETF.SUMMARY] || '',
+    inboxStatus: (f[ETF.INBOX_STATUS] || 'inbox') as EmailTag['inboxStatus'],
+  };
+}
+
 /** Récupère le tag IA pour un email (par EmailId Outlook). Null si pas encore taggé. */
 export async function getEmailTagByEmailId(emailId: string): Promise<EmailTag | null> {
   if (!emailId) return null;
@@ -758,16 +770,26 @@ export async function getEmailTagByEmailId(emailId: string): Promise<EmailTag | 
   try {
     const data = await airtableFetch<{ records: any[] }>(url);
     if (!data.records?.length) return null;
-    const r = data.records[0];
-    const f = r.fields || {};
-    return {
-      id: r.id,
-      emailId: f[ETF.EMAIL_ID] || '',
-      category: selectName(f[ETF.CATEGORY]) || 'autre',
-      urgencyScore: Number(f[ETF.URGENCY_SCORE]) || 2,
-      summary: f[ETF.SUMMARY] || '',
-      inboxStatus: (f[ETF.INBOX_STATUS] || 'inbox') as EmailTag['inboxStatus'],
-    };
+    return parseTagRecord(data.records[0]);
+  } catch { return null; }
+}
+
+/**
+ * Récupère le tag IA pour la conversation entière (fallback quand l'EmailId
+ * ne match pas — typiquement à cause des différences EWS / Graph REST ID
+ * entre l'addin Outlook et le scanner backend).
+ *
+ * Le conversationId est stable cross-client (Office.js, Graph, EWS), donc on
+ * peut s'appuyer dessus pour retrouver le tag du dernier message de la conv.
+ */
+export async function getEmailTagByConversationId(conversationId: string): Promise<EmailTag | null> {
+  if (!conversationId) return null;
+  const formula = encodeURIComponent(`{${ETF.CONVERSATION_ID}} = "${conversationId.replace(/"/g, '\\"')}"`);
+  const url = `${API_URL}/${ATLAS_BASE}/${ATLAS_EMAIL_TAGS_TABLE}?returnFieldsByFieldId=true&filterByFormula=${formula}&pageSize=10`;
+  try {
+    const data = await airtableFetch<{ records: any[] }>(url);
+    if (!data.records?.length) return null;
+    return parseTagRecord(data.records[0]);
   } catch { return null; }
 }
 

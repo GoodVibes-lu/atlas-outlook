@@ -12,6 +12,7 @@
 import { showToast } from '../taskpane';
 import {
   getEmailTagByEmailId,
+  getEmailTagByConversationId,
   markTagDone,
   snoozeTag,
   archiveTag,
@@ -99,17 +100,20 @@ export class IAPanel {
   }
 
   /**
-   * Essaie de récupérer le tag pour ce message. Plusieurs IDs sont possibles :
-   *   - EWS ID (format brut Outlook côté Office.js)
-   *   - REST ID (format Graph, plus court, base64url)
-   * L'inbound scanner stocke généralement le REST ID. On tente le mapping si besoin.
+   * Essaie de récupérer le tag pour ce message via plusieurs stratégies :
+   *   1. EWS itemId direct
+   *   2. EWS → REST conversion (Graph format)
+   *   3. **Fallback conversationId** — le scanner backend stocke le Graph REST
+   *      ID dans `EmailId`, qui peut ne pas matcher l'EWS ID de l'addin selon
+   *      le client (Outlook web vs desktop). Mais le `conversationId` est
+   *      stable cross-client : on lookup le tag du thread.
    */
   private async tryFetchTag(rawId: string): Promise<EmailTag | null> {
     if (!rawId) return null;
-    // Tente directement (cas où l'ID est déjà au format REST)
+    // 1. Direct (cas où l'ID est déjà au format REST)
     let tag = await getEmailTagByEmailId(rawId);
     if (tag) return tag;
-    // Sinon, convertit EWS → REST via Office.js helper
+    // 2. EWS → REST conversion
     try {
       const restId = Office.context.mailbox?.convertToRestId?.(
         rawId,
@@ -118,6 +122,16 @@ export class IAPanel {
       );
       if (restId && restId !== rawId) {
         tag = await getEmailTagByEmailId(restId);
+        if (tag) return tag;
+      }
+    } catch { /* ignore */ }
+    // 3. Fallback conversationId — le plus fiable cross-client (Outlook web,
+    //    desktop, mobile). Le scanner stocke le conversationId pour CHAQUE mail,
+    //    donc on retombe sur le tag du même thread (catégorie identique 99% du temps).
+    try {
+      const convId = (Office.context.mailbox?.item as any)?.conversationId;
+      if (convId) {
+        tag = await getEmailTagByConversationId(convId);
         if (tag) return tag;
       }
     } catch { /* ignore */ }
