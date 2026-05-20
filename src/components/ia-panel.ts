@@ -61,6 +61,28 @@ const CATEGORY_LABELS: Record<string, string> = {
   fournisseur: '🚚 Fournisseur',
 };
 
+/**
+ * Mapping catégorie IA → mots-clés qu'on cherche dans les noms de dossiers
+ * Outlook pour suggérer un dossier de classement quand on n'a aucun autre signal.
+ * Le matching est case-insensitive et substring (cf. findFolderForCategory).
+ */
+const CATEGORY_FOLDER_ALIASES: Record<string, string[]> = {
+  demande_devis: ['devis', 'demande', 'offre'],
+  validation_client: ['client', 'validation'],
+  refus_client: ['refus', 'client'],
+  question_staff: ['staff', 'équipe', 'equipe', 'interne'],
+  facture_fournisseur: ['facture', 'comptabilité', 'compta', 'fournisseur'],
+  prospection_entrante: ['prospect', 'prospection', 'lead'],
+  rdv_planning: ['rdv', 'rendez', 'planning', 'agenda'],
+  newsletter: ['newsletter', 'newsletters', 'news'],
+  notification_systeme: ['notification', 'système', 'systeme', 'auto'],
+  spam: ['spam', 'junk', 'courrier indésirable'],
+  autre: [],
+  federation_association: ['fédération', 'federation', 'fédérations', 'federations', 'association', 'associations'],
+  demande_interne_staff: ['interne', 'staff', 'équipe', 'equipe'],
+  fournisseur: ['fournisseur', 'fournisseurs', 'suppliers'],
+};
+
 const URGENCY_COLORS: Record<number, string> = {
   1: '#94a3b8', 2: '#60a5fa', 3: '#f59e0b', 4: '#ef4444', 5: '#dc2626',
 };
@@ -76,7 +98,7 @@ interface FolderSuggestion {
    *   - create : aucun match → on propose un nouveau dossier à créer
    *   - none : aucun signal exploitable
    */
-  source: 'mapped' | 'sender-pattern' | 'match' | 'create' | 'none';
+  source: 'mapped' | 'sender-pattern' | 'category-match' | 'match' | 'create' | 'none';
   /** ID Outlook si dossier existant. */
   folderId?: string;
   /** Chemin lisible (ex: "Markcom/Creativity Camp"). */
@@ -478,6 +500,15 @@ export class IAPanel {
         </div>
       `;
     }
+    if (s.source === 'category-match') {
+      return `
+        <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px;">
+          <div style="font-size: 10px; font-weight: 700; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier suggéré (par catégorie IA)</div>
+          <div style="font-size: 13px; font-weight: 600; color: #1e3a8a;">${escapeHtml(s.folderPath)}</div>
+          <div style="font-size: 11px; color: #1d4ed8; margin-top: 4px;">Match basé sur la catégorie. Au clic Traité/Archiver, ATLAS y range le mail.</div>
+        </div>
+      `;
+    }
     if (s.source === 'match') {
       return `
         <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px;">
@@ -547,6 +578,31 @@ export class IAPanel {
           }
         } catch (e) {
           console.warn('[IAPanel] sender-pattern lookup failed:', e);
+        }
+      }
+
+      // ── Stratégie 2.5 : Category-match — pas de pattern, pas de projet lié,
+      //    mais l'IA a classé en (ex) "Fédération / Association" et l'utilisateur
+      //    a un dossier "Fédérations" quelque part dans Outlook ? Suggère-le.
+      //    Évite que des mails non-projet (newsletters, fédérations, fournisseurs)
+      //    restent éternellement en Inbox faute de signal.
+      if (tag?.category) {
+        try {
+          const { getApiContext } = await import('../api/graph');
+          const ctx = await getApiContext();
+          const all = await this.scanAllFoldersRecursive(ctx.token);
+          const catMatch = this.findFolderForCategory(all, tag.category);
+          if (catMatch) {
+            this.folderSuggestion = {
+              source: 'category-match',
+              folderId: catMatch.id,
+              folderPath: catMatch.path,
+              projetId: tag.linkedProjetId,
+            };
+            return;
+          }
+        } catch (e) {
+          console.warn('[IAPanel] category-match lookup failed:', e);
         }
       }
 
@@ -690,6 +746,37 @@ export class IAPanel {
       } catch { /* skip */ }
     }
     return out;
+  }
+
+  /**
+   * Cherche un dossier Outlook dont le nom match les alias de la catégorie IA.
+   * Ex: catégorie "federation_association" → cherche un dossier nommé
+   * "Fédérations", "Federation", "Associations" etc.
+   * Scoring : alias plus long = match plus précis. Min 4 chars pour éviter
+   * les faux positifs sur des alias courts comme "news".
+   */
+  private findFolderForCategory(
+    folders: Array<{ id: string; path: string }>,
+    category: string,
+  ): { id: string; path: string } | null {
+    const aliases = (CATEGORY_FOLDER_ALIASES[category] || []).filter((a) => a.length >= 4);
+    if (aliases.length === 0) return null;
+
+    let best: { id: string; path: string; score: number } | null = null;
+    for (const f of folders) {
+      const p = f.path.toLowerCase();
+      const leaf = (p.split('/').pop() || '').toLowerCase();
+      for (const alias of aliases) {
+        const a = alias.toLowerCase();
+        let s = 0;
+        if (leaf === a) s = 100;                  // match exact sur le nom du dossier
+        else if (leaf.includes(a)) s = 60;        // substring sur le nom du dossier
+        else if (p.includes(a)) s = 30;           // substring quelque part dans le path
+        if (s > (best?.score || 0)) best = { id: f.id, path: f.path, score: s };
+      }
+    }
+    if (!best || best.score < 30) return null;
+    return { id: best.id, path: best.path };
   }
 
   /**
