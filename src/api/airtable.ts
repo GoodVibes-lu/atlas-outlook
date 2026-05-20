@@ -727,18 +727,19 @@ export async function countLinkedEmails(projetRecordId: string): Promise<number>
 
 const ATLAS_EMAIL_TAGS_TABLE = 'tblZsl8roAPbydyYH';
 const ETF = {
-  EMAIL_ID:        'fldmsOwKA0G13CYtQ',
-  CONVERSATION_ID: 'fld4iM2eL4ZYJzvIN',
-  SUBJECT:         'fldmq2A4YvXaXJmyY',
-  FROM_EMAIL:      'fld1dgBaT6m5RzwDI',
-  CATEGORY:        'fldbX9OLwThezZHvT',
-  URGENCY_SCORE:   'fldWmGpEMlwDUnwsE',
-  SUMMARY:         'fldcXdX0YEbJqRDjQ',
-  INBOX_STATUS:    'fldfYly6qkcNVyCht',
-  SNOOZED_UNTIL:   'fldtJPsIRxbcKLx9f',
-  ACTIONED_AT:     'fldb3sfQUmy2BngIw',
-  ARCHIVED:        'fldHcDBghYdZl8FUE',
-  USER_EMAIL:      'fldlMxGx7ovezklHH',
+  EMAIL_ID:         'fldmsOwKA0G13CYtQ',
+  CONVERSATION_ID:  'fld4iM2eL4ZYJzvIN',
+  SUBJECT:          'fldmq2A4YvXaXJmyY',
+  FROM_EMAIL:       'fld1dgBaT6m5RzwDI',
+  CATEGORY:         'fldbX9OLwThezZHvT',
+  URGENCY_SCORE:    'fldWmGpEMlwDUnwsE',
+  SUMMARY:          'fldcXdX0YEbJqRDjQ',
+  INBOX_STATUS:     'fldfYly6qkcNVyCht',
+  SNOOZED_UNTIL:    'fldtJPsIRxbcKLx9f',
+  ACTIONED_AT:      'fldb3sfQUmy2BngIw',
+  ARCHIVED:         'fldHcDBghYdZl8FUE',
+  USER_EMAIL:       'fldlMxGx7ovezklHH',
+  LINKED_PROJET_ID: 'flddfFthABUkASkao',
 } as const;
 
 export interface EmailTag {
@@ -748,6 +749,7 @@ export interface EmailTag {
   urgencyScore: number;    // 1-5
   summary: string;
   inboxStatus: 'inbox' | 'done' | 'snoozed' | 'archived';
+  linkedProjetId?: string; // Projet auquel le mail est rattaché (pour folder mapping)
 }
 
 function parseTagRecord(r: any): EmailTag {
@@ -759,6 +761,7 @@ function parseTagRecord(r: any): EmailTag {
     urgencyScore: Number(f[ETF.URGENCY_SCORE]) || 2,
     summary: f[ETF.SUMMARY] || '',
     inboxStatus: (f[ETF.INBOX_STATUS] || 'inbox') as EmailTag['inboxStatus'],
+    linkedProjetId: f[ETF.LINKED_PROJET_ID] || undefined,
   };
 }
 

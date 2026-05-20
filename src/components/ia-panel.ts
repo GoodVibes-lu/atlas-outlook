@@ -13,12 +13,14 @@ import { showToast } from '../taskpane';
 import {
   getEmailTagByEmailId,
   getEmailTagByConversationId,
+  getFolderMapping,
   markTagDone,
   snoozeTag,
   archiveTag,
   correctTagCategory,
   type EmailTag,
 } from '../api/airtable';
+import { getGraphToken, moveMessageToFolder, convertToRestId } from '../api/graph';
 
 const CATEGORIES = [
   'demande_devis', 'validation_client', 'refus_client', 'question_staff',
@@ -224,7 +226,11 @@ export class IAPanel {
       switch (action) {
         case 'done':
           ok = await markTagDone(this.tag.id);
-          if (ok) { this.tag.inboxStatus = 'done'; showToast('Marqué comme traité ✓', 'success'); }
+          if (ok) {
+            this.tag.inboxStatus = 'done';
+            const moved = await this.tryMoveToHabitualFolder('done');
+            showToast(moved ? `Traité ✓ + déplacé dans ${moved} 📁` : 'Marqué comme traité ✓', 'success');
+          }
           break;
         case 'snooze':
           ok = await snoozeTag(this.tag.id);
@@ -232,7 +238,14 @@ export class IAPanel {
           break;
         case 'archive':
           ok = await archiveTag(this.tag.id);
-          if (ok) { this.tag.inboxStatus = 'archived'; showToast('Archivé 📦', 'success'); }
+          if (ok) {
+            this.tag.inboxStatus = 'archived';
+            // Pour Archive : on tente de déplacer dans le dossier habituel (projet
+            // lié → folder mapping). Si pas de mapping → laisse le mail en inbox
+            // (l'utilisateur peut toujours le déplacer manuellement).
+            const moved = await this.tryMoveToHabitualFolder('archive');
+            showToast(moved ? `Archivé + déplacé dans ${moved} 📁` : 'Archivé 📦 (aucun dossier habituel — déplace manuellement si besoin)', 'success');
+          }
           break;
         case 'correct': {
           const sel = this.root.querySelector<HTMLSelectElement>('#ia-cat-select');
@@ -254,6 +267,36 @@ export class IAPanel {
       showToast('Erreur', 'error');
     } finally {
       buttons.forEach(b => b.disabled = false);
+    }
+  }
+
+  /**
+   * Déplace le mail courant dans le dossier habituel appris pour le projet lié.
+   * Retourne le nom du dossier si déplacement effectué, '' sinon.
+   *
+   * Gating : ne touche QUE si on a (a) un projet lié au tag, (b) un folder
+   * mapping appris pour ce user+projet. Sinon ne déplace rien — le mail reste
+   * en inbox Outlook et c'est OK (l'utilisateur peut filer manuellement).
+   */
+  private async tryMoveToHabitualFolder(_actionName: string): Promise<string> {
+    try {
+      const tag = this.tag;
+      if (!tag?.linkedProjetId) return '';
+      const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
+      if (!userEmail) return '';
+      const mapping = await getFolderMapping(userEmail, 'projet', tag.linkedProjetId);
+      if (!mapping?.folderId) return '';
+      const item = Office.context.mailbox?.item;
+      const rawId = (item as any)?.itemId;
+      if (!rawId) return '';
+      // Outlook côté addin renvoie un EWS itemId — Graph veut un REST ID.
+      const restId = convertToRestId(rawId);
+      const token = await getGraphToken();
+      await moveMessageToFolder(token, restId, mapping.folderId);
+      return mapping.folderPath || mapping.folderId.slice(0, 8);
+    } catch (e) {
+      console.warn('[IAPanel] tryMoveToHabitualFolder failed:', e);
+      return '';
     }
   }
 }
