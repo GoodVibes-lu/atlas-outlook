@@ -5,6 +5,7 @@
 import { showToast } from '../taskpane';
 import { scanMailboxBuildIndex } from '../api/scan-mailbox';
 import { indexStats, clearIndex } from '../api/sender-folder-index';
+import { createAtlasCategoriesVerbose } from '../api/graph';
 
 export class SettingsPanel {
   private container: HTMLElement;
@@ -75,6 +76,17 @@ export class SettingsPanel {
           Enregistrer
         </button>
 
+        <div style="margin-top:24px;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">
+          <div style="font-weight:700;color:#9a3412;font-size:13px;margin-bottom:6px;">🏷️ Catégories Outlook ATLAS</div>
+          <p style="font-size:11px;color:#9a3412;line-height:1.4;margin:0 0 8px;">
+            Crée dans Outlook les 20 catégories colorées (14 IA + 6 états) pour
+            que les tags soient visibles dans ta liste inbox. À faire 1 fois.
+            Si ça échoue : ton token Graph manque la permission MailboxSettings.ReadWrite.
+          </p>
+          <button class="btn btn-primary btn-sm" id="create-cats-btn">🏷️ Créer les catégories ATLAS</button>
+          <div id="cats-result" style="font-size:11px;color:#9a3412;margin-top:8px;line-height:1.4;font-family:monospace;"></div>
+        </div>
+
         <div style="margin-top:24px;padding:12px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;">
           <div style="font-weight:700;color:#047857;font-size:13px;margin-bottom:6px;">📚 Index sender → dossier</div>
           <div id="index-stats" style="font-size:11px;color:#065f46;margin-bottom:8px;">${this.renderIndexStats()}</div>
@@ -106,6 +118,36 @@ export class SettingsPanel {
     `;
 
     document.getElementById('save-settings-btn')?.addEventListener('click', () => this.saveSettings());
+
+    document.getElementById('create-cats-btn')?.addEventListener('click', async () => {
+      const btn = document.getElementById('create-cats-btn') as HTMLButtonElement;
+      const out = document.getElementById('cats-result');
+      btn.disabled = true;
+      btn.textContent = '⏳ Création en cours…';
+      if (out) out.innerHTML = '';
+      try {
+        const r = await createAtlasCategoriesVerbose();
+        const lines: string[] = [];
+        lines.push(`✓ Créées : ${r.created}`);
+        lines.push(`= Déjà présentes : ${r.existed}`);
+        if (r.failed > 0) lines.push(`✗ Échecs : ${r.failed}`);
+        if (r.errors.length > 0) {
+          lines.push('');
+          lines.push('Erreurs (top 3) :');
+          for (const e of r.errors.slice(0, 3)) lines.push(`  • ${e}`);
+        }
+        if (out) out.innerText = lines.join('\n');
+        if (r.created > 0) showToast(`✓ ${r.created} catégories créées dans Outlook`, 'success');
+        else if (r.existed > 0 && r.failed === 0) showToast('Toutes les catégories existent déjà ✓', 'info');
+        else showToast(`Création échouée (${r.failed} fails) — voir détails`, 'error');
+      } catch (e) {
+        if (out) out.innerText = `Erreur : ${(e as Error).message}`;
+        showToast(`Erreur : ${(e as Error).message?.slice(0, 80)}`, 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄 Re-créer les catégories ATLAS';
+      }
+    });
 
     document.getElementById('scan-mailbox-btn')?.addEventListener('click', async () => {
       const btn = document.getElementById('scan-mailbox-btn') as HTMLButtonElement;

@@ -364,35 +364,72 @@ const ALL_ATLAS_NAMES = [
 let _categoriesEnsured = false;
 async function ensureAtlasCategories(token: string, base: string): Promise<void> {
   if (_categoriesEnsured) return;
-  try {
-    // Endpoint masterCategories : disponible sur Graph et Outlook REST v2.0
-    const url = `${base}/me/outlook/masterCategories`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) {
-      console.warn('[Categories] list failed:', res.status);
-      _categoriesEnsured = true; // évite re-tentatives en boucle
-      return;
-    }
-    const data: any = await res.json();
-    const existing = new Set((data.value || []).map((c: any) => c.displayName || c.DisplayName));
-    const allDefs = [...Object.values(ATLAS_CATEGORIES), ...Object.values(ATLAS_IA_CATEGORIES)];
-    for (const def of allDefs) {
-      if (existing.has(def.name)) continue;
-      try {
-        await fetch(url, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ displayName: def.name, color: def.color }),
-        });
-      } catch (e) {
-        console.warn('[Categories] create failed for', def.name, e);
-      }
-    }
-    _categoriesEnsured = true;
-  } catch (e) {
-    console.warn('[Categories] ensureAtlas failed:', e);
+  const result = await createAtlasCategoriesVerbose(token, base);
+  if (result.created > 0 || result.existed > 0) {
     _categoriesEnsured = true;
   }
+  // Si tout a échoué, on laisse _categoriesEnsured=false pour retry au prochain appel
+}
+
+/**
+ * Force la création de toutes les catégories ATLAS dans la mailbox.
+ * Retourne un rapport détaillé (créées / existantes / échouées + raisons)
+ * pour affichage UI. Appelé par le bouton "Créer les catégories ATLAS"
+ * dans Settings.
+ */
+export async function createAtlasCategoriesVerbose(
+  token?: string, base?: string,
+): Promise<{ created: number; existed: number; failed: number; errors: string[] }> {
+  if (!token || !base) {
+    const ctx = await getApiContext();
+    token = ctx.token;
+    base = ctx.base;
+  }
+  const errors: string[] = [];
+  let created = 0, existed = 0, failed = 0;
+
+  // 1. Liste les catégories existantes
+  const url = `${base}/me/outlook/masterCategories`;
+  let existing: Set<string>;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      const err = `LIST HTTP ${res.status} : ${body.slice(0, 200)}`;
+      errors.push(err);
+      return { created, existed, failed: 99, errors };
+    }
+    const data: any = await res.json();
+    existing = new Set((data.value || []).map((c: any) => c.displayName || c.DisplayName));
+  } catch (e) {
+    errors.push(`LIST exception: ${(e as Error).message?.slice(0, 100)}`);
+    return { created, existed, failed: 99, errors };
+  }
+
+  // 2. POST chaque catégorie manquante
+  const allDefs = [...Object.values(ATLAS_CATEGORIES), ...Object.values(ATLAS_IA_CATEGORIES)];
+  for (const def of allDefs) {
+    if (existing.has(def.name)) { existed++; continue; }
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName: def.name, color: def.color }),
+      });
+      if (r.ok) {
+        created++;
+      } else {
+        failed++;
+        const body = await r.text().catch(() => '');
+        errors.push(`"${def.name}" HTTP ${r.status} : ${body.slice(0, 150)}`);
+      }
+    } catch (e) {
+      failed++;
+      errors.push(`"${def.name}" exception: ${(e as Error).message?.slice(0, 100)}`);
+    }
+  }
+
+  return { created, existed, failed, errors };
 }
 
 /**
