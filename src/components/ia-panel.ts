@@ -98,7 +98,7 @@ interface FolderSuggestion {
    *   - create : aucun match → on propose un nouveau dossier à créer
    *   - none : aucun signal exploitable
    */
-  source: 'mapped' | 'sender-pattern' | 'category-match' | 'match' | 'create' | 'none';
+  source: 'mapped' | 'sender-pattern' | 'category-match' | 'match' | 'create' | 'manual-override' | 'none';
   /** ID Outlook si dossier existant. */
   folderId?: string;
   /** Chemin lisible (ex: "Markcom/Creativity Camp"). */
@@ -117,6 +117,9 @@ export class IAPanel {
   private emailId = '';
   private linkedProjet: Projet | null = null;
   private folderSuggestion: FolderSuggestion | null = null;
+  // Picker manuel : état + cache de tous les dossiers Outlook (chargé lazy)
+  private folderPickerOpen = false;
+  private allFoldersCache: Array<{ id: string; path: string }> | null = null;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -311,6 +314,40 @@ export class IAPanel {
   }
 
   private async onAction(action: string): Promise<void> {
+    // Picker dossier : ne nécessite pas de tag (peut être déclenché avant que
+    // la classification soit faite, juste pour préparer le mapping).
+    if (action === 'change-folder') {
+      this.folderPickerOpen = true;
+      // Charge la liste des dossiers en background
+      this.loadAllFolders().then(() => this.render()).catch(() => this.render());
+      this.render();
+      return;
+    }
+    if (action === 'cancel-folder') {
+      this.folderPickerOpen = false;
+      this.render();
+      return;
+    }
+    if (action === 'confirm-folder') {
+      const sel = this.root.querySelector<HTMLSelectElement>('#folder-picker-select');
+      const folderId = sel?.value || '';
+      const folderPath = sel?.selectedOptions[0]?.getAttribute('data-path') || '';
+      if (!folderId || !folderPath) {
+        showToast('Sélectionne un dossier', 'error');
+        return;
+      }
+      this.folderSuggestion = {
+        source: 'manual-override',
+        folderId,
+        folderPath,
+        projetId: this.tag?.linkedProjetId,
+      };
+      this.folderPickerOpen = false;
+      showToast(`Dossier choisi : ${folderPath}. Clic Traité ou Archiver pour confirmer.`, 'info');
+      this.render();
+      return;
+    }
+
     if (!this.tag) return;
     const buttons = this.root.querySelectorAll<HTMLButtonElement>('button');
     buttons.forEach(b => b.disabled = true);
@@ -492,48 +529,114 @@ export class IAPanel {
         </div>
       `;
     }
+    // Construit la suggestion + bouton "Changer" (chip discret en haut-droite).
+    // Le bouton ouvre un dropdown <select> avec tous les dossiers Outlook.
+    const changeBtn = `
+      <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
+        <button data-action="change-folder" style="background: rgba(255,255,255,0.6); border: 1px solid currentColor; padding: 3px 8px; border-radius: 4px; font-size: 10px; cursor: pointer; opacity: 0.7; color: inherit;">
+          📂 Changer
+        </button>
+      </div>
+    `;
+    const picker = this.folderPickerOpen ? this.renderFolderPicker() : '';
+
     if (s.source === 'mapped') {
       return `
-        <div style="padding: 10px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px;">
-          <div style="font-size: 10px; font-weight: 700; color: #047857; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier habituel (appris)</div>
+        <div style="padding: 10px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px; color: #047857;">
+          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier habituel (appris)</div>
           <div style="font-size: 13px; font-weight: 600; color: #065f46;">${escapeHtml(s.folderPath)} ✓</div>
-          <div style="font-size: 11px; color: #047857; margin-top: 2px;">Sera utilisé automatiquement au clic sur Traité ou Archiver.</div>
+          <div style="font-size: 11px; margin-top: 2px;">Sera utilisé automatiquement au clic sur Traité ou Archiver.</div>
+          ${changeBtn}
         </div>
+        ${picker}
+      `;
+    }
+    if (s.source === 'manual-override') {
+      return `
+        <div style="padding: 10px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; color: #92400e;">
+          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier choisi (à apprendre)</div>
+          <div style="font-size: 13px; font-weight: 600; color: #78350f;">${escapeHtml(s.folderPath)}</div>
+          <div style="font-size: 11px; margin-top: 4px;">Au clic Traité/Archiver, le mail file ici et ATLAS retient ton choix pour la prochaine fois.</div>
+          ${changeBtn}
+        </div>
+        ${picker}
       `;
     }
     if (s.source === 'sender-pattern') {
       return `
-        <div style="padding: 10px; background: #f5f3ff; border: 1px solid #c4b5fd; border-radius: 6px;">
-          <div style="font-size: 10px; font-weight: 700; color: #6d28d9; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Tu ranges déjà ces mails ici</div>
+        <div style="padding: 10px; background: #f5f3ff; border: 1px solid #c4b5fd; border-radius: 6px; color: #6d28d9;">
+          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Tu ranges déjà ces mails ici</div>
           <div style="font-size: 13px; font-weight: 600; color: #5b21b6;">${escapeHtml(s.folderPath)}</div>
-          <div style="font-size: 11px; color: #6d28d9; margin-top: 4px;">Observé : ${s.patternMailCount} mail${(s.patternMailCount || 0) > 1 ? 's' : ''} de cet expéditeur déjà dans ce dossier. ATLAS suit ton habitude — au clic Traité/Archiver, il s'en souvient pour de bon.</div>
+          <div style="font-size: 11px; margin-top: 4px;">Observé : ${s.patternMailCount} mail${(s.patternMailCount || 0) > 1 ? 's' : ''} de cet expéditeur déjà dans ce dossier.</div>
+          ${changeBtn}
         </div>
+        ${picker}
       `;
     }
     if (s.source === 'category-match') {
       return `
-        <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px;">
-          <div style="font-size: 10px; font-weight: 700; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier suggéré (par catégorie IA)</div>
+        <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px; color: #1d4ed8;">
+          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier suggéré (par catégorie IA)</div>
           <div style="font-size: 13px; font-weight: 600; color: #1e3a8a;">${escapeHtml(s.folderPath)}</div>
-          <div style="font-size: 11px; color: #1d4ed8; margin-top: 4px;">Match basé sur la catégorie. Au clic Traité/Archiver, ATLAS y range le mail.</div>
+          <div style="font-size: 11px; margin-top: 4px;">Match basé sur la catégorie. Si c'est pas le bon dossier, change-le ↓</div>
+          ${changeBtn}
         </div>
+        ${picker}
       `;
     }
     if (s.source === 'match') {
       return `
-        <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px;">
-          <div style="font-size: 10px; font-weight: 700; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier suggéré (match par nom)</div>
+        <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px; color: #1d4ed8;">
+          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier suggéré (match par nom)</div>
           <div style="font-size: 13px; font-weight: 600; color: #1e3a8a;">${escapeHtml(s.folderPath)}</div>
-          <div style="font-size: 11px; color: #1d4ed8; margin-top: 4px;">Si tu cliques Traité ou Archiver, le mail ira là et ATLAS s'en souviendra pour les prochains mails de ce projet.</div>
+          <div style="font-size: 11px; margin-top: 4px;">ATLAS y range le mail au clic Traité/Archiver et s'en souviendra.</div>
+          ${changeBtn}
         </div>
+        ${picker}
       `;
     }
     // source === 'create'
     return `
-      <div style="padding: 10px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px;">
-        <div style="font-size: 10px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Nouveau dossier suggéré</div>
+      <div style="padding: 10px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; color: #92400e;">
+        <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Nouveau dossier suggéré</div>
         <div style="font-size: 13px; font-weight: 600; color: #78350f;">${escapeHtml(s.folderPath)}</div>
-        <div style="font-size: 11px; color: #92400e; margin-top: 4px;">Aucun dossier Outlook existant ne match. Au clic sur Traité ou Archiver, ATLAS le crée et mémorise la règle.</div>
+        <div style="font-size: 11px; margin-top: 4px;">Aucun dossier Outlook existant ne match. Au clic Traité/Archiver, ATLAS le crée.</div>
+        ${changeBtn}
+      </div>
+      ${picker}
+    `;
+  }
+
+  /**
+   * Dropdown <select> avec tous les dossiers Outlook. Apparaît au clic sur
+   * "Changer". Sélection → tap Confirmer → la suggestion devient
+   * 'manual-override' avec ce dossier.
+   */
+  private renderFolderPicker(): string {
+    const folders = this.allFoldersCache || [];
+    if (folders.length === 0) {
+      return `
+        <div style="padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; margin-top: 6px;">
+          <div style="font-size: 11px; color: #64748b;">⏳ Chargement de la liste de dossiers…</div>
+        </div>
+      `;
+    }
+    const opts = folders
+      .slice()
+      .sort((a, b) => a.path.localeCompare(b.path, 'fr'))
+      .map((f) => `<option value="${escapeHtml(f.id)}" data-path="${escapeHtml(f.path)}">${escapeHtml(f.path)}</option>`)
+      .join('');
+    return `
+      <div style="padding: 10px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 6px;">
+        <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">📂 Choisir un dossier</div>
+        <select id="folder-picker-select" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-bottom: 6px;">
+          <option value="">— Sélectionner —</option>
+          ${opts}
+        </select>
+        <div style="display: flex; gap: 6px;">
+          <button data-action="confirm-folder" style="flex: 1; padding: 6px; background: #4f46e5; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer;">Confirmer</button>
+          <button data-action="cancel-folder" style="padding: 6px 10px; background: #e2e8f0; color: #334155; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">Annuler</button>
+        </div>
       </div>
     `;
   }
@@ -886,8 +989,7 @@ export class IAPanel {
   private async tryMoveToHabitualFolder(_actionName: string): Promise<string> {
     try {
       const suggestion = this.folderSuggestion;
-      const tag = this.tag;
-      if (!suggestion || suggestion.source === 'none' || !tag) return '';
+      if (!suggestion || suggestion.source === 'none') return '';
 
       const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
       const item = Office.context.mailbox?.item;
@@ -906,8 +1008,9 @@ export class IAPanel {
       // Move
       await moveMessageToFolder(token, restId, folderId);
 
-      // Apprentissage : sauvegarde le mapping si c'était un match ou une création.
-      // Sur 'mapped' on ne sauve pas (déjà fait).
+      // Apprentissage : sauvegarde le mapping si c'était un match, une création
+      // ou un manual-override (Charles a corrigé). Sur 'mapped' on ne sauve pas
+      // (déjà fait précédemment). Le scope est 'projet' si un projet est lié.
       if (suggestion.source !== 'mapped' && suggestion.projetId && userEmail) {
         try {
           await saveFolderMapping(userEmail, 'projet', suggestion.projetId, suggestion.folderPath, folderId);
@@ -915,10 +1018,31 @@ export class IAPanel {
           console.warn('[IAPanel] saveFolderMapping failed (non-fatal):', e);
         }
       }
+      // Si pas de projet lié, le déplacement physique du mail vers le dossier
+      // sert lui-même de signal : la prochaine fois, findSenderPatternFolder
+      // détectera que ce sender a déjà des mails dans ce dossier.
+
       return suggestion.folderPath;
     } catch (e) {
       console.warn('[IAPanel] tryMoveToHabitualFolder failed:', e);
       return '';
+    }
+  }
+
+  /**
+   * Charge la liste complète des dossiers Outlook (cache en mémoire).
+   * Utilisé par le picker manuel.
+   */
+  private async loadAllFolders(): Promise<void> {
+    if (this.allFoldersCache && this.allFoldersCache.length > 0) return;
+    try {
+      const { getApiContext } = await import('../api/graph');
+      const ctx = await getApiContext();
+      this.allFoldersCache = await this.scanAllFoldersRecursive(ctx.token);
+    } catch (e) {
+      console.warn('[IAPanel] loadAllFolders failed:', e);
+      this.allFoldersCache = [];
+      showToast(`Impossible de charger les dossiers : ${(e as Error).message?.slice(0, 80)}`, 'error');
     }
   }
 }
