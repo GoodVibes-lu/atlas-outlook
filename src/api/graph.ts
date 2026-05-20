@@ -41,27 +41,35 @@ export async function getApiContext(): Promise<ApiContext> {
     return { token: cachedToken, base: cachedBase };
   }
 
-  // ── A. Callback token Office.js (préféré — toujours dispo) ──
+  const errors: string[] = [];
+
+  // ── A. Callback token Office.js avec isRest:true (préféré) ──
   try {
     if (typeof Office !== 'undefined' && Office.context?.mailbox?.getCallbackTokenAsync) {
       const result = await new Promise<Office.AsyncResult<string>>((resolve) => {
         try {
           Office.context.mailbox.getCallbackTokenAsync({ isRest: true }, (res) => resolve(res));
-        } catch {
+        } catch (e) {
+          errors.push(`isRest exception: ${(e as Error).message?.slice(0, 80)}`);
           resolve({ status: Office.AsyncResultStatus.Failed, value: '' } as Office.AsyncResult<string>);
         }
       });
       if (result.status === Office.AsyncResultStatus.Succeeded && result.value) {
         const restUrl = (Office.context.mailbox as any).restUrl || 'https://outlook.office.com/api';
         const base = `${String(restUrl).replace(/\/$/, '')}/v2.0`;
+        console.info('[Mailbox API] using callback REST token, base =', base);
         cachedToken = result.value;
         cachedBase = base;
         tokenExpiry = Date.now() + 50 * 60 * 1000;
         return { token: cachedToken, base };
       }
+      const err = (result as any).error;
+      errors.push(`isRest status=${result.status}${err ? ` (${err.code}: ${err.message?.slice(0, 60)})` : ''}`);
+    } else {
+      errors.push('Office.context.mailbox.getCallbackTokenAsync indispo');
     }
   } catch (err) {
-    console.warn('[Mailbox API] callback token failed:', err);
+    errors.push(`isRest catch: ${(err as Error).message?.slice(0, 80)}`);
   }
 
   // ── B. SSO Office.auth.getAccessToken (Graph) ──
@@ -69,26 +77,32 @@ export async function getApiContext(): Promise<ApiContext> {
     if (typeof Office !== 'undefined' && Office.auth) {
       const ssoToken = await Office.auth.getAccessToken({ allowSignInPrompt: true });
       if (ssoToken) {
+        console.info('[Mailbox API] using Office SSO token (Graph)');
         cachedToken = ssoToken;
         cachedBase = GRAPH_URL;
         tokenExpiry = Date.now() + 50 * 60 * 1000;
         return { token: ssoToken, base: GRAPH_URL };
       }
+      errors.push('SSO retour vide');
+    } else {
+      errors.push('Office.auth indispo');
     }
   } catch (err) {
-    console.warn('[Mailbox API] SSO failed:', err);
+    errors.push(`SSO: ${(err as Error).message?.slice(0, 80)}`);
   }
 
-  // ── C. Token Graph stocké en localStorage ──
+  // ── C. Token Graph stocké en localStorage (collé manuellement par user) ──
   const stored = localStorage.getItem('atlas_addin_graph_token');
   if (stored) {
+    console.info('[Mailbox API] using localStorage Graph token');
     cachedToken = stored;
     cachedBase = GRAPH_URL;
     tokenExpiry = Date.now() + 30 * 60 * 1000;
     return { token: stored, base: GRAPH_URL };
   }
+  errors.push('localStorage vide');
 
-  throw new Error('Aucun token mailbox disponible (callback Office.js échoué).');
+  throw new Error(`Aucun token mailbox dispo. Tentatives : ${errors.join(' / ')}`);
 }
 
 /**
