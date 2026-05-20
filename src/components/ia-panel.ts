@@ -306,7 +306,12 @@ export class IAPanel {
           break;
         }
         case 'reanalyze': {
+          // reanalyzeNow gère son propre toast d'erreur, on skip le générique
           ok = await this.reanalyzeNow();
+          if (!ok) {
+            buttons.forEach(b => b.disabled = false);
+            return; // évite le "Échec de l'action" générique qui écrase le vrai message
+          }
           break;
         }
       }
@@ -333,14 +338,21 @@ export class IAPanel {
     }
     try {
       const item = Office.context.mailbox?.item;
-      if (!item) return false;
+      if (!item) { showToast('Aucun mail sélectionné', 'error'); return false; }
       const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
       const ewsId = (item as any).itemId;
-      if (!ewsId || !userEmail) return false;
+      if (!ewsId) { showToast('Pas d\'ID de message Outlook (itemId)', 'error'); return false; }
+      if (!userEmail) { showToast('Pas d\'email utilisateur Office.js', 'error'); return false; }
 
       // 1. Fetch le mail complet via Graph (corps + recipients)
       const { getGraphToken, convertToRestId } = await import('../api/graph');
-      const token = await getGraphToken();
+      let token: string;
+      try {
+        token = await getGraphToken();
+      } catch (e) {
+        showToast(`Token Graph manquant : ${(e as Error).message?.slice(0, 100)}`, 'error');
+        return false;
+      }
       const restId = convertToRestId(ewsId);
       const msg = await getMessageForLinking(token, restId);
 
