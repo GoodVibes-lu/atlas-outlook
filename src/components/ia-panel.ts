@@ -36,6 +36,9 @@ import {
   convertToRestId,
   listMailFolders,
   ensureFolderPath,
+  setMessageCategories,
+  clearAtlasCategories,
+  ATLAS_CATEGORIES,
 } from '../api/graph';
 
 const CATEGORIES = [
@@ -359,18 +362,27 @@ export class IAPanel {
           ok = await markTagDone(this.tag.id);
           if (ok) {
             this.tag.inboxStatus = 'done';
+            // Applique catégorie ✅ ATLAS · Traité — visible dans la liste inbox
+            this.applyCategoryForState('done').catch(() => {});
             const moved = await this.tryMoveToHabitualFolder('done');
             showToast(moved ? `Traité ✓ + déplacé dans ${moved} 📁` : 'Marqué comme traité ✓', 'success');
           }
           break;
         case 'snooze':
           ok = await snoozeTag(this.tag.id);
-          if (ok) { this.tag.inboxStatus = 'snoozed'; showToast('Reporté à demain 8h ⏰', 'success'); }
+          if (ok) {
+            this.tag.inboxStatus = 'snoozed';
+            // Applique catégorie ⏰ ATLAS · Reporté — visible dans la liste inbox
+            // sans avoir besoin d'ouvrir le task-pane
+            this.applyCategoryForState('snoozed').catch(() => {});
+            showToast('Reporté à demain 8h ⏰ (visible dans l\'inbox avec tag bleu)', 'success');
+          }
           break;
         case 'archive':
           ok = await archiveTag(this.tag.id);
           if (ok) {
             this.tag.inboxStatus = 'archived';
+            this.applyCategoryForState('archived').catch(() => {});
             // Pour Archive : on tente de déplacer dans le dossier habituel (projet
             // lié → folder mapping). Si pas de mapping → laisse le mail en inbox
             // (l'utilisateur peut toujours le déplacer manuellement).
@@ -503,6 +515,8 @@ export class IAPanel {
         linkedProjetId: this.tag?.linkedProjetId,
       };
       showToast(`Re-analysé ✓ : ${CATEGORY_LABELS[analysis.category] || analysis.category}`, 'success');
+      // Applique la catégorie urgence (visible dans la liste inbox)
+      this.applyCategoryForState('tagged').catch(() => {});
       // Re-résout aussi le dossier de classement (la catégorie a peut-être changé)
       this.resolveFolderSuggestion().then(() => this.render()).catch(() => {});
       return true;
@@ -1065,6 +1079,37 @@ export class IAPanel {
     } catch (e) {
       console.warn('[IAPanel] tryMoveToHabitualFolder failed:', e);
       return '';
+    }
+  }
+
+  /**
+   * Applique la catégorie Outlook qui correspond à l'état + l'urgence.
+   * Visible directement dans la liste inbox d'Outlook (tag coloré à côté
+   * du sujet). Permet à Charles de voir d'un coup d'œil ce qui est
+   * reporté/traité/urgent sans ouvrir le task-pane.
+   */
+  private async applyCategoryForState(state: 'done' | 'snoozed' | 'archived' | 'tagged'): Promise<void> {
+    const item = Office.context.mailbox?.item;
+    const rawId = (item as any)?.itemId;
+    if (!rawId) return;
+    const restId = convertToRestId(rawId);
+
+    // Choisit la catégorie selon l'état (priorité d'affichage)
+    const cats: string[] = [];
+    if (state === 'snoozed') cats.push(ATLAS_CATEGORIES.SNOOZED.name);
+    else if (state === 'done') cats.push(ATLAS_CATEGORIES.DONE.name);
+    else if (state === 'archived') cats.push(ATLAS_CATEGORIES.ARCHIVED.name);
+    else if (state === 'tagged' && this.tag) {
+      // Catégorie urgence si >= 3
+      const u = this.tag.urgencyScore || 0;
+      if (u >= 5) cats.push(ATLAS_CATEGORIES.URGENCE_5.name);
+      else if (u === 4) cats.push(ATLAS_CATEGORIES.URGENCE_4.name);
+      else if (u === 3) cats.push(ATLAS_CATEGORIES.URGENCE_3.name);
+    }
+    try {
+      await setMessageCategories(restId, cats);
+    } catch (e) {
+      console.warn('[IAPanel] setMessageCategories failed:', e);
     }
   }
 

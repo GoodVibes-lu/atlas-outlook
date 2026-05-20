@@ -309,6 +309,112 @@ export async function ensureFolderPath(
   return parentId!;
 }
 
+// ── Categories (tags colorés Outlook, visibles dans la liste inbox) ──
+
+/**
+ * Définition d'une catégorie ATLAS : nom affiché + couleur preset Outlook.
+ * Les couleurs preset sont fixes côté Outlook : preset0=red, 1=orange,
+ * 2=peach (gold), 3=yellow, 4=green, 5=teal, 6=olive, 7=blue, 8=purple,
+ * 9=maroon, 10-24 = autres tons. On choisit les plus contrastés pour
+ * que chaque état soit immédiatement reconnaissable.
+ */
+export const ATLAS_CATEGORIES = {
+  URGENCE_5: { name: '🚨 ATLAS · Urgence 5', color: 'preset0' },   // red
+  URGENCE_4: { name: '🔥 ATLAS · Urgence 4', color: 'preset1' },   // orange
+  URGENCE_3: { name: '⚡ ATLAS · Urgence 3', color: 'preset3' },   // yellow
+  SNOOZED:   { name: '⏰ ATLAS · Reporté',   color: 'preset7' },   // blue
+  DONE:      { name: '✅ ATLAS · Traité',    color: 'preset4' },   // green
+  ARCHIVED:  { name: '📦 ATLAS · Archivé',  color: 'preset8' },   // purple
+};
+
+/** Liste tous les noms de catégories ATLAS pour cleanup. */
+const ALL_ATLAS_NAMES = Object.values(ATLAS_CATEGORIES).map((c) => c.name);
+
+/**
+ * S'assure que les catégories ATLAS existent dans la mailbox (sinon les
+ * appliquer sur un mail ne donne pas la couleur). Idempotent.
+ * Appelé lazy lors du premier setMessageCategories.
+ */
+let _categoriesEnsured = false;
+async function ensureAtlasCategories(token: string, base: string): Promise<void> {
+  if (_categoriesEnsured) return;
+  try {
+    // Endpoint masterCategories : disponible sur Graph et Outlook REST v2.0
+    const url = `${base}/me/outlook/masterCategories`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) {
+      console.warn('[Categories] list failed:', res.status);
+      _categoriesEnsured = true; // évite re-tentatives en boucle
+      return;
+    }
+    const data: any = await res.json();
+    const existing = new Set((data.value || []).map((c: any) => c.displayName || c.DisplayName));
+    for (const def of Object.values(ATLAS_CATEGORIES)) {
+      if (existing.has(def.name)) continue;
+      try {
+        await fetch(url, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ displayName: def.name, color: def.color }),
+        });
+      } catch (e) {
+        console.warn('[Categories] create failed for', def.name, e);
+      }
+    }
+    _categoriesEnsured = true;
+  } catch (e) {
+    console.warn('[Categories] ensureAtlas failed:', e);
+    _categoriesEnsured = true;
+  }
+}
+
+/**
+ * Applique un set de catégories sur un message. Remplace toutes les
+ * catégories ATLAS existantes (préserve les non-ATLAS de l'utilisateur).
+ * @param messageId REST ID du message (convertToRestId)
+ * @param categories array de noms (ex: [ATLAS_CATEGORIES.SNOOZED.name])
+ */
+export async function setMessageCategories(
+  messageId: string,
+  categories: string[],
+): Promise<void> {
+  const { token, base } = await getApiContext();
+  await ensureAtlasCategories(token, base);
+
+  // Récupère les catégories actuelles pour préserver les non-ATLAS
+  let current: string[] = [];
+  try {
+    const res = await fetch(`${base}/me/messages/${messageId}?$select=categories`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      current = data.categories || data.Categories || [];
+    }
+  } catch { /* ignore */ }
+
+  // Remplace les catégories ATLAS, garde les autres
+  const nonAtlas = current.filter((c) => !ALL_ATLAS_NAMES.includes(c));
+  const merged = Array.from(new Set([...nonAtlas, ...categories]));
+
+  const patchRes = await fetch(`${base}/me/messages/${messageId}`, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ categories: merged }),
+  });
+  if (!patchRes.ok) {
+    const err = await patchRes.text().catch(() => '');
+    throw new Error(`setCategories ${patchRes.status}: ${err.slice(0, 200)}`);
+  }
+}
+
+/**
+ * Retire toutes les catégories ATLAS d'un message (préserve les autres).
+ */
+export async function clearAtlasCategories(messageId: string): Promise<void> {
+  await setMessageCategories(messageId, []);
+}
+
 /** Move a message to a specific folder */
 export async function moveMessageToFolder(
   token: string, messageId: string, folderId: string
