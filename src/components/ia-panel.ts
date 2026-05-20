@@ -14,13 +14,22 @@ import {
   getEmailTagByEmailId,
   getEmailTagByConversationId,
   getFolderMapping,
+  saveFolderMapping,
+  getAllProjets,
   markTagDone,
   snoozeTag,
   archiveTag,
   correctTagCategory,
   type EmailTag,
 } from '../api/airtable';
-import { getGraphToken, moveMessageToFolder, convertToRestId } from '../api/graph';
+import type { Projet } from '../types';
+import {
+  getGraphToken,
+  moveMessageToFolder,
+  convertToRestId,
+  listMailFolders,
+  ensureFolderPath,
+} from '../api/graph';
 
 const CATEGORIES = [
   'demande_devis', 'validation_client', 'refus_client', 'question_staff',
@@ -50,10 +59,24 @@ const URGENCY_COLORS: Record<number, string> = {
   1: '#94a3b8', 2: '#60a5fa', 3: '#f59e0b', 4: '#ef4444', 5: '#dc2626',
 };
 
+// Suggestion de dossier de classement résolue dynamiquement.
+interface FolderSuggestion {
+  /** "mapped" = déjà appris, "match" = matché par nom, "create" = à créer. */
+  source: 'mapped' | 'match' | 'create' | 'none';
+  /** ID Outlook si dossier existant. */
+  folderId?: string;
+  /** Chemin lisible (ex: "Markcom/Creativity Camp"). */
+  folderPath: string;
+  /** Projet lié (utilisé pour la sauvegarde du mapping). */
+  projetId?: string;
+}
+
 export class IAPanel {
   private root: HTMLElement;
   private tag: EmailTag | null = null;
   private emailId = '';
+  private linkedProjet: Projet | null = null;
+  private folderSuggestion: FolderSuggestion | null = null;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -91,7 +114,9 @@ export class IAPanel {
       const tag = await this.tryFetchTag(this.emailId);
       this.tag = tag;
       if (tag) {
+        // Résolution du dossier de classement (en parallèle du rendu initial)
         this.render();
+        this.resolveFolderSuggestion().then(() => this.render()).catch(() => {});
       } else {
         this.renderNotTagged();
       }
@@ -179,6 +204,9 @@ export class IAPanel {
           </div>
           ${tag.summary ? `<p style="margin: 4px 0 0; font-size: 12px; color: #475569; line-height: 1.4;">${escapeHtml(tag.summary)}</p>` : ''}
         </div>
+
+        <!-- Dossier de classement (suggestion intelligente) -->
+        ${this.renderFolderSection()}
 
         <!-- Actions principales -->
         <div style="display: flex; flex-direction: column; gap: 8px;">
@@ -270,30 +298,215 @@ export class IAPanel {
     }
   }
 
+  /** Section "Dossier de classement" affichée dans le rendu IA. */
+  private renderFolderSection(): string {
+    const s = this.folderSuggestion;
+    if (!s || s.source === 'none') {
+      // Pas de projet lié → pas de suggestion. Section silencieuse.
+      return this.tag?.linkedProjetId
+        ? `<div style="padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; font-size: 11px; color: #64748b;">📁 Résolution du dossier en cours…</div>`
+        : '';
+    }
+    if (s.source === 'mapped') {
+      return `
+        <div style="padding: 10px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px;">
+          <div style="font-size: 10px; font-weight: 700; color: #047857; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier habituel (appris)</div>
+          <div style="font-size: 13px; font-weight: 600; color: #065f46;">${escapeHtml(s.folderPath)} ✓</div>
+          <div style="font-size: 11px; color: #047857; margin-top: 2px;">Sera utilisé automatiquement au clic sur Traité ou Archiver.</div>
+        </div>
+      `;
+    }
+    if (s.source === 'match') {
+      return `
+        <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px;">
+          <div style="font-size: 10px; font-weight: 700; color: #1d4ed8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier suggéré (match par nom)</div>
+          <div style="font-size: 13px; font-weight: 600; color: #1e3a8a;">${escapeHtml(s.folderPath)}</div>
+          <div style="font-size: 11px; color: #1d4ed8; margin-top: 4px;">Si tu cliques Traité ou Archiver, le mail ira là et ATLAS s'en souviendra pour les prochains mails de ce projet.</div>
+        </div>
+      `;
+    }
+    // source === 'create'
+    return `
+      <div style="padding: 10px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px;">
+        <div style="font-size: 10px; font-weight: 700; color: #92400e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Nouveau dossier suggéré</div>
+        <div style="font-size: 13px; font-weight: 600; color: #78350f;">${escapeHtml(s.folderPath)}</div>
+        <div style="font-size: 11px; color: #92400e; margin-top: 4px;">Aucun dossier Outlook existant ne match. Au clic sur Traité ou Archiver, ATLAS le crée et mémorise la règle.</div>
+      </div>
+    `;
+  }
+
   /**
-   * Déplace le mail courant dans le dossier habituel appris pour le projet lié.
-   * Retourne le nom du dossier si déplacement effectué, '' sinon.
-   *
-   * Gating : ne touche QUE si on a (a) un projet lié au tag, (b) un folder
-   * mapping appris pour ce user+projet. Sinon ne déplace rien — le mail reste
-   * en inbox Outlook et c'est OK (l'utilisateur peut filer manuellement).
+   * Résout la meilleure destination de classement pour ce mail :
+   *   1. Folder mapping appris pour le projet lié (Airtable FolderMappings).
+   *   2. Sinon : top match parmi les dossiers Outlook existants (par nom du
+   *      client / dénomination du projet).
+   *   3. Sinon : suggestion d'un nouveau dossier à créer
+   *      ("Clients/<Client>/#<NoProjet> <Dénomination>").
+   *   4. Sinon : 'none' — aucune suggestion (mail sans projet lié).
+   */
+  private async resolveFolderSuggestion(): Promise<void> {
+    const tag = this.tag;
+    if (!tag?.linkedProjetId) {
+      this.folderSuggestion = { source: 'none', folderPath: '' };
+      return;
+    }
+    const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
+    if (!userEmail) {
+      this.folderSuggestion = { source: 'none', folderPath: '' };
+      return;
+    }
+    try {
+      // 1. Mapping appris
+      const mapping = await getFolderMapping(userEmail, 'projet', tag.linkedProjetId);
+      if (mapping?.folderId) {
+        this.folderSuggestion = {
+          source: 'mapped',
+          folderId: mapping.folderId,
+          folderPath: mapping.folderPath || '(dossier mémorisé)',
+          projetId: tag.linkedProjetId,
+        };
+        return;
+      }
+
+      // 2 + 3. Pas de mapping → chercher le projet pour avoir client + nom
+      const projets = await getAllProjets();
+      const projet = projets.find((p) => p.id === tag.linkedProjetId);
+      this.linkedProjet = projet || null;
+      if (!projet) {
+        this.folderSuggestion = { source: 'none', folderPath: '' };
+        return;
+      }
+
+      // 2. Scan dossiers Outlook → top match par fuzzy sur client/dénomination
+      try {
+        const token = await getGraphToken();
+        const all = await this.scanAllFoldersRecursive(token);
+        const match = this.findBestFolderMatch(all, projet);
+        if (match) {
+          this.folderSuggestion = {
+            source: 'match',
+            folderId: match.id,
+            folderPath: match.path,
+            projetId: tag.linkedProjetId,
+          };
+          return;
+        }
+      } catch (e) {
+        console.warn('[IAPanel] folder scan failed:', e);
+      }
+
+      // 3. Aucun dossier existant ne match → suggestion de création
+      const client = (projet.client || 'Clients').trim();
+      const refOrNo = projet.refProjet || '';
+      const denomination = (projet.denomination || '').slice(0, 60).trim();
+      const suggestedPath = refOrNo
+        ? `${client}/${refOrNo} ${denomination}`.trim()
+        : `${client}/${denomination}`.trim();
+      this.folderSuggestion = {
+        source: 'create',
+        folderPath: suggestedPath,
+        projetId: tag.linkedProjetId,
+      };
+    } catch (e) {
+      console.warn('[IAPanel] resolveFolderSuggestion failed:', e);
+      this.folderSuggestion = { source: 'none', folderPath: '' };
+    }
+  }
+
+  /**
+   * Scan tous les dossiers Outlook récursivement (depuis racine), 2 niveaux
+   * max pour ne pas exploser le nombre d'appels Graph.
+   */
+  private async scanAllFoldersRecursive(token: string): Promise<Array<{ id: string; path: string }>> {
+    const out: Array<{ id: string; path: string }> = [];
+    const roots = await listMailFolders(token);
+    // Filtre les system folders inutiles (Inbox/Sent/Drafts/Deleted Items/Junk)
+    const SKIP = new Set(['inbox', 'sent items', 'drafts', 'deleted items', 'junk email', 'outbox', 'archive', 'rss feeds', 'conversation history', 'sync issues']);
+    for (const f of roots) {
+      if (SKIP.has(f.displayName.toLowerCase())) continue;
+      out.push({ id: f.id, path: f.displayName });
+      try {
+        const children = await listMailFolders(token, f.id);
+        for (const c of children) {
+          out.push({ id: c.id, path: `${f.displayName}/${c.displayName}` });
+        }
+      } catch { /* skip */ }
+    }
+    return out;
+  }
+
+  /**
+   * Cherche le dossier dont le nom (ou un segment du path) match le mieux le
+   * client / la dénomination du projet. Scoring simple : substring case-insensitive.
+   */
+  private findBestFolderMatch(
+    folders: Array<{ id: string; path: string }>,
+    projet: Projet,
+  ): { id: string; path: string } | null {
+    const client = (projet.client || '').toLowerCase().trim();
+    const denomination = (projet.denomination || '').toLowerCase().trim();
+    const ref = (projet.refProjet || '').toLowerCase().trim();
+    if (!client && !denomination && !ref) return null;
+
+    type Scored = { id: string; path: string; score: number };
+    const scored: Scored[] = folders.map((f) => {
+      const p = f.path.toLowerCase();
+      let score = 0;
+      if (ref && p.includes(ref)) score += 100;            // match référence projet = très fort
+      if (denomination && p.includes(denomination)) score += 50;
+      if (client) {
+        // Match client : on découpe en mots pour catcher "Markcom" même si le path est "Fédérations/Markcom/2026"
+        const clientWords = client.split(/[\s,&]+/).filter((w) => w.length >= 3);
+        for (const w of clientWords) {
+          if (p.includes(w)) score += 20;
+        }
+      }
+      return { id: f.id, path: f.path, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    const best = scored[0];
+    if (!best || best.score < 20) return null;
+    return { id: best.id, path: best.path };
+  }
+
+  /**
+   * Déplace le mail courant dans le dossier de destination résolu (mapped /
+   * match / create). Sauvegarde le folder mapping pour l'apprentissage.
+   * Retourne le path du dossier si OK, '' si rien fait.
    */
   private async tryMoveToHabitualFolder(_actionName: string): Promise<string> {
     try {
+      const suggestion = this.folderSuggestion;
       const tag = this.tag;
-      if (!tag?.linkedProjetId) return '';
+      if (!suggestion || suggestion.source === 'none' || !tag) return '';
+
       const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
-      if (!userEmail) return '';
-      const mapping = await getFolderMapping(userEmail, 'projet', tag.linkedProjetId);
-      if (!mapping?.folderId) return '';
       const item = Office.context.mailbox?.item;
       const rawId = (item as any)?.itemId;
       if (!rawId) return '';
-      // Outlook côté addin renvoie un EWS itemId — Graph veut un REST ID.
       const restId = convertToRestId(rawId);
       const token = await getGraphToken();
-      await moveMessageToFolder(token, restId, mapping.folderId);
-      return mapping.folderPath || mapping.folderId.slice(0, 8);
+
+      let folderId = suggestion.folderId;
+      // Cas 'create' : on crée le dossier dans Outlook (ensureFolderPath crée récursivement)
+      if (suggestion.source === 'create' && !folderId) {
+        folderId = await ensureFolderPath(token, suggestion.folderPath);
+      }
+      if (!folderId) return '';
+
+      // Move
+      await moveMessageToFolder(token, restId, folderId);
+
+      // Apprentissage : sauvegarde le mapping si c'était un match ou une création.
+      // Sur 'mapped' on ne sauve pas (déjà fait).
+      if (suggestion.source !== 'mapped' && suggestion.projetId && userEmail) {
+        try {
+          await saveFolderMapping(userEmail, 'projet', suggestion.projetId, suggestion.folderPath, folderId);
+        } catch (e) {
+          console.warn('[IAPanel] saveFolderMapping failed (non-fatal):', e);
+        }
+      }
+      return suggestion.folderPath;
     } catch (e) {
       console.warn('[IAPanel] tryMoveToHabitualFolder failed:', e);
       return '';
