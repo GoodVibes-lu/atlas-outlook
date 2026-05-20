@@ -61,14 +61,24 @@ const URGENCY_COLORS: Record<number, string> = {
 
 // Suggestion de dossier de classement résolue dynamiquement.
 interface FolderSuggestion {
-  /** "mapped" = déjà appris, "match" = matché par nom, "create" = à créer. */
-  source: 'mapped' | 'match' | 'create' | 'none';
+  /**
+   * Origine de la suggestion :
+   *   - mapped : folder mapping Airtable appris (explicite)
+   *   - sender-pattern : pattern observé sur les mails de ce sender dans Outlook
+   *     (continue l'existant — Charles range déjà ces mails dans ce dossier)
+   *   - match : top match fuzzy sur les noms de dossiers existants
+   *   - create : aucun match → on propose un nouveau dossier à créer
+   *   - none : aucun signal exploitable
+   */
+  source: 'mapped' | 'sender-pattern' | 'match' | 'create' | 'none';
   /** ID Outlook si dossier existant. */
   folderId?: string;
   /** Chemin lisible (ex: "Markcom/Creativity Camp"). */
   folderPath: string;
   /** Projet lié (utilisé pour la sauvegarde du mapping). */
   projetId?: string;
+  /** Pour 'sender-pattern' : nombre de mails du sender dans ce dossier (preuve). */
+  patternMailCount?: number;
 }
 
 export class IAPanel {
@@ -316,6 +326,15 @@ export class IAPanel {
         </div>
       `;
     }
+    if (s.source === 'sender-pattern') {
+      return `
+        <div style="padding: 10px; background: #f5f3ff; border: 1px solid #c4b5fd; border-radius: 6px;">
+          <div style="font-size: 10px; font-weight: 700; color: #6d28d9; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Tu ranges déjà ces mails ici</div>
+          <div style="font-size: 13px; font-weight: 600; color: #5b21b6;">${escapeHtml(s.folderPath)}</div>
+          <div style="font-size: 11px; color: #6d28d9; margin-top: 4px;">Observé : ${s.patternMailCount} mail${(s.patternMailCount || 0) > 1 ? 's' : ''} de cet expéditeur déjà dans ce dossier. ATLAS suit ton habitude — au clic Traité/Archiver, il s'en souvient pour de bon.</div>
+        </div>
+      `;
+    }
     if (s.source === 'match') {
       return `
         <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px;">
@@ -346,29 +365,52 @@ export class IAPanel {
    */
   private async resolveFolderSuggestion(): Promise<void> {
     const tag = this.tag;
-    if (!tag?.linkedProjetId) {
-      this.folderSuggestion = { source: 'none', folderPath: '' };
-      return;
-    }
     const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
-    if (!userEmail) {
-      this.folderSuggestion = { source: 'none', folderPath: '' };
-      return;
-    }
+    const senderEmail = (Office.context.mailbox?.item as any)?.from?.emailAddress || '';
+
     try {
-      // 1. Mapping appris
-      const mapping = await getFolderMapping(userEmail, 'projet', tag.linkedProjetId);
-      if (mapping?.folderId) {
-        this.folderSuggestion = {
-          source: 'mapped',
-          folderId: mapping.folderId,
-          folderPath: mapping.folderPath || '(dossier mémorisé)',
-          projetId: tag.linkedProjetId,
-        };
-        return;
+      // ── Stratégie 1 : Folder mapping appris (Airtable) pour le projet lié ──
+      if (tag?.linkedProjetId && userEmail) {
+        const mapping = await getFolderMapping(userEmail, 'projet', tag.linkedProjetId);
+        if (mapping?.folderId) {
+          this.folderSuggestion = {
+            source: 'mapped',
+            folderId: mapping.folderId,
+            folderPath: mapping.folderPath || '(dossier mémorisé)',
+            projetId: tag.linkedProjetId,
+          };
+          return;
+        }
       }
 
-      // 2 + 3. Pas de mapping → chercher le projet pour avoir client + nom
+      // ── Stratégie 2 : Pattern d'expéditeur — où Charles range-t-il déjà
+      //    les mails de ce sender ? Continue l'existant : si les 30 derniers
+      //    mails du sender sont majoritairement dans 1 dossier, c'est CE
+      //    dossier qu'on suggère, peu importe le projet lié ou non.
+      if (senderEmail) {
+        try {
+          const token = await getGraphToken();
+          const pattern = await this.findSenderPatternFolder(token, senderEmail);
+          if (pattern) {
+            this.folderSuggestion = {
+              source: 'sender-pattern',
+              folderId: pattern.folderId,
+              folderPath: pattern.folderPath,
+              projetId: tag?.linkedProjetId,
+              patternMailCount: pattern.count,
+            };
+            return;
+          }
+        } catch (e) {
+          console.warn('[IAPanel] sender-pattern lookup failed:', e);
+        }
+      }
+
+      // ── Stratégies 3 + 4 : nécessitent un projet lié (client + dénomination)
+      if (!tag?.linkedProjetId) {
+        this.folderSuggestion = { source: 'none', folderPath: '' };
+        return;
+      }
       const projets = await getAllProjets();
       const projet = projets.find((p) => p.id === tag.linkedProjetId);
       this.linkedProjet = projet || null;
@@ -377,7 +419,7 @@ export class IAPanel {
         return;
       }
 
-      // 2. Scan dossiers Outlook → top match par fuzzy sur client/dénomination
+      // 3. Match fuzzy par nom sur les dossiers existants
       try {
         const token = await getGraphToken();
         const all = await this.scanAllFoldersRecursive(token);
@@ -395,7 +437,7 @@ export class IAPanel {
         console.warn('[IAPanel] folder scan failed:', e);
       }
 
-      // 3. Aucun dossier existant ne match → suggestion de création
+      // 4. Création — propose un nouveau dossier basé sur Client / Projet
       const client = (projet.client || 'Clients').trim();
       const refOrNo = projet.refProjet || '';
       const denomination = (projet.denomination || '').slice(0, 60).trim();
@@ -411,6 +453,76 @@ export class IAPanel {
       console.warn('[IAPanel] resolveFolderSuggestion failed:', e);
       this.folderSuggestion = { source: 'none', folderPath: '' };
     }
+  }
+
+  /**
+   * Cherche le dossier où Charles range déjà les mails de ce sender.
+   * Continue l'existant : on observe les 30 derniers mails du sender DANS
+   * Outlook (toutes localisations sauf Inbox/Sent), on compte le dossier
+   * majoritaire. Si > 50% → on suggère ce dossier.
+   */
+  private async findSenderPatternFolder(
+    token: string,
+    senderEmail: string,
+  ): Promise<{ folderId: string; folderPath: string; count: number } | null> {
+    // Filtre Graph : from = senderEmail. On exclut côté JS les mails encore en Inbox.
+    const filter = encodeURIComponent(`from/emailAddress/address eq '${senderEmail.replace(/'/g, "''")}'`);
+    const url = `https://graph.microsoft.com/v1.0/me/messages?$filter=${filter}&$top=30&$select=id,parentFolderId,subject&$orderby=receivedDateTime desc`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (!res.ok) return null;
+    const data: any = await res.json();
+    const msgs = (data.value || []) as Array<{ parentFolderId: string }>;
+    if (msgs.length < 3) return null;
+
+    // Récupère l'ID du dossier Inbox pour l'exclure
+    const inboxRes = await fetch('https://graph.microsoft.com/v1.0/me/mailFolders/inbox?$select=id', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const inboxId = inboxRes.ok ? (await inboxRes.json()).id : '';
+
+    // Compte par dossier (hors Inbox)
+    const counts = new Map<string, number>();
+    for (const m of msgs) {
+      if (!m.parentFolderId || m.parentFolderId === inboxId) continue;
+      counts.set(m.parentFolderId, (counts.get(m.parentFolderId) || 0) + 1);
+    }
+    if (counts.size === 0) return null;
+
+    // Top dossier
+    let bestId = '';
+    let bestCount = 0;
+    for (const [fid, c] of counts.entries()) {
+      if (c > bestCount) { bestCount = c; bestId = fid; }
+    }
+    // Pattern significatif : au moins 3 mails ET >= 50% des mails classés
+    const totalClassified = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+    if (bestCount < 3 || bestCount / totalClassified < 0.5) return null;
+
+    // Résoudre le path lisible du folder (1 niveau parent suffit pour le contexte)
+    let folderPath = bestId.slice(0, 8); // fallback ID si pas de nom
+    try {
+      const fres = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${bestId}?$select=displayName,parentFolderId`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (fres.ok) {
+        const f: any = await fres.json();
+        folderPath = f.displayName || folderPath;
+        // Tente de récupérer le parent pour afficher "Parent/Folder"
+        if (f.parentFolderId && f.parentFolderId !== inboxId) {
+          const pres = await fetch(`https://graph.microsoft.com/v1.0/me/mailFolders/${f.parentFolderId}?$select=displayName`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (pres.ok) {
+            const p: any = await pres.json();
+            if (p.displayName && !['Top of Information Store', 'Inbox'].includes(p.displayName)) {
+              folderPath = `${p.displayName}/${f.displayName}`;
+            }
+          }
+        }
+      }
+    } catch { /* ignore — on garde l'ID en fallback */ }
+
+    return { folderId: bestId, folderPath, count: bestCount };
   }
 
   /**
