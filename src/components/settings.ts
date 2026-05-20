@@ -17,6 +17,7 @@ export class SettingsPanel {
   private render(): void {
     const airtableToken = localStorage.getItem('atlas_addin_airtable_token') || '';
     const anthropicKey = localStorage.getItem('atlas_addin_anthropic_key') || '';
+    const graphToken = localStorage.getItem('atlas_addin_graph_token') || '';
     const userName = localStorage.getItem('atlas_addin_user_name') || '';
     const userEmail = localStorage.getItem('atlas_addin_user_email') || '';
 
@@ -47,6 +48,24 @@ export class SettingsPanel {
           <input type="password" class="form-input" id="setting-anthropic" value="${this.escapeAttr(anthropicKey)}" placeholder="sk-ant-..." />
           <p style="font-size:10px;color:var(--atlas-text-muted);margin-top:4px;">
             Pour l'analyse IA et l'adaptation de tonalité ARGO. Optionnel.
+          </p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Token Microsoft Graph (recommandé sur Mac)</label>
+          <textarea class="form-input" id="setting-graph" rows="3"
+            placeholder="eyJ0eXAiOiJKV1Qi..."
+            style="font-family: monospace; font-size: 11px;">${this.escapeAttr(graphToken)}</textarea>
+          <p style="font-size:10px;color:var(--atlas-text-muted);margin-top:4px;line-height:1.4;">
+            <strong>Pourquoi :</strong> Outlook Mac n'autorise pas l'addin à scanner ta
+            boîte mail (lister tes dossiers, voir où tu ranges habituellement les
+            mails). Sans ce token, l'apprentissage des dossiers ne marche pas.<br/>
+            <strong>Comment l'obtenir :</strong> Dans l'app ATLAS Desktop, ouvre la
+            console DevTools (Cmd+Opt+I) et tape :
+            <code style="background:#f1f5f9;padding:2px 4px;border-radius:3px;">copy(localStorage.getItem('atlas_ms_access_token'))</code>
+            puis colle ici. Le token expire après ~1h — il sera renouvelé tant que
+            ATLAS Desktop tourne. À refaire toutes les ~50 min ou dès qu'une action
+            échoue.
           </p>
         </div>
 
@@ -85,6 +104,7 @@ export class SettingsPanel {
     const email = (document.getElementById('setting-email') as HTMLInputElement).value.trim();
     const airtable = (document.getElementById('setting-airtable') as HTMLInputElement).value.trim();
     const anthropic = (document.getElementById('setting-anthropic') as HTMLInputElement).value.trim();
+    const graph = (document.getElementById('setting-graph') as HTMLTextAreaElement).value.trim();
 
     if (!name || !email) {
       showToast('Nom et email requis', 'error');
@@ -100,6 +120,11 @@ export class SettingsPanel {
     localStorage.setItem('atlas_addin_user_email', email);
     localStorage.setItem('atlas_addin_airtable_token', airtable);
     localStorage.setItem('atlas_addin_anthropic_key', anthropic);
+    if (graph) {
+      localStorage.setItem('atlas_addin_graph_token', graph);
+    } else {
+      localStorage.removeItem('atlas_addin_graph_token');
+    }
 
     showToast('Configuration enregistrée ✓', 'success');
     this.onSave();
