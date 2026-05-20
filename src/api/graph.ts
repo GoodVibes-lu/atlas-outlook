@@ -230,7 +230,11 @@ export async function listMailFolders(
     ? `/me/mailFolders/${parentFolderId}/childFolders`
     : '/me/mailFolders';
   const data = await graphFetch<{ value: any[] }>(`${base}?$top=200&$select=id,displayName`, token);
-  return (data.value ?? []).map((f: any) => ({ id: f.id, displayName: f.displayName }));
+  // Outlook REST v2.0 peut renvoyer PascalCase (Id/DisplayName) selon le mode.
+  return (data.value ?? []).map((f: any) => ({
+    id: f.id || f.Id || '',
+    displayName: f.displayName || f.DisplayName || '',
+  }));
 }
 
 /** Navigate a folder path like "Clients/LUNEX/#530 Project" and return the leaf folder ID */

@@ -667,26 +667,49 @@ export class IAPanel {
     senderEmail: string,
   ): Promise<{ folderId: string; folderPath: string; count: number } | null> {
     // Filtre : from = senderEmail. On exclut côté JS les mails encore en Inbox.
+    // On augmente $top à 100 pour catcher l'historique long (50+ mails sur un sender).
     const filter = encodeURIComponent(`from/emailAddress/address eq '${senderEmail.replace(/'/g, "''")}'`);
-    const url = `${apiBase}/me/messages?$filter=${filter}&$top=30&$select=id,parentFolderId,subject&$orderby=receivedDateTime desc`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-    if (!res.ok) return null;
+    const url = `${apiBase}/me/messages?$filter=${filter}&$top=100&$select=id,parentFolderId,subject&$orderby=receivedDateTime desc`;
+    let res: Response;
+    try {
+      res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    } catch (e) {
+      console.error('[IAPanel] sender-pattern fetch failed (network):', e);
+      return null;
+    }
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      console.error(`[IAPanel] sender-pattern HTTP ${res.status} on ${url}:`, errBody.slice(0, 300));
+      return null;
+    }
     const data: any = await res.json();
-    const msgs = (data.value || []) as Array<{ parentFolderId: string }>;
+    const rawMsgs = (data.value || []) as any[];
+    // Outlook REST v2.0 peut renvoyer PascalCase (ParentFolderId) ou camelCase
+    // selon le mode. On normalise pour gérer les 2.
+    const msgs = rawMsgs.map((m) => ({
+      parentFolderId: m.parentFolderId || m.ParentFolderId || '',
+      subject: m.subject || m.Subject || '',
+    }));
+    console.info(`[IAPanel] sender-pattern: ${msgs.length} mails de ${senderEmail} (sample: ${JSON.stringify(msgs.slice(0, 3))})`);
     if (msgs.length < 3) return null;
 
     // Récupère l'ID du dossier Inbox pour l'exclure
     const inboxRes = await fetch(`${apiBase}/me/mailFolders/inbox?$select=id`, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    const inboxId = inboxRes.ok ? (await inboxRes.json()).id : '';
+    const inboxData = inboxRes.ok ? await inboxRes.json() : {};
+    const inboxId = inboxData.id || inboxData.Id || '';
 
     // Compte par dossier (hors Inbox)
     const counts = new Map<string, number>();
+    let skippedInbox = 0;
+    let skippedNoId = 0;
     for (const m of msgs) {
-      if (!m.parentFolderId || m.parentFolderId === inboxId) continue;
+      if (!m.parentFolderId) { skippedNoId++; continue; }
+      if (m.parentFolderId === inboxId) { skippedInbox++; continue; }
       counts.set(m.parentFolderId, (counts.get(m.parentFolderId) || 0) + 1);
     }
+    console.info(`[IAPanel] sender-pattern counts: ${counts.size} folders, ${skippedInbox} in Inbox, ${skippedNoId} no parentFolderId`);
     if (counts.size === 0) return null;
 
     // Top dossier
@@ -707,16 +730,19 @@ export class IAPanel {
       });
       if (fres.ok) {
         const f: any = await fres.json();
-        folderPath = f.displayName || folderPath;
+        const dn = f.displayName || f.DisplayName || '';
+        const pfId = f.parentFolderId || f.ParentFolderId || '';
+        folderPath = dn || folderPath;
         // Tente de récupérer le parent pour afficher "Parent/Folder"
-        if (f.parentFolderId && f.parentFolderId !== inboxId) {
-          const pres = await fetch(`${apiBase}/me/mailFolders/${f.parentFolderId}?$select=displayName`, {
+        if (pfId && pfId !== inboxId) {
+          const pres = await fetch(`${apiBase}/me/mailFolders/${pfId}?$select=displayName`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           if (pres.ok) {
             const p: any = await pres.json();
-            if (p.displayName && !['Top of Information Store', 'Inbox'].includes(p.displayName)) {
-              folderPath = `${p.displayName}/${f.displayName}`;
+            const pdn = p.displayName || p.DisplayName || '';
+            if (pdn && !['Top of Information Store', 'Inbox'].includes(pdn)) {
+              folderPath = `${pdn}/${dn}`;
             }
           }
         }
