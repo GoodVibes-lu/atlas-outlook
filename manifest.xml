@@ -6,7 +6,7 @@
            xsi:type="MailApp">
 
   <Id>4f0d857e-bcc2-4f63-bc08-322e21ec2acc</Id>
-  <Version>1.0.0</Version>
+  <Version>1.1.0</Version>
   <ProviderName>GOOD VIBES</ProviderName>
   <DefaultLocale>fr-FR</DefaultLocale>
   <DisplayName DefaultValue="ATLAS" />
@@ -256,76 +256,6 @@
                       <SourceLocation resid="taskpaneComposeUrl" />
                     </Action>
                   </Control>
-                </Group>
-              </OfficeTab>
-            </ExtensionPoint>
-
-            <!-- ── Context menu on message (right-click) ── -->
-            <ExtensionPoint xsi:type="MessageReadCommandSurface">
-              <OfficeTab id="TabDefault">
-                <Group id="atlasContextGroup">
-                  <Label resid="groupLabel" />
-
-                  <Control xsi:type="Menu" id="atlasContextMenu">
-                    <Label resid="ctxMenuLabel" />
-                    <Supertip>
-                      <Title resid="ctxMenuTitle" />
-                      <Description resid="ctxMenuDesc" />
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="icon16" />
-                      <bt:Image size="32" resid="icon32" />
-                      <bt:Image size="80" resid="icon80" />
-                    </Icon>
-                    <Items>
-                      <Item id="ctxLinkProjet">
-                        <Label resid="ctxLinkLabel" />
-                        <Supertip>
-                          <Title resid="ctxLinkLabel" />
-                          <Description resid="ctxLinkDesc" />
-                        </Supertip>
-                        <Icon>
-                          <bt:Image size="16" resid="icon16" />
-                          <bt:Image size="32" resid="icon32" />
-                          <bt:Image size="80" resid="icon80" />
-                        </Icon>
-                        <Action xsi:type="ShowTaskpane">
-                          <SourceLocation resid="ctxLinkUrl" />
-                        </Action>
-                      </Item>
-                      <Item id="ctxVoirProjet">
-                        <Label resid="ctxInfoLabel" />
-                        <Supertip>
-                          <Title resid="ctxInfoLabel" />
-                          <Description resid="ctxInfoDesc" />
-                        </Supertip>
-                        <Icon>
-                          <bt:Image size="16" resid="icon16" />
-                          <bt:Image size="32" resid="icon32" />
-                          <bt:Image size="80" resid="icon80" />
-                        </Icon>
-                        <Action xsi:type="ShowTaskpane">
-                          <SourceLocation resid="ctxInfoUrl" />
-                        </Action>
-                      </Item>
-                      <Item id="ctxCreerProjet">
-                        <Label resid="ctxCreateLabel" />
-                        <Supertip>
-                          <Title resid="ctxCreateLabel" />
-                          <Description resid="ctxCreateDesc" />
-                        </Supertip>
-                        <Icon>
-                          <bt:Image size="16" resid="icon16" />
-                          <bt:Image size="32" resid="icon32" />
-                          <bt:Image size="80" resid="icon80" />
-                        </Icon>
-                        <Action xsi:type="ShowTaskpane">
-                          <SourceLocation resid="ctxCreateUrl" />
-                        </Action>
-                      </Item>
-                    </Items>
-                  </Control>
-
                 </Group>
               </OfficeTab>
             </ExtensionPoint>
