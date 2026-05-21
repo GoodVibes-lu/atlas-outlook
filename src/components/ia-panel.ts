@@ -316,6 +316,37 @@ export class IAPanel {
     this.root.querySelectorAll<HTMLButtonElement>('button[data-action]').forEach(btn => {
       btn.addEventListener('click', () => this.onAction(btn.dataset.action!));
     });
+
+    // Picker dossier : search live + click sur ligne pour sélectionner
+    const searchInput = this.root.querySelector<HTMLInputElement>('#folder-picker-search');
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        this.folderPickerQuery = (e.target as HTMLInputElement).value;
+        // Re-render uniquement la section picker (préserve focus)
+        const oldFocus = searchInput.selectionStart;
+        this.render();
+        const newInput = this.root.querySelector<HTMLInputElement>('#folder-picker-search');
+        if (newInput) {
+          newInput.focus();
+          if (oldFocus !== null) newInput.setSelectionRange(oldFocus, oldFocus);
+        }
+      });
+    }
+    this.root.querySelectorAll<HTMLLIElement>('li[data-folder-id]').forEach((li) => {
+      li.addEventListener('click', () => {
+        this.folderPickerSelectedId = li.dataset.folderId || '';
+        this.folderPickerSelectedPath = li.dataset.folderPath || '';
+        this.render();
+      });
+    });
+    // Champ création de dossier — bind le change pour mémoriser
+    const newPathInput = this.root.querySelector<HTMLInputElement>('#folder-picker-new-path');
+    if (newPathInput) {
+      newPathInput.addEventListener('input', (e) => {
+        this.folderPickerNewPath = (e.target as HTMLInputElement).value;
+      });
+      newPathInput.focus();
+    }
   }
 
   private async onAction(action: string): Promise<void> {
@@ -323,6 +354,11 @@ export class IAPanel {
     // la classification soit faite, juste pour préparer le mapping).
     if (action === 'change-folder') {
       this.folderPickerOpen = true;
+      this.folderPickerQuery = '';
+      this.folderPickerSelectedId = '';
+      this.folderPickerSelectedPath = '';
+      this.folderPickerCreateMode = false;
+      this.folderPickerNewPath = '';
       // Charge la liste des dossiers en background
       this.loadAllFolders().then(() => this.render()).catch(() => this.render());
       this.render();
@@ -330,15 +366,15 @@ export class IAPanel {
     }
     if (action === 'cancel-folder') {
       this.folderPickerOpen = false;
+      this.folderPickerCreateMode = false;
       this.render();
       return;
     }
     if (action === 'confirm-folder') {
-      const sel = this.root.querySelector<HTMLSelectElement>('#folder-picker-select');
-      const folderId = sel?.value || '';
-      const folderPath = sel?.selectedOptions[0]?.getAttribute('data-path') || '';
+      const folderId = this.folderPickerSelectedId;
+      const folderPath = this.folderPickerSelectedPath;
       if (!folderId || !folderPath) {
-        showToast('Sélectionne un dossier', 'error');
+        showToast('Sélectionne un dossier dans la liste', 'error');
         return;
       }
       this.folderSuggestion = {
@@ -348,8 +384,48 @@ export class IAPanel {
         projetId: this.tag?.linkedProjetId,
       };
       this.folderPickerOpen = false;
-      showToast(`Dossier choisi : ${folderPath}. Clic Traité ou Archiver pour confirmer.`, 'info');
+      showToast(`Dossier choisi : ${folderPath}. Clic Traité/Archiver pour ranger.`, 'info');
       this.render();
+      return;
+    }
+    if (action === 'open-create-folder') {
+      this.folderPickerCreateMode = true;
+      this.folderPickerNewPath = this.folderPickerQuery || ''; // reuse search query as default
+      this.render();
+      return;
+    }
+    if (action === 'create-folder-cancel') {
+      this.folderPickerCreateMode = false;
+      this.render();
+      return;
+    }
+    if (action === 'create-folder-confirm') {
+      const path = this.folderPickerNewPath.trim();
+      if (!path) {
+        showToast('Indique le nom du dossier à créer', 'error');
+        return;
+      }
+      try {
+        showToast(`Création du dossier "${path}"…`, 'info');
+        const { getApiContext } = await import('../api/graph');
+        const ctx = await getApiContext();
+        const folderId = await ensureFolderPath(ctx.token, path);
+        // Ajoute au cache local
+        if (!this.allFoldersCache) this.allFoldersCache = [];
+        this.allFoldersCache.push({ id: folderId, path });
+        this.folderSuggestion = {
+          source: 'manual-override',
+          folderId,
+          folderPath: path,
+          projetId: this.tag?.linkedProjetId,
+        };
+        this.folderPickerOpen = false;
+        this.folderPickerCreateMode = false;
+        showToast(`✓ Dossier "${path}" créé. Clic Traité/Archiver pour ranger.`, 'success');
+        this.render();
+      } catch (e) {
+        showToast(`Erreur création : ${(e as Error).message?.slice(0, 100)}`, 'error');
+      }
       return;
     }
 
@@ -653,30 +729,81 @@ export class IAPanel {
    * "Changer". Sélection → tap Confirmer → la suggestion devient
    * 'manual-override' avec ce dossier.
    */
+  // État du picker : query de recherche + valeur sélectionnée
+  private folderPickerQuery = '';
+  private folderPickerSelectedId = '';
+  private folderPickerSelectedPath = '';
+  private folderPickerCreateMode = false;
+  private folderPickerNewPath = '';
+
   private renderFolderPicker(): string {
     const folders = this.allFoldersCache || [];
     if (folders.length === 0) {
       return `
         <div style="padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; margin-top: 6px;">
-          <div style="font-size: 11px; color: #64748b;">⏳ Chargement de la liste de dossiers…</div>
+          <div style="font-size: 11px; color: #64748b;">⏳ Chargement de la liste des dossiers… (peut prendre 3-5 sec sur les grosses boîtes)</div>
         </div>
       `;
     }
-    const opts = folders
+
+    const q = this.folderPickerQuery.toLowerCase().trim();
+    const filtered = folders
       .slice()
       .sort((a, b) => a.path.localeCompare(b.path, 'fr'))
-      .map((f) => `<option value="${escapeHtml(f.id)}" data-path="${escapeHtml(f.path)}">${escapeHtml(f.path)}</option>`)
-      .join('');
+      .filter((f) => !q || f.path.toLowerCase().includes(q))
+      .slice(0, 100); // limit display à 100 max pour perf
+
+    // Mode CRÉATION : input pour le nom du nouveau dossier
+    if (this.folderPickerCreateMode) {
+      return `
+        <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; margin-top: 6px;">
+          <div style="font-size: 10px; font-weight: 700; color: #9a3412; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">➕ Créer un nouveau dossier</div>
+          <input type="text" id="folder-picker-new-path" placeholder="Ex: Clients/Vossloh — ou juste 'Vossloh'"
+            value="${escapeHtml(this.folderPickerNewPath)}"
+            style="width: 100%; padding: 8px; border: 1px solid #fed7aa; border-radius: 4px; font-size: 12px; margin-bottom: 6px; box-sizing: border-box;" />
+          <p style="font-size: 10px; color: #9a3412; margin: 0 0 8px; line-height: 1.4;">
+            Tu peux créer un dossier imbriqué avec "/" (ex: Clients/Vossloh/2026).
+            Les niveaux manquants seront créés.
+          </p>
+          <div style="display: flex; gap: 6px;">
+            <button data-action="create-folder-confirm" style="flex: 1; padding: 6px; background: #ea580c; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer;">Créer + utiliser</button>
+            <button data-action="create-folder-cancel" style="padding: 6px 10px; background: #e2e8f0; color: #334155; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">Annuler</button>
+          </div>
+        </div>
+      `;
+    }
+
+    // Mode SÉLECTION : recherche + liste filtrée
+    const list = filtered.length === 0
+      ? `<li style="padding: 10px; color: #94a3b8; font-size: 11px; text-align: center;">Aucun dossier ne correspond à "${escapeHtml(this.folderPickerQuery)}"</li>`
+      : filtered.map((f) => {
+          const isSel = f.id === this.folderPickerSelectedId;
+          return `<li data-folder-id="${escapeHtml(f.id)}" data-folder-path="${escapeHtml(f.path)}"
+            class="folder-row"
+            style="padding: 6px 10px; cursor: pointer; font-size: 12px; ${isSel ? 'background: #ddd6fe; font-weight: 600; color: #4c1d95;' : 'color: #334155;'} border-bottom: 1px solid #f1f5f9;">
+            📁 ${escapeHtml(f.path)}
+          </li>`;
+        }).join('');
+
     return `
       <div style="padding: 10px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 6px;">
-        <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">📂 Choisir un dossier</div>
-        <select id="folder-picker-select" style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-bottom: 6px;">
-          <option value="">— Sélectionner —</option>
-          ${opts}
-        </select>
-        <div style="display: flex; gap: 6px;">
-          <button data-action="confirm-folder" style="flex: 1; padding: 6px; background: #4f46e5; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer;">Confirmer</button>
-          <button data-action="cancel-folder" style="padding: 6px 10px; background: #e2e8f0; color: #334155; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">Annuler</button>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">📂 Choisir un dossier (${folders.length})</div>
+          <button data-action="open-create-folder" style="background: white; border: 1px solid #cbd5e1; padding: 3px 8px; border-radius: 4px; font-size: 10px; cursor: pointer; color: #475569; font-weight: 600;">➕ Nouveau</button>
+        </div>
+        <input type="text" id="folder-picker-search" placeholder="🔍 Rechercher (Markcom, Vossloh, Clients/...)"
+          value="${escapeHtml(this.folderPickerQuery)}"
+          style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-bottom: 6px; box-sizing: border-box;" />
+        <ul style="margin: 0; padding: 0; list-style: none; max-height: 240px; overflow-y: auto; background: white; border: 1px solid #e2e8f0; border-radius: 4px;">
+          ${list}
+        </ul>
+        ${filtered.length > 100 ? `<div style="font-size: 10px; color: #64748b; margin-top: 4px;">↑ Affichage limité à 100. Précise ta recherche pour réduire.</div>` : ''}
+        <div style="display: flex; gap: 6px; margin-top: 8px;">
+          <button data-action="confirm-folder" ${!this.folderPickerSelectedId ? 'disabled' : ''}
+            style="flex: 1; padding: 8px; background: ${this.folderPickerSelectedId ? '#4f46e5' : '#cbd5e1'}; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: ${this.folderPickerSelectedId ? 'pointer' : 'not-allowed'};">
+            ${this.folderPickerSelectedId ? `Utiliser ${escapeHtml(this.folderPickerSelectedPath.slice(0, 35))}` : 'Sélectionne un dossier'}
+          </button>
+          <button data-action="cancel-folder" style="padding: 8px 12px; background: #e2e8f0; color: #334155; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">Annuler</button>
         </div>
       </div>
     `;
@@ -954,24 +1081,28 @@ export class IAPanel {
   }
 
   /**
-   * Scan tous les dossiers Outlook récursivement (depuis racine), 2 niveaux
-   * max pour ne pas exploser le nombre d'appels Graph.
+   * Scan tous les dossiers Outlook récursivement (jusqu'à 4 niveaux de
+   * profondeur). On exclut les dossiers système.
    */
   private async scanAllFoldersRecursive(token: string): Promise<Array<{ id: string; path: string }>> {
+    const SKIP = new Set(['inbox', 'sent items', 'drafts', 'deleted items', 'junk email', 'outbox', 'archive', 'rss feeds', 'conversation history', 'sync issues', 'clutter', 'notes']);
     const out: Array<{ id: string; path: string }> = [];
-    const roots = await listMailFolders(token);
-    // Filtre les system folders inutiles (Inbox/Sent/Drafts/Deleted Items/Junk)
-    const SKIP = new Set(['inbox', 'sent items', 'drafts', 'deleted items', 'junk email', 'outbox', 'archive', 'rss feeds', 'conversation history', 'sync issues']);
-    for (const f of roots) {
-      if (SKIP.has(f.displayName.toLowerCase())) continue;
-      out.push({ id: f.id, path: f.displayName });
-      try {
-        const children = await listMailFolders(token, f.id);
-        for (const c of children) {
-          out.push({ id: c.id, path: `${f.displayName}/${c.displayName}` });
-        }
-      } catch { /* skip */ }
-    }
+
+    const walk = async (parentId: string | undefined, parentPath: string, depth: number): Promise<void> => {
+      if (depth > 4) return;
+      let children: Array<{ id: string; displayName: string }> = [];
+      try { children = await listMailFolders(token, parentId); } catch { return; }
+      for (const f of children) {
+        const name = f.displayName || '';
+        if (!name) continue;
+        if (depth === 0 && SKIP.has(name.toLowerCase())) continue;
+        const path = parentPath ? `${parentPath}/${name}` : name;
+        out.push({ id: f.id, path });
+        await walk(f.id, path, depth + 1);
+      }
+    };
+
+    await walk(undefined, '', 0);
     return out;
   }
 
