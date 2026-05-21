@@ -340,6 +340,7 @@ export const ATLAS_IA_CATEGORIES: Record<string, { name: string; color: string }
   question_staff:         { name: '👥 Question staff',         color: 'preset12' },  // dark steel
   facture_fournisseur:    { name: '🧾 Facture fournisseur',    color: 'preset9' },   // maroon
   prospection_entrante:   { name: '📞 Prospection entrante',   color: 'preset2' },   // peach
+  prospection_sortante:   { name: '📤 Prospection sortante',   color: 'preset3' },   // yellow
   rdv_planning:           { name: '📅 RDV / Planning',         color: 'preset6' },   // olive
   newsletter:             { name: '📰 Newsletter',             color: 'preset14' },  // dark green
   notification_systeme:   { name: '🤖 Notification système',   color: 'preset13' },  // dark olive

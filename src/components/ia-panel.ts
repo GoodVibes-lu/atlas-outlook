@@ -44,7 +44,7 @@ import {
 
 const CATEGORIES = [
   'demande_devis', 'validation_client', 'refus_client', 'question_staff',
-  'facture_fournisseur', 'prospection_entrante', 'rdv_planning',
+  'facture_fournisseur', 'prospection_entrante', 'prospection_sortante', 'rdv_planning',
   'newsletter', 'notification_systeme', 'spam', 'autre',
   'federation_association', 'demande_interne_staff', 'fournisseur',
 ];
@@ -56,6 +56,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   question_staff: '👥 Question staff',
   facture_fournisseur: '🧾 Facture fournisseur',
   prospection_entrante: '📞 Prospection entrante',
+  prospection_sortante: '📤 Prospection sortante',
   rdv_planning: '📅 RDV / Planning',
   newsletter: '📰 Newsletter',
   notification_systeme: '🤖 Notification système',
@@ -77,7 +78,8 @@ const CATEGORY_FOLDER_ALIASES: Record<string, string[]> = {
   refus_client: ['refus', 'client'],
   question_staff: ['staff', 'équipe', 'equipe', 'interne'],
   facture_fournisseur: ['facture', 'comptabilité', 'compta', 'fournisseur'],
-  prospection_entrante: ['prospect', 'prospection', 'lead'],
+  prospection_entrante: ['prospect', 'prospection', 'lead', 'entrant'],
+  prospection_sortante: ['prospection', 'sortant', 'outbound', 'commercial'],
   rdv_planning: ['rdv', 'rendez', 'planning', 'agenda'],
   newsletter: ['newsletter', 'newsletters', 'news'],
   notification_systeme: ['notification', 'système', 'systeme', 'auto'],

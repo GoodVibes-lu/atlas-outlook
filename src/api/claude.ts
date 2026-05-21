@@ -14,7 +14,7 @@ const MODEL = 'claude-haiku-4-5';
 
 const CATEGORIES = [
   'demande_devis', 'validation_client', 'refus_client', 'question_staff',
-  'facture_fournisseur', 'prospection_entrante', 'rdv_planning',
+  'facture_fournisseur', 'prospection_entrante', 'prospection_sortante', 'rdv_planning',
   'newsletter', 'notification_systeme', 'spam', 'autre',
   'federation_association', 'demande_interne_staff', 'fournisseur',
 ] as const;
@@ -86,10 +86,16 @@ CONTEXTE GOOD VIBES :
 
 RÈGLE CRITIQUE — ANALYSE DU MAIL COURANT :
 - L'expéditeur de CE mail est : ${input.from.name} <${input.from.email}>
+- L'expéditeur est-il INTERNE à Good Vibes (@vibes.lu) ? ${senderDom === 'vibes.lu' ? 'OUI — c\'est NOUS qui écrivons' : 'NON — externe'}
 - Concentre-toi sur le contenu du mail COURANT, pas sur les messages cités dans la conversation (replies).
 - NE PAS classer "demande_interne_staff" si l'expéditeur OU un destinataire principal est externe — c'est un échange client/fournisseur même si un collègue interne est cité dans l'historique.
 - Thread interne (tous @vibes.lu) : ${isInternalThread ? 'OUI' : 'NON'}
 - Si Thread interne = NON → catégorie NE PEUT PAS être "demande_interne_staff".
+
+RÈGLE CRITIQUE — SENS DE LA PROSPECTION :
+- "prospection_entrante" = un EXTERNE NOUS sollicite pour devenir notre client/partenaire/fournisseur (sender ≠ @vibes.lu).
+- "prospection_sortante" = NOUS contactons un externe pour proposer nos services (sender = @vibes.lu, destinataire externe).
+- Si sender = @vibes.lu et le mail propose les services Good Vibes à un externe → c'est "prospection_sortante", JAMAIS "prospection_entrante".
 
 Email :
 De : ${input.from.name} <${input.from.email}>
@@ -163,6 +169,18 @@ INSTRUCTIONS :
   if (category === 'demande_interne_staff' && !isInternalThread) {
     console.info('[claude addin] override demande_interne_staff → autre (destinataire externe)');
     category = 'autre';
+  }
+
+  // Garde-fou anti "prospection_entrante" quand on est l'expéditeur (mail sortant
+  // depuis @vibes.lu vers un externe = prospection_sortante, pas entrante).
+  if (category === 'prospection_entrante' && senderDom === 'vibes.lu') {
+    console.info('[claude addin] override prospection_entrante → prospection_sortante (sender @vibes.lu)');
+    category = 'prospection_sortante';
+  }
+  // Inverse : prospection_sortante mais sender externe → c'est entrante
+  if (category === 'prospection_sortante' && senderDom !== 'vibes.lu') {
+    console.info('[claude addin] override prospection_sortante → prospection_entrante (sender externe)');
+    category = 'prospection_entrante';
   }
 
   // Plafond Cc urgence 2
