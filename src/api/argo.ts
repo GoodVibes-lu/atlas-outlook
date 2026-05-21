@@ -42,6 +42,60 @@ export function detectLanguage(text: string): 'FR' | 'EN' | 'DE' | 'LU' | null {
   return best[0] as 'FR' | 'EN' | 'DE' | 'LU';
 }
 
+/**
+ * Détecte si le mail / draft est en tutoiement (informel) ou vouvoiement.
+ * Heuristique par scoring de markers :
+ *   FR : "tu/ton/ta/tes/te" / "salut" → tu | "vous/votre/cordialement" → vous
+ *   DE : "du/dein/dir/dich" / "hallo/hi/lieber" → tu | "Sie/Ihre/sehr geehrte" → vous
+ *   EN : "hi <prenom>" / "hey" → tu | "Dear Mr/Mrs" → vous
+ *   LU : "du/äis/säi" → tu | (rarement vouvoiement)
+ * Retourne true si tutoiement, false si vouvoiement, null si pas de signal.
+ */
+export function detectTutoiement(text: string, lang: 'FR' | 'EN' | 'DE' | 'LU' | null): boolean | null {
+  const t = ' ' + text.toLowerCase().replace(/[^a-zàâäéèêëïîôöùûüÿœæçß\s]/gi, ' ') + ' ';
+  let scoreTu = 0;
+  let scoreVous = 0;
+
+  // FR
+  if (!lang || lang === 'FR') {
+    for (const m of [' tu ', ' ton ', ' ta ', ' tes ', ' te ', ' t\'', ' salut ', ' coucou ', ' bisous ', ' bises ']) {
+      if (t.includes(m)) scoreTu += m === ' tu ' ? 3 : 1;
+    }
+    for (const m of [' vous ', ' votre ', ' vos ', ' cordialement ', ' madame ', ' monsieur ', ' bien à vous ']) {
+      if (t.includes(m)) scoreVous += m === ' vous ' ? 3 : 1;
+    }
+  }
+  // DE
+  if (!lang || lang === 'DE') {
+    for (const m of [' du ', ' dein ', ' deine ', ' deinen ', ' dir ', ' dich ', ' hallo ', ' hi ', ' lieber ', ' liebe ', ' viele grüße ']) {
+      if (t.includes(m)) scoreTu += m === ' du ' ? 3 : 1;
+    }
+    // 'Sie' en majuscule = vouvoiement DE, mais on travaille en lowercase →
+    // marker 'sehr geehrte' / 'ihnen' / 'ihre' (avec Maj on lowercase ça reste)
+    for (const m of [' ihnen ', ' ihre ', ' ihren ', ' sehr geehrte ', ' freundlichen grüßen ', ' mit freundlichen ']) {
+      if (t.includes(m)) scoreVous += 2;
+    }
+  }
+  // EN
+  if (!lang || lang === 'EN') {
+    for (const m of [' hi ', ' hey ', ' cheers ', ' thanks ', ' xoxo ']) {
+      if (t.includes(m)) scoreTu += 1;
+    }
+    for (const m of [' dear mr ', ' dear mrs ', ' dear ms ', ' sincerely ', ' kindly ', ' to whom it may concern ']) {
+      if (t.includes(m)) scoreVous += 2;
+    }
+  }
+  // LU — généralement tutoiement par défaut
+  if (lang === 'LU') {
+    for (const m of [' du ', ' däi ', ' deng ', ' moien ', ' gréiss ']) {
+      if (t.includes(m)) scoreTu += 1;
+    }
+  }
+
+  if (scoreTu === 0 && scoreVous === 0) return null;
+  return scoreTu > scoreVous;
+}
+
 async function callClaude(prompt: string, maxTokens = 1024): Promise<string> {
   const key = getAnthropicKey();
   if (!key) throw new Error('No Anthropic API key configured');
@@ -160,10 +214,12 @@ export async function generateQuickReplies(
   const key = getAnthropicKey();
   if (!key) return [];
 
-  const isTu = profile?.tonPrefere === 'Amical' ||
-    (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
-  const detectedLang = detectLanguage(body.slice(0, 600)) || profile?.languePreferee || 'FR';
+  const detectedLang = detectLanguage(body.slice(0, 800)) || profile?.languePreferee || 'FR';
   const lang = detectedLang;
+  const detectedTu = detectTutoiement(body.slice(0, 800), detectedLang);
+  const profileTu = profile?.tonPrefere === 'Amical' ||
+    (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
+  const isTu = detectedTu !== null ? detectedTu : profileTu;
   const prenom = profile?.prenom || senderName.split(' ')[0] || '';
 
   const prompt = `Tu es un assistant email pour une agence de communication luxembourgeoise (GOOD VIBES).
@@ -199,17 +255,21 @@ export async function generateFreeReply(
   const key = getAnthropicKey();
   if (!key) throw new Error('Cle API Anthropic requise');
 
-  const isTu = profile?.tonPrefere === 'Amical' ||
-    (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
   const prenom = profile?.prenom || senderName.split(' ')[0] || '';
 
   // Détection langue : on prend la langue du DRAFT en priorité (intent
   // explicite de Charles), sinon celle du MAIL REÇU (auto-match), sinon
-  // le profile, sinon FR. Si profile force une langue qui contredit
-  // l'évidence du mail/draft, on suit le mail (sinon on génère en FR
-  // sur un thread en allemand — bug Charles 2026-05-21).
-  const detectedLang = detectLanguage(`${instruction}\n\n${body.slice(0, 600)}`) || profile?.languePreferee || 'FR';
+  // le profile, sinon FR.
+  const combinedText = `${instruction}\n\n${body.slice(0, 800)}`;
+  const detectedLang = detectLanguage(combinedText) || profile?.languePreferee || 'FR';
   const langLabel = detectedLang === 'EN' ? 'anglais' : detectedLang === 'DE' ? 'allemand' : detectedLang === 'LU' ? 'luxembourgeois' : 'francais';
+
+  // Détection tutoiement : depuis le draft + mail reçu (du/tu/hi vs Sie/vous/Dear).
+  // Si détecté → prime sur le profile. Sinon fallback au profile.
+  const detectedTu = detectTutoiement(combinedText, detectedLang);
+  const profileTu = profile?.tonPrefere === 'Amical' ||
+    (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
+  const isTu = detectedTu !== null ? detectedTu : profileTu;
 
   const prompt = `Tu es ${userName} de GOOD VIBES events & communications (agence de com au Luxembourg).
 Redige une reponse a cet email en suivant l'instruction ci-dessous.
@@ -222,10 +282,16 @@ Corps: ${body.slice(0, 1200)}
 Instruction de ${userName} (peut etre dans la langue de la reponse attendue): "${instruction}"
 
 Regles CRITIQUES :
-- LANGUE DE LA REPONSE : ${langLabel}. Si l'email reçu est dans une langue ET que ${userName} écrit son instruction dans cette même langue, on répond DANS CETTE LANGUE — pas en français par défaut. Détecté ici : ${detectedLang}.
-- ${isTu ? `Tutoyer ${prenom}` : `Vouvoyer ${prenom}`}
+- LANGUE DE LA REPONSE : ${langLabel}. Détecté : ${detectedLang}. Réponds DANS CETTE LANGUE, pas en français par défaut.
+- FORME D'ADRESSE : ${isTu ? `TUTOIEMENT — ${prenom} et ${userName} se tutoient dans ce thread. Utiliser "tu/du/you informal" selon la langue. JAMAIS de "vous/Sie/Dear Mr".` : `VOUVOIEMENT — adresse formelle requise (vous/Sie/Dear ${prenom}).`}
 - Ton: professionnel mais chaleureux
-- Inclure salutation et closing adaptés à la langue
+- Inclure salutation et closing adaptés à la langue ET au tutoiement :
+  ${isTu && detectedLang === 'DE' ? '→ "Hallo ${prenom}," / "Viele Grüße"' : ''}
+  ${isTu && detectedLang === 'FR' ? '→ "Salut ${prenom}," / "Bien à toi"' : ''}
+  ${isTu && detectedLang === 'EN' ? '→ "Hi ${prenom}," / "Cheers" ou "Best"' : ''}
+  ${!isTu && detectedLang === 'DE' ? '→ "Sehr geehrte/r ${prenom}," / "Mit freundlichen Grüßen"' : ''}
+  ${!isTu && detectedLang === 'FR' ? '→ "Bonjour ${prenom}," / "Bien à vous"' : ''}
+  ${!isTu && detectedLang === 'EN' ? '→ "Dear ${prenom}," / "Kind regards"' : ''}
 - Signer: ${userName}, GOOD VIBES events & communications
 - Format: HTML avec <p> tags
 
