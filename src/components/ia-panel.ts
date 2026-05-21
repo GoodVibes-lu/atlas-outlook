@@ -363,10 +363,15 @@ export class IAPanel {
           ok = await markTagDone(this.tag.id);
           if (ok) {
             this.tag.inboxStatus = 'done';
-            // Applique catégorie ✅ ATLAS · Traité — visible dans la liste inbox
             this.applyCategoryForState('done').catch(() => {});
-            const moved = await this.tryMoveToHabitualFolder('done');
-            showToast(moved ? `Traité ✓ + déplacé dans ${moved} 📁` : 'Marqué comme traité ✓', 'success');
+            const r = await this.tryMoveToHabitualFolder('done');
+            if (r.folderPath) {
+              showToast(`Traité ✓ + déplacé dans ${r.folderPath} 📁`, 'success');
+            } else if (r.error && r.error !== 'aucune suggestion') {
+              showToast(`Traité ✓ — déplacement échoué : ${r.error}`, 'error');
+            } else {
+              showToast('Marqué comme traité ✓', 'success');
+            }
           }
           break;
         case 'snooze':
@@ -384,11 +389,14 @@ export class IAPanel {
           if (ok) {
             this.tag.inboxStatus = 'archived';
             this.applyCategoryForState('archived').catch(() => {});
-            // Pour Archive : on tente de déplacer dans le dossier habituel (projet
-            // lié → folder mapping). Si pas de mapping → laisse le mail en inbox
-            // (l'utilisateur peut toujours le déplacer manuellement).
-            const moved = await this.tryMoveToHabitualFolder('archive');
-            showToast(moved ? `Archivé + déplacé dans ${moved} 📁` : 'Archivé 📦 (aucun dossier habituel — déplace manuellement si besoin)', 'success');
+            const r = await this.tryMoveToHabitualFolder('archive');
+            if (r.folderPath) {
+              showToast(`Archivé + déplacé dans ${r.folderPath} 📁`, 'success');
+            } else if (r.error && r.error !== 'aucune suggestion') {
+              showToast(`Archivé — déplacement échoué : ${r.error}`, 'error');
+            } else {
+              showToast('Archivé 📦 (aucun dossier habituel — déplace manuellement)', 'success');
+            }
           }
           break;
         case 'correct': {
@@ -1031,15 +1039,19 @@ export class IAPanel {
    * match / create). Sauvegarde le folder mapping pour l'apprentissage.
    * Retourne le path du dossier si OK, '' si rien fait.
    */
-  private async tryMoveToHabitualFolder(_actionName: string): Promise<string> {
-    try {
-      const suggestion = this.folderSuggestion;
-      if (!suggestion || suggestion.source === 'none') return '';
+  private async tryMoveToHabitualFolder(
+    _actionName: string,
+  ): Promise<{ folderPath: string; error?: string }> {
+    const suggestion = this.folderSuggestion;
+    if (!suggestion || suggestion.source === 'none') {
+      return { folderPath: '', error: 'aucune suggestion' };
+    }
 
+    try {
       const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
       const item = Office.context.mailbox?.item;
       const rawId = (item as any)?.itemId;
-      if (!rawId) return '';
+      if (!rawId) return { folderPath: '', error: 'pas d\'itemId' };
       const restId = convertToRestId(rawId);
       const token = await getGraphToken();
 
@@ -1048,23 +1060,21 @@ export class IAPanel {
       if (suggestion.source === 'create' && !folderId) {
         folderId = await ensureFolderPath(token, suggestion.folderPath);
       }
-      if (!folderId) return '';
+      if (!folderId) {
+        return { folderPath: '', error: `pas de folderId (source=${suggestion.source})` };
+      }
 
-      // Move
+      // Move — peut throw si l'API rejette
       await moveMessageToFolder(token, restId, folderId);
 
       // Apprentissage local : enrichit l'index sender → dossier IMMÉDIATEMENT.
-      // Lookup O(1) à la prochaine ouverture d'un mail du même sender.
       const senderEmail = (item as any)?.from?.emailAddress || '';
       if (senderEmail) {
-        // +2 si manual-override (signal fort de Charles), +1 sinon
         const weight = suggestion.source === 'manual-override' ? 2 : 1;
         recordSenderFolder(senderEmail, folderId, suggestion.folderPath, weight);
       }
 
-      // Apprentissage : sauvegarde le mapping si c'était un match, une création
-      // ou un manual-override (Charles a corrigé). Sur 'mapped' on ne sauve pas
-      // (déjà fait précédemment). Le scope est 'projet' si un projet est lié.
+      // Apprentissage : sauvegarde le mapping (Airtable) si projet lié
       if (suggestion.source !== 'mapped' && suggestion.projetId && userEmail) {
         try {
           await saveFolderMapping(userEmail, 'projet', suggestion.projetId, suggestion.folderPath, folderId);
@@ -1072,14 +1082,12 @@ export class IAPanel {
           console.warn('[IAPanel] saveFolderMapping failed (non-fatal):', e);
         }
       }
-      // Si pas de projet lié, le déplacement physique du mail vers le dossier
-      // sert lui-même de signal : la prochaine fois, findSenderPatternFolder
-      // détectera que ce sender a déjà des mails dans ce dossier.
 
-      return suggestion.folderPath;
+      return { folderPath: suggestion.folderPath };
     } catch (e) {
+      const msg = (e as Error).message?.slice(0, 150) || 'erreur inconnue';
       console.warn('[IAPanel] tryMoveToHabitualFolder failed:', e);
-      return '';
+      return { folderPath: '', error: msg };
     }
   }
 
