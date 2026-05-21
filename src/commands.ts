@@ -35,6 +35,7 @@ import {
   ATLAS_IA_CATEGORIES,
 } from './api/graph';
 import { lookupSenderFolder, recordSenderFolder } from './api/sender-folder-index';
+import { initRoamingStorage } from './api/roaming-storage';
 
 /**
  * Construit la liste des catégories à appliquer pour un état donné.
@@ -57,7 +58,10 @@ function buildCategoriesFor(tag: any, state: 'done' | 'snoozed' | 'archived'): s
 
 // Office.js doit être prêt avant que les commandes soient invoquées.
 // On register les handlers globalement (window) — manifest les référence par nom.
-Office.onReady(() => {
+Office.onReady(async () => {
+  // Hydrate les clés depuis roamingSettings (les commandes ribbon ont
+  // besoin du PAT Airtable + Anthropic même après cache clear)
+  await initRoamingStorage();
   // Les actions sont attachées via Office.actions.associate ci-dessous,
   // mais Outlook Mac fallback : aussi exposer en globals.
   (window as any).atlasDoneCommand = atlasDoneCommand;

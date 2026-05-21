@@ -6,6 +6,7 @@ import { showToast } from '../taskpane';
 import { scanMailboxBuildIndex } from '../api/scan-mailbox';
 import { indexStats, clearIndex } from '../api/sender-folder-index';
 import { createAtlasCategoriesVerbose } from '../api/graph';
+import { persistKey } from '../api/roaming-storage';
 
 export class SettingsPanel {
   private container: HTMLElement;
@@ -208,17 +209,17 @@ export class SettingsPanel {
       return;
     }
 
-    localStorage.setItem('atlas_addin_user_name', name);
-    localStorage.setItem('atlas_addin_user_email', email);
-    localStorage.setItem('atlas_addin_airtable_token', airtable);
-    localStorage.setItem('atlas_addin_anthropic_key', anthropic);
-    if (graph) {
-      localStorage.setItem('atlas_addin_graph_token', graph);
-    } else {
-      localStorage.removeItem('atlas_addin_graph_token');
-    }
+    // Persiste à la fois en localStorage (rapide) ET roamingSettings
+    // (survit aux cache clears + sync multi-device). Best effort en parallèle.
+    Promise.all([
+      persistKey('atlas_addin_user_name', name),
+      persistKey('atlas_addin_user_email', email),
+      persistKey('atlas_addin_airtable_token', airtable),
+      persistKey('atlas_addin_anthropic_key', anthropic),
+      persistKey('atlas_addin_graph_token', graph),
+    ]).catch((e) => console.warn('[Settings] persistKey failed:', e));
 
-    showToast('Configuration enregistrée ✓', 'success');
+    showToast('Configuration enregistrée ✓ (synchronisée dans la mailbox)', 'success');
     this.onSave();
   }
 

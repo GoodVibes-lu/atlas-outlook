@@ -12,6 +12,7 @@ import { ProjectInfoPanel } from './components/project-info';
 import { CreateProjectPanel } from './components/create-project';
 import { SettingsPanel } from './components/settings';
 import { IAPanel } from './components/ia-panel';
+import { initRoamingStorage } from './api/roaming-storage';
 import type { AddinMode } from './types';
 
 // ── State ──
@@ -207,9 +208,12 @@ function renderSetup(app: HTMLElement): void {
 
 // ── Office.js Initialization ──
 
-Office.onReady((info) => {
+Office.onReady(async (info) => {
   if (info.host === Office.HostType.Outlook) {
     console.log('[ATLAS] Outlook Add-in loaded');
+    // Hydrate localStorage depuis roamingSettings AVANT le 1er renderApp
+    // (sinon isConfigured() voit un localStorage vide et propose Setup)
+    await initRoamingStorage();
     renderApp();
 
     // Quand le task-pane est ÉPINGLÉ par l'utilisateur (icône 📌 en haut),
