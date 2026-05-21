@@ -287,6 +287,7 @@ export class IAPanel {
             <button data-action="snooze" class="ia-btn ia-btn-warning">⏰ Reporter (demain 8h)</button>
             <button data-action="archive" class="ia-btn ia-btn-muted">📦 Archiver</button>
             <button data-action="reanalyze" class="ia-btn ia-btn-secondary" ${hasAnthropicToken() ? '' : 'disabled title="Configure Clé Anthropic dans Settings"'}>🔄 Re-analyser</button>
+            <button data-action="broom" class="ia-btn ia-btn-secondary" title="Archive maintenant tous les mails lus +10 min dans leurs dossiers habituels (utilise l'index sender)">🧹 Coup de balai</button>
           </div>
         </div>
 
@@ -352,6 +353,21 @@ export class IAPanel {
   private async onAction(action: string): Promise<void> {
     // Picker dossier : ne nécessite pas de tag (peut être déclenché avant que
     // la classification soit faite, juste pour préparer le mapping).
+    if (action === 'broom') {
+      showToast('🧹 Coup de balai en cours…', 'info');
+      try {
+        const { forceAutoSweep } = await import('../api/auto-sweep');
+        const r = await forceAutoSweep();
+        if (r.archived > 0) {
+          showToast(`🧹 ${r.archived} mail${r.archived > 1 ? 's' : ''} archivé${r.archived > 1 ? 's' : ''}. Scanné ${r.scanned}, ${r.skipped.noFolder} sans dossier connu.`, 'success');
+        } else {
+          showToast(`🧹 Rien à archiver. Scanné ${r.scanned} (${r.skipped.unread} non-lus, ${r.skipped.tooFresh} <10min, ${r.skipped.noFolder} sans dossier appris)`, 'info');
+        }
+      } catch (e) {
+        showToast(`Erreur balai : ${(e as Error).message?.slice(0, 80)}`, 'error');
+      }
+      return;
+    }
     if (action === 'change-folder') {
       this.folderPickerOpen = true;
       this.folderPickerQuery = '';

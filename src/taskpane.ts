@@ -13,6 +13,7 @@ import { CreateProjectPanel } from './components/create-project';
 import { SettingsPanel } from './components/settings';
 import { IAPanel } from './components/ia-panel';
 import { initRoamingStorage } from './api/roaming-storage';
+import { maybeAutoSweep } from './api/auto-sweep';
 import type { AddinMode } from './types';
 
 // ── State ──
@@ -208,6 +209,19 @@ function renderSetup(app: HTMLElement): void {
 
 // ── Office.js Initialization ──
 
+// Sweep auto au démarrage + à chaque changement de mail. Le throttle 2min
+// évite le spam API. Affiche un toast discret si N mails archivés.
+async function triggerAutoSweep(): Promise<void> {
+  try {
+    const r = await maybeAutoSweep();
+    if (r && r.archived > 0) {
+      showToast(`🧹 ${r.archived} mail${r.archived > 1 ? 's' : ''} archivé${r.archived > 1 ? 's' : ''} automatiquement`, 'success');
+    }
+  } catch (e) {
+    console.warn('[ATLAS] auto-sweep failed:', e);
+  }
+}
+
 Office.onReady(async (info) => {
   if (info.host === Office.HostType.Outlook) {
     console.log('[ATLAS] Outlook Add-in loaded');
@@ -215,6 +229,8 @@ Office.onReady(async (info) => {
     // (sinon isConfigured() voit un localStorage vide et propose Setup)
     await initRoamingStorage();
     renderApp();
+    // Sweep auto en background (silencieux si rien à faire)
+    triggerAutoSweep();
 
     // Quand le task-pane est ÉPINGLÉ par l'utilisateur (icône 📌 en haut),
     // il reste ouvert pendant qu'il change de mail. Sans handler, le contenu
@@ -225,9 +241,10 @@ Office.onReady(async (info) => {
         Office.EventType.ItemChanged,
         () => {
           console.log('[ATLAS] ItemChanged → re-render');
-          // Reset tab pour repartir sur l'IA par défaut au changement de mail
           currentTab = '';
           renderApp();
+          // Sweep auto à chaque changement de mail (throttled 2min)
+          triggerAutoSweep();
         },
       );
     } catch (e) {
