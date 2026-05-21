@@ -214,7 +214,7 @@ export async function generateQuickReplies(
   const key = getAnthropicKey();
   if (!key) return [];
 
-  const detectedLang = detectLanguage(body.slice(0, 800)) || profile?.languePreferee || 'FR';
+  const detectedLang: 'FR' | 'EN' | 'DE' | 'LU' = (detectLanguage(body.slice(0, 800)) || (profile?.languePreferee as any) || 'FR');
   const lang = detectedLang;
   const detectedTu = detectTutoiement(body.slice(0, 800), detectedLang);
   const profileTu = profile?.tonPrefere === 'Amical' ||
@@ -261,7 +261,7 @@ export async function generateFreeReply(
   // explicite de Charles), sinon celle du MAIL REÇU (auto-match), sinon
   // le profile, sinon FR.
   const combinedText = `${instruction}\n\n${body.slice(0, 800)}`;
-  const detectedLang = detectLanguage(combinedText) || profile?.languePreferee || 'FR';
+  const detectedLang: 'FR' | 'EN' | 'DE' | 'LU' = (detectLanguage(combinedText) || (profile?.languePreferee as any) || 'FR');
   const langLabel = detectedLang === 'EN' ? 'anglais' : detectedLang === 'DE' ? 'allemand' : detectedLang === 'LU' ? 'luxembourgeois' : 'francais';
 
   // Détection tutoiement : depuis le draft + mail reçu (du/tu/hi vs Sie/vous/Dear).
