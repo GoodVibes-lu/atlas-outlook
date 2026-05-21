@@ -165,6 +165,26 @@ export class IAPanel {
         // Résolution du dossier de classement (en parallèle du rendu initial)
         this.render();
         this.resolveFolderSuggestion().then(() => this.render()).catch(() => {});
+      } else if (hasAnthropicToken()) {
+        // ── Auto-analyse au chargement ──
+        // Si le mail n'est pas taggé ET qu'on a la clé Anthropic, on lance
+        // automatiquement l'analyse plutôt que d'afficher "Pas encore taggé"
+        // et obliger Charles à cliquer. Tout se fait en background ; on
+        // affiche un état "Analyse en cours…" pendant l'appel Claude.
+        this.renderAutoAnalyzing();
+        try {
+          const ok = await this.reanalyzeNow();
+          if (ok && this.tag) {
+            this.render();
+            this.resolveFolderSuggestion().then(() => this.render()).catch(() => {});
+          } else {
+            // Échec d'analyse — fallback sur l'écran "non taggé" avec bouton manuel
+            this.renderNotTagged();
+          }
+        } catch (e) {
+          console.warn('[IAPanel] auto-analyze failed:', e);
+          this.renderNotTagged();
+        }
       } else {
         this.renderNotTagged();
       }
@@ -172,6 +192,21 @@ export class IAPanel {
       console.warn('[IAPanel] load failed:', e);
       this.renderEmpty('Erreur lors du chargement.');
     }
+  }
+
+  /**
+   * Affiche pendant l'auto-analyse au chargement (entre "pas de tag trouvé"
+   * et "résultat de Claude"). Évite que Charles voie le toast "Pas encore
+   * taggé" puis doit cliquer.
+   */
+  private renderAutoAnalyzing(): void {
+    this.root.innerHTML = `
+      <div style="padding: 20px; display: flex; flex-direction: column; gap: 12px; align-items: center;">
+        <div style="font-size: 28px;">✨</div>
+        <div style="font-size: 13px; font-weight: 600; color: #4f46e5;">Analyse IA en cours…</div>
+        <div style="font-size: 11px; color: #64748b; text-align: center;">Claude classe ce mail. Quelques secondes.</div>
+      </div>
+    `;
   }
 
   /**
