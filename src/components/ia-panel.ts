@@ -543,14 +543,20 @@ export class IAPanel {
       return `<div style="padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; font-size: 11px; color: #64748b;">📁 Résolution du dossier en cours…</div>`;
     }
     if (s.source === 'none') {
-      // Aucune suggestion exploitable. On affiche un mini diagnostic visible pour
-      // que Charles voie POURQUOI (sans DevTools).
-      const dbg = s.debug ? escapeHtml(s.debug).slice(0, 400) : 'aucun signal';
+      // Aucune suggestion exploitable, MAIS Charles peut quand même picker
+      // un dossier manuellement — ça apprendra pour la prochaine fois.
+      const dbg = s.debug ? escapeHtml(s.debug).slice(0, 200) : 'aucun signal';
       return `
         <div style="padding: 10px; background: #fafafa; border: 1px dashed #cbd5e1; border-radius: 6px;">
           <div style="font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Aucun dossier suggéré</div>
-          <div style="font-size: 11px; color: #94a3b8; font-family: monospace;">Debug : ${dbg}</div>
+          <div style="font-size: 11px; color: #94a3b8; font-family: monospace; margin-bottom: 6px;">Debug : ${dbg}</div>
+          <div style="display: flex; justify-content: flex-start;">
+            <button data-action="change-folder" style="background: white; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; color: #475569; font-weight: 600;">
+              📂 Choisir un dossier (ATLAS apprend)
+            </button>
+          </div>
         </div>
+        ${this.folderPickerOpen ? this.renderFolderPicker() : ''}
       `;
     }
     // Construit la suggestion + bouton "Changer" (chip discret en haut-droite).
