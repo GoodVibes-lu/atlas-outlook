@@ -9,6 +9,39 @@ function getAnthropicKey(): string {
   return localStorage.getItem('atlas_addin_anthropic_key') || '';
 }
 
+/**
+ * Détection rapide de langue par scoring sur mots-clés fréquents.
+ * Retourne 'FR' | 'EN' | 'DE' | 'LU' | null (si aucun signal).
+ * Pas de dépendance externe. Suffit pour distinguer FR/EN/DE/LU dans nos
+ * mails business.
+ */
+export function detectLanguage(text: string): 'FR' | 'EN' | 'DE' | 'LU' | null {
+  const t = ' ' + text.toLowerCase().replace(/[^a-zàâäéèêëïîôöùûüÿœæç\s]/gi, ' ') + ' ';
+  // Mots discriminants courts (entourés d'espaces pour éviter substring fortuit)
+  const markers = {
+    FR: [' le ', ' la ', ' les ', ' de ', ' du ', ' des ', ' un ', ' une ', ' est ', ' pour ', ' bonjour ', ' merci ', ' cordialement ', ' avec ', ' vous ', ' nous ', ' votre ', ' notre ', ' bien ', ' à '],
+    EN: [' the ', ' is ', ' are ', ' for ', ' with ', ' you ', ' your ', ' hello ', ' hi ', ' thanks ', ' regards ', ' best ', ' please ', ' would ', ' could '],
+    DE: [' der ', ' die ', ' das ', ' und ', ' ist ', ' mit ', ' für ', ' wir ', ' sie ', ' ihre ', ' bitte ', ' danke ', ' guten ', ' viele ', ' grüße ', ' freundlichen ', ' hallo ', ' sehr ', ' geehrte ', ' moien '],
+    LU: [' moien ', ' merci ', ' wann ', ' ech ', ' mir ', ' dir ', ' net ', ' fir ', ' awer ', ' hatt ', ' antwerten ', ' farv ', ' gréiss ', ' grouss '],
+  } as const;
+
+  const scores = { FR: 0, EN: 0, DE: 0, LU: 0 } as Record<string, number>;
+  for (const [lang, words] of Object.entries(markers)) {
+    for (const w of words) {
+      // count occurrences
+      let i = 0; let n = 0;
+      while ((i = t.indexOf(w, i)) !== -1) { n++; i += w.length; }
+      scores[lang] += n;
+    }
+  }
+  // Le LU partage beaucoup avec DE — on boost le LU si "moien" présent (très spécifique)
+  if (t.includes(' moien ') || t.includes(' gréiss ')) scores.LU += 5;
+
+  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  if (!best || best[1] < 2) return null; // pas assez de signal
+  return best[0] as 'FR' | 'EN' | 'DE' | 'LU';
+}
+
 async function callClaude(prompt: string, maxTokens = 1024): Promise<string> {
   const key = getAnthropicKey();
   if (!key) throw new Error('No Anthropic API key configured');
@@ -129,7 +162,8 @@ export async function generateQuickReplies(
 
   const isTu = profile?.tonPrefere === 'Amical' ||
     (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
-  const lang = profile?.languePreferee || 'FR';
+  const detectedLang = detectLanguage(body.slice(0, 600)) || profile?.languePreferee || 'FR';
+  const lang = detectedLang;
   const prenom = profile?.prenom || senderName.split(' ')[0] || '';
 
   const prompt = `Tu es un assistant email pour une agence de communication luxembourgeoise (GOOD VIBES).
@@ -140,7 +174,7 @@ Sujet: ${subject}
 Corps: ${body.slice(0, 800)}
 
 Contexte:
-- Repondre en ${lang === 'EN' ? 'anglais' : lang === 'DE' ? 'allemand' : 'francais'}
+- Repondre dans la MEME LANGUE que le mail reçu : ${lang === 'EN' ? 'anglais' : lang === 'DE' ? 'allemand' : lang === 'LU' ? 'luxembourgeois' : 'francais'}
 - ${isTu ? 'Tutoyer' : 'Vouvoyer'} le destinataire (prenom: ${prenom})
 - Ton professionnel mais chaleureux (agence de com)
 - Signer: ${userName}
@@ -167,8 +201,15 @@ export async function generateFreeReply(
 
   const isTu = profile?.tonPrefere === 'Amical' ||
     (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
-  const lang = profile?.languePreferee || 'FR';
   const prenom = profile?.prenom || senderName.split(' ')[0] || '';
+
+  // Détection langue : on prend la langue du DRAFT en priorité (intent
+  // explicite de Charles), sinon celle du MAIL REÇU (auto-match), sinon
+  // le profile, sinon FR. Si profile force une langue qui contredit
+  // l'évidence du mail/draft, on suit le mail (sinon on génère en FR
+  // sur un thread en allemand — bug Charles 2026-05-21).
+  const detectedLang = detectLanguage(`${instruction}\n\n${body.slice(0, 600)}`) || profile?.languePreferee || 'FR';
+  const langLabel = detectedLang === 'EN' ? 'anglais' : detectedLang === 'DE' ? 'allemand' : detectedLang === 'LU' ? 'luxembourgeois' : 'francais';
 
   const prompt = `Tu es ${userName} de GOOD VIBES events & communications (agence de com au Luxembourg).
 Redige une reponse a cet email en suivant l'instruction ci-dessous.
@@ -178,13 +219,13 @@ De: ${senderName}
 Sujet: ${subject}
 Corps: ${body.slice(0, 1200)}
 
-Instruction de ${userName}: "${instruction}"
+Instruction de ${userName} (peut etre dans la langue de la reponse attendue): "${instruction}"
 
-Regles:
-- Langue: ${lang === 'EN' ? 'anglais' : lang === 'DE' ? 'allemand' : 'francais'}
+Regles CRITIQUES :
+- LANGUE DE LA REPONSE : ${langLabel}. Si l'email reçu est dans une langue ET que ${userName} écrit son instruction dans cette même langue, on répond DANS CETTE LANGUE — pas en français par défaut. Détecté ici : ${detectedLang}.
 - ${isTu ? `Tutoyer ${prenom}` : `Vouvoyer ${prenom}`}
 - Ton: professionnel mais chaleureux
-- Inclure salutation et closing
+- Inclure salutation et closing adaptés à la langue
 - Signer: ${userName}, GOOD VIBES events & communications
 - Format: HTML avec <p> tags
 
