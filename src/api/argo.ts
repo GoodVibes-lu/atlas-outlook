@@ -22,13 +22,16 @@ async function callClaude(prompt: string, maxTokens = 1024): Promise<string> {
       'anthropic-dangerous-direct-browser-access': 'true',
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5-20250929',
+      model: 'claude-haiku-4-5',
       max_tokens: maxTokens,
       messages: [{ role: 'user', content: prompt }],
     }),
   });
 
-  if (!res.ok) throw new Error(`Claude API ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Claude API ${res.status}: ${body.slice(0, 200)}`);
+  }
   const data = await res.json();
   return (data.content?.[0]?.text || '').trim();
 }
@@ -267,7 +270,7 @@ ${html}`;
         'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-5-20250929',
+        model: 'claude-sonnet-4-5',
         max_tokens: 1024,
         messages: [{ role: 'user', content: prompt }],
       }),
