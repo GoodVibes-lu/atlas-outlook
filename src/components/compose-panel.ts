@@ -54,13 +54,19 @@ export class ComposePanel {
         <div id="free-reply-section">
           <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
             <span style="font-size:14px;">✨</span>
-            <span class="section-heading" style="margin:0;">Reponse libre IA</span>
+            <span class="section-heading" style="margin:0;">L'IA écrit pour toi</span>
           </div>
-          <div class="form-group" style="margin-bottom:8px;">
-            <textarea class="form-input" id="free-reply-instruction" rows="2" placeholder="Ex: Confirmer la date, demander un devis, proposer un rdv mardi..."></textarea>
+          <div class="form-group" style="margin-bottom:4px;">
+            <textarea class="form-input" id="free-reply-instruction" rows="3" placeholder="Brief court — l'IA déploie en mail complet.
+Ex: 'décline, trop cher, on verra l'an prochain'
+Ex: 'confirme + propose RDV mardi 10h'
+Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
           </div>
+          <p style="font-size:10px;color:var(--atlas-text-muted);margin:0 0 8px;line-height:1.3;">
+            Salutation + langue + tutoiement détectés du mail reçu. Signature gérée par Exclaimer.
+          </p>
           <button class="btn btn-primary btn-block" id="free-reply-btn" style="font-size:13px;">
-            ✨ Generer la reponse
+            ✨ L'IA écrit la réponse
           </button>
           <div id="free-reply-preview" style="display:none; margin-top:10px;">
             <div class="section-heading" style="font-size:10px;">APERCU</div>

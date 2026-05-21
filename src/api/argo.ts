@@ -272,45 +272,47 @@ export async function generateFreeReply(
     (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
   const isTu = detectedTu !== null ? detectedTu : profileTu;
 
-  const prompt = `Tu es l'éditeur des emails de ${userName} (GOOD VIBES events & communications, agence de com au Luxembourg).
+  const hasInstruction = instruction.trim().length > 0;
+  const prompt = `Tu écris à la place de ${userName} (GOOD VIBES events & communications, agence de com au Luxembourg) une réponse complète et professionnelle à l'email ci-dessous.
 
-Ton job : prendre le brouillon brut de ${userName} ci-dessous et le POLIR pour qu'il soit prêt à envoyer. Garde l'INTENTION et le TON de l'auteur, n'invente pas de contenu, ne reformule pas tout — corrige juste :
-  • Fautes d'orthographe / grammaire / ponctuation
-  • Tournures maladroites ou trop télégraphiques
-  • Ajoute une salutation d'ouverture (Hallo Luca, / Salut X, etc) si absente
-  • Améliore le flow si nécessaire (sans changer le sens)
-  • Garde la même longueur ± 30%, pas de blabla supplémentaire
-
-Email reçu (contexte uniquement, pour comprendre la conversation) :
+Email reçu :
 De: ${senderName}
 Sujet: ${subject}
-${body.slice(0, 800)}
+"""
+${body.slice(0, 1500)}
+"""
 
-BROUILLON DE ${userName} À POLIR :
+${hasInstruction ? `INTENTION DE ${userName} (brief, peut être très court / télégraphique / dans n'importe quelle langue) :
 """
 ${instruction}
 """
 
+Ton job : transformer cette intention en réponse email complète et bien rédigée. Si l'intention est courte (ex: "décline poliment, trop cher, on verra l'an prochain"), tu déploies en mail bien tourné. Si l'intention est déjà presque complète, polis et améliore les tournures. Tu peux ajouter une phrase d'introduction polie ("Vielen Dank für deine Zeit und das interessante Angebot...") et un mot de transition naturel.` : `Pas d'intention spécifique de ${userName}. Compose une réponse polie et appropriée selon le contexte du mail reçu : acquiescement, demande de précision, accusé réception, etc. Reste prudent — ne prends pas d'engagement (prix, dates, validation) sans instruction explicite. Privilégie une réponse type "merci, je reviens vers toi rapidement avec ma réponse".`}
+
 Règles CRITIQUES :
-- LANGUE : ${langLabel}. Détecté : ${detectedLang}. La réponse doit être DANS CETTE LANGUE.
-- FORME D'ADRESSE : ${isTu ? `TUTOIEMENT (du/tu/hi informel) — ${prenom} et ${userName} se tutoient.` : `VOUVOIEMENT (vous/Sie/Dear).`}
-- SALUTATION D'OUVERTURE :
+- LANGUE : ${langLabel}. Détecté : ${detectedLang}. La réponse doit être DANS CETTE LANGUE (pas en français par défaut).
+- FORME D'ADRESSE : ${isTu ? `TUTOIEMENT (du/tu informel) — ${prenom} et ${userName} se tutoient dans ce thread.` : `VOUVOIEMENT (vous/Sie/Dear) — adresse formelle.`}
+- SALUTATION D'OUVERTURE OBLIGATOIRE :
 ${isTu && detectedLang === 'DE' ? `  → "Hallo ${prenom},"` : ''}
 ${isTu && detectedLang === 'FR' ? `  → "Salut ${prenom},"` : ''}
 ${isTu && detectedLang === 'EN' ? `  → "Hi ${prenom},"` : ''}
 ${!isTu && detectedLang === 'DE' ? `  → "Sehr geehrte/r ${prenom},"` : ''}
 ${!isTu && detectedLang === 'FR' ? `  → "Bonjour ${prenom},"` : ''}
 ${!isTu && detectedLang === 'EN' ? `  → "Dear ${prenom},"` : ''}
+- TON : chaleureux et professionnel (agence de com). Pas robotique.
+- LONGUEUR : 3-6 phrases. Ni télégraphique ni roman. Phrase d'ouverture polie + cœur du message + transition de fin sobre (sans formule de politesse).
 
 ⛔ INTERDIT — NE JAMAIS AJOUTER :
-- Closing/signature ("Viele Grüße / Bien à toi / Best regards / Cordialement")
+- Closing / formule de politesse finale ("Viele Grüße", "Bien à toi", "Best regards", "Cordialement", "Mit freundlichen Grüßen", "Bien à vous")
 - Nom de ${userName}
 - "GOOD VIBES events & communications"
-- Logo, contact, footer
+- Logo, contact, footer, téléphone, adresse
 
-Ces éléments sont gérés par Exclaimer (signature corporate auto). Si tu les ajoutes, ils seront DUPLIQUÉS dans le mail envoyé. La réponse DOIT se terminer sur la dernière phrase du corps, sans formule de fin.
+Ces éléments sont gérés AUTOMATIQUEMENT par Exclaimer (signature corporate ajoutée à l'envoi). Si tu les ajoutes ici, ils seront DUPLIQUÉS dans le mail final.
 
-Format de sortie : HTML avec <p> tags. UNIQUEMENT le HTML, sans markdown, sans commentaires.`;
+La réponse DOIT se terminer sur la dernière phrase du cœur du message — exemple en allemand : "...Wir kommen im neuen Jahr gerne auf dich zurück." → STOP. Pas de "Viele Grüße" après.
+
+Format : HTML avec <p> tags. UNIQUEMENT le HTML, sans markdown, sans commentaires meta.`;
 
   const raw = await callClaude(prompt, 1500);
   return raw.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
