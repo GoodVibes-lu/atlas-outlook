@@ -391,7 +391,10 @@ export class IAPanel {
     if (action === 'open-create-folder') {
       this.folderPickerCreateMode = true;
       this.folderPickerNewPath = this.folderPickerQuery || ''; // reuse search query as default
+      this.folderPickerSuggestingAI = true;
       this.render();
+      // Lance la suggestion IA en background
+      this.fetchAIFolderSuggestion().catch(() => {});
       return;
     }
     if (action === 'create-folder-cancel') {
@@ -735,6 +738,7 @@ export class IAPanel {
   private folderPickerSelectedPath = '';
   private folderPickerCreateMode = false;
   private folderPickerNewPath = '';
+  private folderPickerSuggestingAI = false; // loading state pendant l'appel Claude
 
   private renderFolderPicker(): string {
     const folders = this.allFoldersCache || [];
@@ -753,20 +757,28 @@ export class IAPanel {
       .filter((f) => !q || f.path.toLowerCase().includes(q))
       .slice(0, 100); // limit display à 100 max pour perf
 
-    // Mode CRÉATION : input pour le nom du nouveau dossier
+    // Mode CRÉATION : input pour le nom du nouveau dossier + suggestion IA
     if (this.folderPickerCreateMode) {
+      const aiHint = this.folderPickerSuggestingAI
+        ? `<div style="font-size: 10px; color: #9a3412; margin-bottom: 6px; font-style: italic;">⏳ Claude analyse ta structure de dossiers…</div>`
+        : this.folderPickerNewPath
+        ? `<div style="font-size: 10px; color: #047857; margin-bottom: 6px;">✨ Suggéré par Claude (basé sur tes dossiers existants). Tu peux éditer.</div>`
+        : '';
       return `
         <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; margin-top: 6px;">
           <div style="font-size: 10px; font-weight: 700; color: #9a3412; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">➕ Créer un nouveau dossier</div>
+          ${aiHint}
           <input type="text" id="folder-picker-new-path" placeholder="Ex: Clients/Vossloh — ou juste 'Vossloh'"
             value="${escapeHtml(this.folderPickerNewPath)}"
-            style="width: 100%; padding: 8px; border: 1px solid #fed7aa; border-radius: 4px; font-size: 12px; margin-bottom: 6px; box-sizing: border-box;" />
+            ${this.folderPickerSuggestingAI ? 'disabled' : ''}
+            style="width: 100%; padding: 8px; border: 1px solid #fed7aa; border-radius: 4px; font-size: 12px; margin-bottom: 6px; box-sizing: border-box; ${this.folderPickerSuggestingAI ? 'background: #fef3c7; color: #94a3b8;' : ''}" />
           <p style="font-size: 10px; color: #9a3412; margin: 0 0 8px; line-height: 1.4;">
             Tu peux créer un dossier imbriqué avec "/" (ex: Clients/Vossloh/2026).
             Les niveaux manquants seront créés.
           </p>
           <div style="display: flex; gap: 6px;">
-            <button data-action="create-folder-confirm" style="flex: 1; padding: 6px; background: #ea580c; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: pointer;">Créer + utiliser</button>
+            <button data-action="create-folder-confirm" ${this.folderPickerSuggestingAI ? 'disabled' : ''}
+              style="flex: 1; padding: 6px; background: ${this.folderPickerSuggestingAI ? '#fed7aa' : '#ea580c'}; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: ${this.folderPickerSuggestingAI ? 'wait' : 'pointer'};">Créer + utiliser</button>
             <button data-action="create-folder-cancel" style="padding: 6px 10px; background: #e2e8f0; color: #334155; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">Annuler</button>
           </div>
         </div>
@@ -1269,6 +1281,44 @@ export class IAPanel {
       await setMessageCategories(restId, cats);
     } catch (e) {
       console.warn('[IAPanel] setMessageCategories failed:', e);
+    }
+  }
+
+  /**
+   * Appelle Claude pour suggérer un path de dossier cohérent avec la
+   * structure existante. Pre-fill du champ création.
+   */
+  private async fetchAIFolderSuggestion(): Promise<void> {
+    try {
+      const item = Office.context.mailbox?.item as any;
+      if (!item) { this.folderPickerSuggestingAI = false; this.render(); return; }
+      const senderName = item.from?.displayName || '';
+      const senderEmail = item.from?.emailAddress || '';
+      const subject = item.subject || '';
+
+      // S'assure que le cache des dossiers est chargé
+      if (!this.allFoldersCache || this.allFoldersCache.length === 0) {
+        await this.loadAllFolders();
+      }
+
+      const { suggestFolderPath } = await import('../api/argo');
+      const suggested = await suggestFolderPath({
+        existingFolders: (this.allFoldersCache || []).map((f) => f.path),
+        iaCategory: this.tag?.category,
+        iaCategoryLabel: this.tag?.category ? (CATEGORY_LABELS[this.tag.category] || this.tag.category) : undefined,
+        senderName,
+        senderEmail,
+        subject,
+        summary: this.tag?.summary,
+      });
+      if (suggested && this.folderPickerCreateMode) {
+        this.folderPickerNewPath = suggested;
+      }
+    } catch (e) {
+      console.warn('[IAPanel] fetchAIFolderSuggestion failed:', e);
+    } finally {
+      this.folderPickerSuggestingAI = false;
+      this.render();
     }
   }
 

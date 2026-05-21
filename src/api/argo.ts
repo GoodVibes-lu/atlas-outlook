@@ -15,6 +15,68 @@ function getAnthropicKey(): string {
  * Pas de dépendance externe. Suffit pour distinguer FR/EN/DE/LU dans nos
  * mails business.
  */
+/**
+ * Suggère un chemin de dossier cohérent avec la structure existante.
+ * Claude reçoit :
+ *   - La liste des dossiers existants (top-levels + samples niveaux 2)
+ *   - Le contexte du mail (catégorie IA, sender, sujet, résumé)
+ * Et propose un path type "Clients/Vossloh" ou "Markcom/2026" qui suit la
+ * logique de classement utilisée par l'utilisateur.
+ */
+export async function suggestFolderPath(args: {
+  existingFolders: string[]; // ex: ['Administration', 'Administration/Bureau', 'Markcom', 'Clients/Niessen', ...]
+  iaCategory?: string;        // ex: 'demande_devis'
+  iaCategoryLabel?: string;   // ex: '💼 Demande devis'
+  senderName: string;         // ex: 'Aline Fontana'
+  senderEmail: string;        // ex: 'aline.fontana@emotion.lu'
+  subject: string;            // ex: 'RE: Devis Vossloh BBQ'
+  summary?: string;           // ex: 'Vossloh demande un devis...'
+}): Promise<string> {
+  const key = getAnthropicKey();
+  if (!key) return '';
+
+  // Limite à 150 dossiers pour économiser tokens
+  const folders = args.existingFolders.slice(0, 150).join('\n');
+
+  const prompt = `Tu es un assistant qui classe les emails dans les dossiers Outlook d'un utilisateur.
+
+DOSSIERS EXISTANTS de l'utilisateur (sa structure de classement actuelle) :
+${folders}
+
+NOUVEAU MAIL à ranger :
+- Catégorie IA : ${args.iaCategoryLabel || args.iaCategory || 'autre'}
+- Expéditeur : ${args.senderName} <${args.senderEmail}>
+- Sujet : ${args.subject}
+${args.summary ? `- Résumé : ${args.summary}` : ''}
+
+TÂCHE : Propose UN chemin de dossier qui suit la LOGIQUE EXISTANTE de l'utilisateur.
+
+Règles :
+1. Si l'utilisateur a déjà un dossier parent qui colle (ex: "Clients" pour les mails clients, "Markcom" pour com, "Administration" pour admin), utilise CE parent.
+2. Le leaf doit être un nom clair et court (souvent le nom de la société/client/projet — pas le nom de l'expéditeur).
+3. Si aucun parent ne colle, propose un nouveau dossier racine cohérent avec le style des autres (capitalisation, casse, longueur).
+4. Maximum 3 niveaux de profondeur. Préfère 2 niveaux (Parent/Leaf).
+5. JAMAIS de caractères spéciaux qui posent problème en filesystem (\\, :, *, ?, <, >, |, ").
+
+Retourne UNIQUEMENT le path, sans explication, sans guillemets, sans markdown.
+Exemple de réponse : Clients/Vossloh`;
+
+  try {
+    const raw = await callClaude(prompt, 100);
+    // Nettoie : virer guillemets, backticks, retours ligne, espaces multiples
+    const clean = raw
+      .replace(/^['"`]+|['"`]+$/g, '')
+      .replace(/[\r\n]+/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/[\\:*?<>|]/g, '')
+      .trim();
+    return clean.slice(0, 200);
+  } catch (e) {
+    console.warn('[argo] suggestFolderPath failed:', e);
+    return '';
+  }
+}
+
 export function detectLanguage(text: string): 'FR' | 'EN' | 'DE' | 'LU' | null {
   const t = ' ' + text.toLowerCase().replace(/[^a-zàâäéèêëïîôöùûüÿœæç\s]/gi, ' ') + ' ';
   // Mots discriminants courts (entourés d'espaces pour éviter substring fortuit)
