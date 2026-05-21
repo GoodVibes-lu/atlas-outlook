@@ -233,7 +233,8 @@ Contexte:
 - Repondre dans la MEME LANGUE que le mail reçu : ${lang === 'EN' ? 'anglais' : lang === 'DE' ? 'allemand' : lang === 'LU' ? 'luxembourgeois' : 'francais'}
 - ${isTu ? 'Tutoyer' : 'Vouvoyer'} le destinataire (prenom: ${prenom})
 - Ton professionnel mais chaleureux (agence de com)
-- Signer: ${userName}
+- INTERDIT : ne JAMAIS ajouter de signature, nom ${userName}, "GOOD VIBES" ou closing ("Viele Grüße/Cordialement/Best regards"). Exclaimer gère la signature corporate automatiquement, sinon doublon dans le mail envoyé.
+- La réponse DOIT se terminer sur la dernière phrase du corps, sans formule de fin.
 
 Retourne un JSON array de 3 objets: [{"label": "2-3 mots max (emoji + description)", "tone": "positif|neutre|formel", "body": "le HTML de la reponse complete avec <p> tags, salutation et closing inclus"}]
 
@@ -271,31 +272,45 @@ export async function generateFreeReply(
     (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
   const isTu = detectedTu !== null ? detectedTu : profileTu;
 
-  const prompt = `Tu es ${userName} de GOOD VIBES events & communications (agence de com au Luxembourg).
-Redige une reponse a cet email en suivant l'instruction ci-dessous.
+  const prompt = `Tu es l'éditeur des emails de ${userName} (GOOD VIBES events & communications, agence de com au Luxembourg).
 
-Email recu:
+Ton job : prendre le brouillon brut de ${userName} ci-dessous et le POLIR pour qu'il soit prêt à envoyer. Garde l'INTENTION et le TON de l'auteur, n'invente pas de contenu, ne reformule pas tout — corrige juste :
+  • Fautes d'orthographe / grammaire / ponctuation
+  • Tournures maladroites ou trop télégraphiques
+  • Ajoute une salutation d'ouverture (Hallo Luca, / Salut X, etc) si absente
+  • Améliore le flow si nécessaire (sans changer le sens)
+  • Garde la même longueur ± 30%, pas de blabla supplémentaire
+
+Email reçu (contexte uniquement, pour comprendre la conversation) :
 De: ${senderName}
 Sujet: ${subject}
-Corps: ${body.slice(0, 1200)}
+${body.slice(0, 800)}
 
-Instruction de ${userName} (peut etre dans la langue de la reponse attendue): "${instruction}"
+BROUILLON DE ${userName} À POLIR :
+"""
+${instruction}
+"""
 
-Regles CRITIQUES :
-- LANGUE DE LA REPONSE : ${langLabel}. Détecté : ${detectedLang}. Réponds DANS CETTE LANGUE, pas en français par défaut.
-- FORME D'ADRESSE : ${isTu ? `TUTOIEMENT — ${prenom} et ${userName} se tutoient dans ce thread. Utiliser "tu/du/you informal" selon la langue. JAMAIS de "vous/Sie/Dear Mr".` : `VOUVOIEMENT — adresse formelle requise (vous/Sie/Dear ${prenom}).`}
-- Ton: professionnel mais chaleureux
-- Inclure salutation et closing adaptés à la langue ET au tutoiement :
-  ${isTu && detectedLang === 'DE' ? '→ "Hallo ${prenom}," / "Viele Grüße"' : ''}
-  ${isTu && detectedLang === 'FR' ? '→ "Salut ${prenom}," / "Bien à toi"' : ''}
-  ${isTu && detectedLang === 'EN' ? '→ "Hi ${prenom}," / "Cheers" ou "Best"' : ''}
-  ${!isTu && detectedLang === 'DE' ? '→ "Sehr geehrte/r ${prenom}," / "Mit freundlichen Grüßen"' : ''}
-  ${!isTu && detectedLang === 'FR' ? '→ "Bonjour ${prenom}," / "Bien à vous"' : ''}
-  ${!isTu && detectedLang === 'EN' ? '→ "Dear ${prenom}," / "Kind regards"' : ''}
-- Signer: ${userName}, GOOD VIBES events & communications
-- Format: HTML avec <p> tags
+Règles CRITIQUES :
+- LANGUE : ${langLabel}. Détecté : ${detectedLang}. La réponse doit être DANS CETTE LANGUE.
+- FORME D'ADRESSE : ${isTu ? `TUTOIEMENT (du/tu/hi informel) — ${prenom} et ${userName} se tutoient.` : `VOUVOIEMENT (vous/Sie/Dear).`}
+- SALUTATION D'OUVERTURE :
+${isTu && detectedLang === 'DE' ? `  → "Hallo ${prenom},"` : ''}
+${isTu && detectedLang === 'FR' ? `  → "Salut ${prenom},"` : ''}
+${isTu && detectedLang === 'EN' ? `  → "Hi ${prenom},"` : ''}
+${!isTu && detectedLang === 'DE' ? `  → "Sehr geehrte/r ${prenom},"` : ''}
+${!isTu && detectedLang === 'FR' ? `  → "Bonjour ${prenom},"` : ''}
+${!isTu && detectedLang === 'EN' ? `  → "Dear ${prenom},"` : ''}
 
-Retourne UNIQUEMENT le HTML, sans markdown.`;
+⛔ INTERDIT — NE JAMAIS AJOUTER :
+- Closing/signature ("Viele Grüße / Bien à toi / Best regards / Cordialement")
+- Nom de ${userName}
+- "GOOD VIBES events & communications"
+- Logo, contact, footer
+
+Ces éléments sont gérés par Exclaimer (signature corporate auto). Si tu les ajoutes, ils seront DUPLIQUÉS dans le mail envoyé. La réponse DOIT se terminer sur la dernière phrase du corps, sans formule de fin.
+
+Format de sortie : HTML avec <p> tags. UNIQUEMENT le HTML, sans markdown, sans commentaires.`;
 
   const raw = await callClaude(prompt, 1500);
   return raw.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
