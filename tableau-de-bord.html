@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ATLAS · Ma journée</title>
+  <!--
+    Tableau de bord de l'agent d'inbox dans la barre de gauche d'Outlook (nouvel Outlook Windows,
+    web, Mac à confirmer) : onglet personnel de l'application Microsoft 365 « ATLAS »
+    (teams-app/manifest.json, contentUrl). Pas d'Office.js ici : l'hôte est celui des applications
+    Teams / Microsoft 365, d'où TeamsJS (connexion automatique, ouverture des liens, thème).
+    Version de TeamsJS à vérifier au moment de la publication (CDN Microsoft).
+  -->
+  <script src="https://res.cdn.office.net/teams-js/2.22.0/js/MicrosoftTeams.min.js"></script>
+  <link rel="stylesheet" href="src/styles.css" />
+</head>
+<body class="tdb">
+  <div id="app">
+    <div class="loading">
+      <div class="spinner"></div>
+      <p>Chargement d'ATLAS...</p>
+    </div>
+  </div>
+  <script type="module" src="src/tableau-de-bord.ts"></script>
+</body>
+</html>

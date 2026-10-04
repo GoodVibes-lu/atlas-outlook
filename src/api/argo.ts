@@ -1,27 +1,18 @@
 /**
- * ARGO AI client for ATLAS Outlook Add-in
- * Email analysis + tone adaptation via Claude API
+ * ARGO pour le complément Outlook ATLAS : analyse de mail et adaptation de ton.
+ *
+ * Depuis le 03/10/2026, toute génération IA passe par le worker (`/api/plugin/atlas/ai/*`) et
+ * l'Agency Brain (journal des coûts, plafond, cache) : le complément ne détient plus de clé
+ * Anthropic et n'appelle plus l'API en direct. Les prompts sont construits côté worker
+ * (worker/portal-api/routes/plugin-atlas.ts) ; ici on n'envoie que des données structurées.
  */
 
 import type { ArgoProfile } from '../types';
-
-function getAnthropicKey(): string {
-  return localStorage.getItem('atlas_addin_anthropic_key') || '';
-}
+import { callAtlasWorker } from './worker';
 
 /**
- * Détection rapide de langue par scoring sur mots-clés fréquents.
- * Retourne 'FR' | 'EN' | 'DE' | 'LU' | null (si aucun signal).
- * Pas de dépendance externe. Suffit pour distinguer FR/EN/DE/LU dans nos
- * mails business.
- */
-/**
- * Suggère un chemin de dossier cohérent avec la structure existante.
- * Claude reçoit :
- *   - La liste des dossiers existants (top-levels + samples niveaux 2)
- *   - Le contexte du mail (catégorie IA, sender, sujet, résumé)
- * Et propose un path type "Clients/Vossloh" ou "Markcom/2026" qui suit la
- * logique de classement utilisée par l'utilisateur.
+ * Suggère un chemin de dossier cohérent avec la structure existante de l'utilisateur
+ * (ex. « Clients/Vossloh »). Chaîne vide si l'IA est indisponible.
  */
 export async function suggestFolderPath(args: {
   existingFolders: string[]; // ex: ['Administration', 'Administration/Bureau', 'Markcom', 'Clients/Niessen', ...]
@@ -32,157 +23,16 @@ export async function suggestFolderPath(args: {
   subject: string;            // ex: 'RE: Devis Vossloh BBQ'
   summary?: string;           // ex: 'Vossloh demande un devis...'
 }): Promise<string> {
-  const key = getAnthropicKey();
-  if (!key) return '';
-
-  // Limite à 150 dossiers pour économiser tokens
-  const folders = args.existingFolders.slice(0, 150).join('\n');
-
-  const prompt = `Tu es un assistant qui classe les emails dans les dossiers Outlook d'un utilisateur.
-
-DOSSIERS EXISTANTS de l'utilisateur (sa structure de classement actuelle) :
-${folders}
-
-NOUVEAU MAIL à ranger :
-- Catégorie IA : ${args.iaCategoryLabel || args.iaCategory || 'autre'}
-- Expéditeur : ${args.senderName} <${args.senderEmail}>
-- Sujet : ${args.subject}
-${args.summary ? `- Résumé : ${args.summary}` : ''}
-
-TÂCHE : Propose UN chemin de dossier qui suit la LOGIQUE EXISTANTE de l'utilisateur.
-
-Règles :
-1. Si l'utilisateur a déjà un dossier parent qui colle (ex: "Clients" pour les mails clients, "Markcom" pour com, "Administration" pour admin), utilise CE parent.
-2. Le leaf doit être un nom clair et court (souvent le nom de la société/client/projet — pas le nom de l'expéditeur).
-3. Si aucun parent ne colle, propose un nouveau dossier racine cohérent avec le style des autres (capitalisation, casse, longueur).
-4. Maximum 3 niveaux de profondeur. Préfère 2 niveaux (Parent/Leaf).
-5. JAMAIS de caractères spéciaux qui posent problème en filesystem (\\, :, *, ?, <, >, |, ").
-
-Retourne UNIQUEMENT le path, sans explication, sans guillemets, sans markdown.
-Exemple de réponse : Clients/Vossloh`;
-
   try {
-    const raw = await callClaude(prompt, 100);
-    // Nettoie : virer guillemets, backticks, retours ligne, espaces multiples
-    const clean = raw
-      .replace(/^['"`]+|['"`]+$/g, '')
-      .replace(/[\r\n]+/g, '')
-      .replace(/\s{2,}/g, ' ')
-      .replace(/[\\:*?<>|]/g, '')
-      .trim();
-    return clean.slice(0, 200);
+    const r = await callAtlasWorker<{ path?: string }>('ai/folder-path', {
+      ...args,
+      existingFolders: args.existingFolders.slice(0, 150),
+    });
+    return String(r.path || '').slice(0, 200);
   } catch (e) {
     console.warn('[argo] suggestFolderPath failed:', e);
     return '';
   }
-}
-
-export function detectLanguage(text: string): 'FR' | 'EN' | 'DE' | 'LU' | null {
-  const t = ' ' + text.toLowerCase().replace(/[^a-zàâäéèêëïîôöùûüÿœæç\s]/gi, ' ') + ' ';
-  // Mots discriminants courts (entourés d'espaces pour éviter substring fortuit)
-  const markers = {
-    FR: [' le ', ' la ', ' les ', ' de ', ' du ', ' des ', ' un ', ' une ', ' est ', ' pour ', ' bonjour ', ' merci ', ' cordialement ', ' avec ', ' vous ', ' nous ', ' votre ', ' notre ', ' bien ', ' à '],
-    EN: [' the ', ' is ', ' are ', ' for ', ' with ', ' you ', ' your ', ' hello ', ' hi ', ' thanks ', ' regards ', ' best ', ' please ', ' would ', ' could '],
-    DE: [' der ', ' die ', ' das ', ' und ', ' ist ', ' mit ', ' für ', ' wir ', ' sie ', ' ihre ', ' bitte ', ' danke ', ' guten ', ' viele ', ' grüße ', ' freundlichen ', ' hallo ', ' sehr ', ' geehrte ', ' moien '],
-    LU: [' moien ', ' merci ', ' wann ', ' ech ', ' mir ', ' dir ', ' net ', ' fir ', ' awer ', ' hatt ', ' antwerten ', ' farv ', ' gréiss ', ' grouss '],
-  } as const;
-
-  const scores = { FR: 0, EN: 0, DE: 0, LU: 0 } as Record<string, number>;
-  for (const [lang, words] of Object.entries(markers)) {
-    for (const w of words) {
-      // count occurrences
-      let i = 0; let n = 0;
-      while ((i = t.indexOf(w, i)) !== -1) { n++; i += w.length; }
-      scores[lang] += n;
-    }
-  }
-  // Le LU partage beaucoup avec DE — on boost le LU si "moien" présent (très spécifique)
-  if (t.includes(' moien ') || t.includes(' gréiss ')) scores.LU += 5;
-
-  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
-  if (!best || best[1] < 2) return null; // pas assez de signal
-  return best[0] as 'FR' | 'EN' | 'DE' | 'LU';
-}
-
-/**
- * Détecte si le mail / draft est en tutoiement (informel) ou vouvoiement.
- * Heuristique par scoring de markers :
- *   FR : "tu/ton/ta/tes/te" / "salut" → tu | "vous/votre/cordialement" → vous
- *   DE : "du/dein/dir/dich" / "hallo/hi/lieber" → tu | "Sie/Ihre/sehr geehrte" → vous
- *   EN : "hi <prenom>" / "hey" → tu | "Dear Mr/Mrs" → vous
- *   LU : "du/äis/säi" → tu | (rarement vouvoiement)
- * Retourne true si tutoiement, false si vouvoiement, null si pas de signal.
- */
-export function detectTutoiement(text: string, lang: 'FR' | 'EN' | 'DE' | 'LU' | null): boolean | null {
-  const t = ' ' + text.toLowerCase().replace(/[^a-zàâäéèêëïîôöùûüÿœæçß\s]/gi, ' ') + ' ';
-  let scoreTu = 0;
-  let scoreVous = 0;
-
-  // FR
-  if (!lang || lang === 'FR') {
-    for (const m of [' tu ', ' ton ', ' ta ', ' tes ', ' te ', ' t\'', ' salut ', ' coucou ', ' bisous ', ' bises ']) {
-      if (t.includes(m)) scoreTu += m === ' tu ' ? 3 : 1;
-    }
-    for (const m of [' vous ', ' votre ', ' vos ', ' cordialement ', ' madame ', ' monsieur ', ' bien à vous ']) {
-      if (t.includes(m)) scoreVous += m === ' vous ' ? 3 : 1;
-    }
-  }
-  // DE
-  if (!lang || lang === 'DE') {
-    for (const m of [' du ', ' dein ', ' deine ', ' deinen ', ' dir ', ' dich ', ' hallo ', ' hi ', ' lieber ', ' liebe ', ' viele grüße ']) {
-      if (t.includes(m)) scoreTu += m === ' du ' ? 3 : 1;
-    }
-    // 'Sie' en majuscule = vouvoiement DE, mais on travaille en lowercase →
-    // marker 'sehr geehrte' / 'ihnen' / 'ihre' (avec Maj on lowercase ça reste)
-    for (const m of [' ihnen ', ' ihre ', ' ihren ', ' sehr geehrte ', ' freundlichen grüßen ', ' mit freundlichen ']) {
-      if (t.includes(m)) scoreVous += 2;
-    }
-  }
-  // EN
-  if (!lang || lang === 'EN') {
-    for (const m of [' hi ', ' hey ', ' cheers ', ' thanks ', ' xoxo ']) {
-      if (t.includes(m)) scoreTu += 1;
-    }
-    for (const m of [' dear mr ', ' dear mrs ', ' dear ms ', ' sincerely ', ' kindly ', ' to whom it may concern ']) {
-      if (t.includes(m)) scoreVous += 2;
-    }
-  }
-  // LU — généralement tutoiement par défaut
-  if (lang === 'LU') {
-    for (const m of [' du ', ' däi ', ' deng ', ' moien ', ' gréiss ']) {
-      if (t.includes(m)) scoreTu += 1;
-    }
-  }
-
-  if (scoreTu === 0 && scoreVous === 0) return null;
-  return scoreTu > scoreVous;
-}
-
-async function callClaude(prompt: string, maxTokens = 1024): Promise<string> {
-  const key = getAnthropicKey();
-  if (!key) throw new Error('No Anthropic API key configured');
-
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': key,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-haiku-4-5',
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Claude API ${res.status}: ${body.slice(0, 200)}`);
-  }
-  const data = await res.json();
-  return (data.content?.[0]?.text || '').trim();
 }
 
 // ── Email Analysis ──
@@ -199,17 +49,12 @@ export interface EmailAnalysis {
 export async function analyzeEmailForProjet(
   subject: string, fromName: string, fromEmail: string, bodyPreview: string
 ): Promise<EmailAnalysis> {
-  const prompt = `Analyse cet email pour en extraire les infos projet/événement. Retourne un JSON avec les champs: denomination, client, typeEvenement, debut (YYYY-MM-DD), lieu, descriptif. Sois concis.
-
-De: ${fromName} <${fromEmail}>
-Sujet: ${subject}
-Aperçu: ${bodyPreview?.slice(0, 500)}
-
-Retourne UNIQUEMENT le JSON, sans markdown.`;
-
   try {
-    const raw = await callClaude(prompt, 512);
-    return JSON.parse(raw.replace(/```json?\s*\n?/i, '').replace(/\n?```\s*$/i, ''));
+    const r = await callAtlasWorker<{ analysis?: Partial<EmailAnalysis> }>('ai/projet-extract', {
+      subject, fromName, fromEmail, bodyPreview: (bodyPreview || '').slice(0, 500),
+    });
+    const a = r.analysis || {};
+    return { ...a, denomination: a.denomination || subject, client: a.client || fromName };
   } catch {
     return { denomination: subject, client: fromName };
   }
@@ -220,45 +65,25 @@ Retourne UNIQUEMENT le JSON, sans markdown.`;
 export async function analyzeReceivedEmail(
   subject: string, body: string, senderName: string
 ): Promise<{ sentiment: string; urgence: string; tonUtilise: string; suggestions: string[] }> {
-  const key = getAnthropicKey();
-  if (!key) return { sentiment: 'neutre', urgence: 'normal', tonUtilise: 'professionnel', suggestions: [] };
-
-  const prompt = `Analyse cet email reçu pour déterminer le ton de la réponse appropriée.
-
-De: ${senderName}
-Sujet: ${subject}
-Corps: ${body.slice(0, 800)}
-
-Retourne un JSON avec:
-- sentiment: "positif" | "neutre" | "négatif" | "urgent"
-- urgence: "faible" | "normal" | "élevé" | "critique"
-- tonUtilise: "tutoyé" | "vouvoyé" | "mixte" | "formel" | "informel"
-- suggestions: [3 phrases-clés à inclure dans la réponse]
-
-UNIQUEMENT le JSON, sans markdown.`;
-
+  const fallback = { sentiment: 'neutre', urgence: 'normal', tonUtilise: 'professionnel', suggestions: [] as string[] };
   try {
-    const raw = await callClaude(prompt, 512);
-    return JSON.parse(raw.replace(/```json?\s*\n?/i, '').replace(/\n?```\s*$/i, ''));
+    const r = await callAtlasWorker<{ analysis?: typeof fallback }>('ai/tone', {
+      subject, body: (body || '').slice(0, 800), senderName,
+    });
+    return r.analysis || fallback;
   } catch {
-    return { sentiment: 'neutre', urgence: 'normal', tonUtilise: 'professionnel', suggestions: [] };
+    return fallback;
   }
 }
 
 // ── Email Summary ──
 
 export async function summarizeEmail(subject: string, body: string, senderName: string): Promise<string> {
-  const key = getAnthropicKey();
-  if (!key) return '';
-
-  const prompt = `Resume cet email en 2-3 lignes concises et utiles pour un gestionnaire de projet. Mentionne l'action demandee s'il y en a une. Pas de guillemets, pas de prefixe "Resume:", juste le texte.
-
-De: ${senderName}
-Sujet: ${subject}
-Corps: ${body.slice(0, 1500)}`;
-
   try {
-    return await callClaude(prompt, 200);
+    const r = await callAtlasWorker<{ summary?: string }>('ai/summary', {
+      subject, body: (body || '').slice(0, 1500), senderName,
+    });
+    return r.summary || '';
   } catch { return ''; }
 }
 
@@ -273,39 +98,11 @@ export interface QuickReplySuggestion {
 export async function generateQuickReplies(
   subject: string, body: string, senderName: string, profile: ArgoProfile | null, userName: string
 ): Promise<QuickReplySuggestion[]> {
-  const key = getAnthropicKey();
-  if (!key) return [];
-
-  const detectedLang: 'FR' | 'EN' | 'DE' | 'LU' = (detectLanguage(body.slice(0, 800)) || (profile?.languePreferee as any) || 'FR');
-  const lang = detectedLang;
-  const detectedTu = detectTutoiement(body.slice(0, 800), detectedLang);
-  const profileTu = profile?.tonPrefere === 'Amical' ||
-    (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
-  const isTu = detectedTu !== null ? detectedTu : profileTu;
-  const prenom = profile?.prenom || senderName.split(' ')[0] || '';
-
-  const prompt = `Tu es un assistant email pour une agence de communication luxembourgeoise (GOOD VIBES).
-Genere exactement 3 reponses courtes et naturelles a cet email.
-
-De: ${senderName}
-Sujet: ${subject}
-Corps: ${body.slice(0, 800)}
-
-Contexte:
-- Repondre dans la MEME LANGUE que le mail reçu : ${lang === 'EN' ? 'anglais' : lang === 'DE' ? 'allemand' : lang === 'LU' ? 'luxembourgeois' : 'francais'}
-- ${isTu ? 'Tutoyer' : 'Vouvoyer'} le destinataire (prenom: ${prenom})
-- Ton professionnel mais chaleureux (agence de com)
-- INTERDIT : ne JAMAIS ajouter de signature, nom ${userName}, "GOOD VIBES" ou closing ("Viele Grüße/Cordialement/Best regards"). Exclaimer gère la signature corporate automatiquement, sinon doublon dans le mail envoyé.
-- La réponse DOIT se terminer sur la dernière phrase du corps, sans formule de fin.
-
-Retourne un JSON array de 3 objets: [{"label": "2-3 mots max (emoji + description)", "tone": "positif|neutre|formel", "body": "le HTML de la reponse complete avec <p> tags, salutation et closing inclus"}]
-
-UNIQUEMENT le JSON, sans markdown.`;
-
   try {
-    const raw = await callClaude(prompt, 1500);
-    const parsed = JSON.parse(raw.replace(/```json?\s*\n?/i, '').replace(/\n?```\s*$/i, ''));
-    return Array.isArray(parsed) ? parsed.slice(0, 3) : [];
+    const r = await callAtlasWorker<{ replies?: QuickReplySuggestion[] }>('ai/quick-replies', {
+      subject, body: (body || '').slice(0, 800), senderName, profile, userName,
+    });
+    return Array.isArray(r.replies) ? r.replies.slice(0, 3) : [];
   } catch { return []; }
 }
 
@@ -315,69 +112,10 @@ export async function generateFreeReply(
   subject: string, body: string, senderName: string,
   instruction: string, profile: ArgoProfile | null, userName: string
 ): Promise<string> {
-  const key = getAnthropicKey();
-  if (!key) throw new Error('Cle API Anthropic requise');
-
-  const prenom = profile?.prenom || senderName.split(' ')[0] || '';
-
-  // Détection langue : on prend la langue du DRAFT en priorité (intent
-  // explicite de Charles), sinon celle du MAIL REÇU (auto-match), sinon
-  // le profile, sinon FR.
-  const combinedText = `${instruction}\n\n${body.slice(0, 800)}`;
-  const detectedLang: 'FR' | 'EN' | 'DE' | 'LU' = (detectLanguage(combinedText) || (profile?.languePreferee as any) || 'FR');
-  const langLabel = detectedLang === 'EN' ? 'anglais' : detectedLang === 'DE' ? 'allemand' : detectedLang === 'LU' ? 'luxembourgeois' : 'francais';
-
-  // Détection tutoiement : depuis le draft + mail reçu (du/tu/hi vs Sie/vous/Dear).
-  // Si détecté → prime sur le profile. Sinon fallback au profile.
-  const detectedTu = detectTutoiement(combinedText, detectedLang);
-  const profileTu = profile?.tonPrefere === 'Amical' ||
-    (profile?.tutoiementAvec?.some(n => n.toLowerCase().includes(userName.toLowerCase())) ?? false);
-  const isTu = detectedTu !== null ? detectedTu : profileTu;
-
-  const hasInstruction = instruction.trim().length > 0;
-  const prompt = `Tu écris à la place de ${userName} (GOOD VIBES events & communications, agence de com au Luxembourg) une réponse complète et professionnelle à l'email ci-dessous.
-
-Email reçu :
-De: ${senderName}
-Sujet: ${subject}
-"""
-${body.slice(0, 1500)}
-"""
-
-${hasInstruction ? `INTENTION DE ${userName} (brief, peut être très court / télégraphique / dans n'importe quelle langue) :
-"""
-${instruction}
-"""
-
-Ton job : transformer cette intention en réponse email complète et bien rédigée. Si l'intention est courte (ex: "décline poliment, trop cher, on verra l'an prochain"), tu déploies en mail bien tourné. Si l'intention est déjà presque complète, polis et améliore les tournures. Tu peux ajouter une phrase d'introduction polie ("Vielen Dank für deine Zeit und das interessante Angebot...") et un mot de transition naturel.` : `Pas d'intention spécifique de ${userName}. Compose une réponse polie et appropriée selon le contexte du mail reçu : acquiescement, demande de précision, accusé réception, etc. Reste prudent — ne prends pas d'engagement (prix, dates, validation) sans instruction explicite. Privilégie une réponse type "merci, je reviens vers toi rapidement avec ma réponse".`}
-
-Règles CRITIQUES :
-- LANGUE : ${langLabel}. Détecté : ${detectedLang}. La réponse doit être DANS CETTE LANGUE (pas en français par défaut).
-- FORME D'ADRESSE : ${isTu ? `TUTOIEMENT (du/tu informel) — ${prenom} et ${userName} se tutoient dans ce thread.` : `VOUVOIEMENT (vous/Sie/Dear) — adresse formelle.`}
-- SALUTATION D'OUVERTURE OBLIGATOIRE :
-${isTu && detectedLang === 'DE' ? `  → "Hallo ${prenom},"` : ''}
-${isTu && detectedLang === 'FR' ? `  → "Salut ${prenom},"` : ''}
-${isTu && detectedLang === 'EN' ? `  → "Hi ${prenom},"` : ''}
-${!isTu && detectedLang === 'DE' ? `  → "Sehr geehrte/r ${prenom},"` : ''}
-${!isTu && detectedLang === 'FR' ? `  → "Bonjour ${prenom},"` : ''}
-${!isTu && detectedLang === 'EN' ? `  → "Dear ${prenom},"` : ''}
-- TON : chaleureux et professionnel (agence de com). Pas robotique.
-- LONGUEUR : 3-6 phrases. Ni télégraphique ni roman. Phrase d'ouverture polie + cœur du message + transition de fin sobre (sans formule de politesse).
-
-⛔ INTERDIT — NE JAMAIS AJOUTER :
-- Closing / formule de politesse finale ("Viele Grüße", "Bien à toi", "Best regards", "Cordialement", "Mit freundlichen Grüßen", "Bien à vous")
-- Nom de ${userName}
-- "GOOD VIBES events & communications"
-- Logo, contact, footer, téléphone, adresse
-
-Ces éléments sont gérés AUTOMATIQUEMENT par Exclaimer (signature corporate ajoutée à l'envoi). Si tu les ajoutes ici, ils seront DUPLIQUÉS dans le mail final.
-
-La réponse DOIT se terminer sur la dernière phrase du cœur du message — exemple en allemand : "...Wir kommen im neuen Jahr gerne auf dich zurück." → STOP. Pas de "Viele Grüße" après.
-
-Format : HTML avec <p> tags. UNIQUEMENT le HTML, sans markdown, sans commentaires meta.`;
-
-  const raw = await callClaude(prompt, 1500);
-  return raw.replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+  const r = await callAtlasWorker<{ html?: string }>('ai/free-reply', {
+    subject, body: (body || '').slice(0, 1500), senderName, instruction, profile, userName,
+  });
+  return String(r.html || '').trim();
 }
 
 // ── Tone Adaptation ──
@@ -420,54 +158,10 @@ export async function adaptEmailBody(
   html: string, profile: ArgoProfile | null, senderName?: string
 ): Promise<string> {
   if (!profile || !html) return html;
-
-  const key = getAnthropicKey();
-  if (!key) return simpleAdapt(html, profile, senderName);
-
-  const lang = profile.languePreferee || 'FR';
-  const isTu = profile.tonPrefere === 'Amical' ||
-    (senderName && profile.tutoiementAvec.some(n => n.toLowerCase().includes((senderName || '').toLowerCase())));
-
-  const langLabel = lang === 'LU' ? 'Luxembourgeois (salutation et closing) + Français tutoyé (corps)'
-    : lang === 'DE' ? 'Allemand' : lang === 'EN' ? 'Anglais'
-    : isTu ? 'Français tutoyé' : 'Français vouvoyé';
-
-  const prompt = `Réécris cet email HTML de manière naturelle et fluide pour le destinataire. Retourne UNIQUEMENT le HTML brut, sans bloc markdown.
-
-Destinataire : ${profile.prenom} ${profile.nom}
-Style : ${langLabel}
-Tonalité : ${isTu ? 'Informel, amical, tutoyé' : 'Professionnel, formel, vouvoyé'}
-
-Instructions :
-- Réécris les phrases naturellement (pas de substitution mécanique)
-- PRÉSERVE exactement le HTML (balises, liens, styles)
-- PRÉSERVE les liens, mots de passe, numéros de référence mot pour mot
-
-HTML :
-${html}`;
-
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }],
-      }),
-    });
-
-    if (!res.ok) return simpleAdapt(html, profile, senderName);
-    const data = await res.json();
-    let adapted = (data.content?.[0]?.text || '').trim()
-      .replace(/^```html?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
-
-    if (adapted && (adapted.includes('<p>') || adapted.includes('<'))) return adapted;
+    const r = await callAtlasWorker<{ html?: string }>('ai/adapt', { html, profile, senderName: senderName || '' });
+    const adapted = String(r.html || '').trim();
+    if (adapted && adapted.includes('<')) return adapted;
     return simpleAdapt(html, profile, senderName);
   } catch {
     return simpleAdapt(html, profile, senderName);

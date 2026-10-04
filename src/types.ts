@@ -92,10 +92,7 @@ export type AddinMode = 'read' | 'compose' | 'link' | 'create' | 'view';
 
 export interface AddinState {
   mode: AddinMode;
-  isConfigured: boolean;
-  airtableToken: string;
   graphToken: string | null;
-  anthropicKey: string;
   userName: string;
   userEmail: string;
 }

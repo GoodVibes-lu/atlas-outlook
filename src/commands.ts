@@ -16,6 +16,12 @@
  *
  * AVANTAGE : actions accessibles en permanence depuis le bandeau Outlook,
  * sans dépendre du pin de task-pane (non supporté sur Outlook Mac sideload).
+ *
+ * Phase 2 de l'agent d'inbox : `atlasOnMessageSend`, gestionnaire de l'événement d'envoi
+ * (Smart Alerts, `OnMessageSend`, mode « soft block », Mailbox 1.12) : contrôles avant l'envoi
+ * LOCAUX (pièce jointe annoncée, « répondre à tous », tutoiement), sans appel réseau. Prêt mais
+ * pas déclaré dans le manifeste (cf. commentaire « Smart Alerts » de manifest.xml) : le contrôle
+ * se fait aujourd'hui dans l'onglet « 🛡️ Vérifier » du panneau de rédaction.
  */
 
 import {
@@ -26,7 +32,7 @@ import {
   archiveTag,
   upsertEmailTag,
 } from './api/airtable';
-import { analyzeEmailWithClaude, hasAnthropicToken } from './api/claude';
+import { analyzeEmailWithClaude } from './api/claude';
 import {
   convertToRestId,
   setMessageCategories,
@@ -36,6 +42,9 @@ import {
 } from './api/graph';
 import { lookupSenderFolder, recordSenderFolder } from './api/sender-folder-index';
 import { initRoamingStorage } from './api/roaming-storage';
+import { supportsMailbox } from './api/platform';
+import { checkAvantEnvoi, smartAlertMessage } from './utils/send-check';
+import { readComposeItem } from './components/send-check-panel';
 
 /**
  * Construit la liste des catégories à appliquer pour un état donné.
@@ -59,8 +68,8 @@ function buildCategoriesFor(tag: any, state: 'done' | 'snoozed' | 'archived'): s
 // Office.js doit être prêt avant que les commandes soient invoquées.
 // On register les handlers globalement (window) — manifest les référence par nom.
 Office.onReady(async () => {
-  // Hydrate les clés depuis roamingSettings (les commandes ribbon ont
-  // besoin du PAT Airtable + Anthropic même après cache clear)
+  // Hydrate les réglages depuis roamingSettings et efface les anciens secrets (clé Anthropic,
+  // jeton Airtable) : les commandes passent désormais par le worker.
   await initRoamingStorage();
   // Les actions sont attachées via Office.actions.associate ci-dessous,
   // mais Outlook Mac fallback : aussi exposer en globals.
@@ -68,11 +77,13 @@ Office.onReady(async () => {
   (window as any).atlasSnoozeCommand = atlasSnoozeCommand;
   (window as any).atlasArchiveCommand = atlasArchiveCommand;
   (window as any).atlasReanalyzeCommand = atlasReanalyzeCommand;
+  (window as any).atlasOnMessageSend = atlasOnMessageSend;
   try {
     Office.actions.associate('atlasDoneCommand', atlasDoneCommand);
     Office.actions.associate('atlasSnoozeCommand', atlasSnoozeCommand);
     Office.actions.associate('atlasArchiveCommand', atlasArchiveCommand);
     Office.actions.associate('atlasReanalyzeCommand', atlasReanalyzeCommand);
+    Office.actions.associate('atlasOnMessageSend', atlasOnMessageSend);
   } catch (e) {
     console.warn('[ATLAS commands] Office.actions.associate not available:', e);
   }
@@ -194,11 +205,6 @@ export async function atlasSnoozeCommand(event: Office.AddinCommands.Event): Pro
  */
 export async function atlasReanalyzeCommand(event: Office.AddinCommands.Event): Promise<void> {
   try {
-    if (!hasAnthropicToken()) {
-      showInfoBar('Clé Anthropic non configurée (Settings ATLAS)', true);
-      event.completed();
-      return;
-    }
     const item = Office.context.mailbox?.item as any;
     if (!item) { showInfoBar('Aucun mail sélectionné', true); event.completed(); return; }
     const ctx = getCurrentMailContext();
@@ -312,5 +318,26 @@ export async function atlasArchiveCommand(event: Office.AddinCommands.Event): Pr
     showInfoBar(`Erreur : ${(e as Error).message?.slice(0, 80)}`, true);
   } finally {
     event.completed();
+  }
+}
+
+// ── Smart Alerts : contrôles avant l'envoi (OnMessageSend, Mailbox 1.12) ──
+
+/**
+ * Gestionnaire de l'événement d'envoi (Smart Alerts, `SendMode="SoftBlock"`). Contrôles LOCAUX
+ * seulement (pas d'appel au worker : Outlook limite la durée du gestionnaire) ; s'il y a quelque
+ * chose à signaler, l'envoi est retenu avec le message, l'utilisateur peut corriger ou envoyer
+ * quand même. En cas d'erreur ou d'API absente : l'envoi passe (jamais bloqué par ATLAS).
+ */
+async function atlasOnMessageSend(event: any): Promise<void> {
+  try {
+    if (!supportsMailbox('1.12')) { event.completed({ allowEvent: true }); return; }
+    const input = await readComposeItem();
+    const problems = checkAvantEnvoi(input);
+    if (!problems.length) { event.completed({ allowEvent: true }); return; }
+    event.completed({ allowEvent: false, errorMessage: smartAlertMessage(problems) });
+  } catch (e) {
+    console.warn('[ATLAS commands] contrôle avant envoi impossible, envoi autorisé :', e);
+    event.completed({ allowEvent: true });
   }
 }

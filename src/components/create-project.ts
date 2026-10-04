@@ -16,6 +16,7 @@ import { getGraphToken, getMessageForLinking, convertToRestId } from '../api/gra
 import { analyzeEmailForProjet } from '../api/argo';
 import { showToast } from '../taskpane';
 import type { Tier } from '../types';
+import { escapeHtml } from '../utils/html';
 
 // ── Constants ──
 
@@ -136,7 +137,7 @@ export class CreateProjectPanel {
     } catch (err) {
       formEl.innerHTML = `
         <div class="empty-state">
-          <p>Impossible d'analyser l'email. Verifiez la cle API Anthropic dans les parametres.</p>
+          <p>Impossible d'analyser l'email (IA indisponible pour le moment). Remplissez le formulaire manuellement.</p>
           <p style="color:var(--atlas-danger);font-size:11px;margin-top:8px;">${this.escapeHtml((err as Error).message)}</p>
         </div>
       `;
@@ -196,8 +197,8 @@ export class CreateProjectPanel {
         <div id="proj-types" style="display:flex;flex-wrap:wrap;gap:6px;">
           ${PROJECT_TYPES.map(t => `
             <label class="checkbox-pill" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--atlas-border);border-radius:12px;font-size:12px;cursor:pointer;user-select:none;">
-              <input type="checkbox" value="${t}" style="margin:0;width:14px;height:14px;" />
-              ${t}
+              <input type="checkbox" value="${escapeHtml(t)}" style="margin:0;width:14px;height:14px;" />
+              ${escapeHtml(t)}
             </label>
           `).join('')}
         </div>
@@ -357,7 +358,7 @@ export class CreateProjectPanel {
     }
 
     this.clientDropdown!.innerHTML = filtered.map(t => `
-      <div class="dropdown-item" data-id="${t.id}" data-name="${this.escapeAttr(t.relation)}">
+      <div class="dropdown-item" data-id="${escapeHtml(t.id)}" data-name="${this.escapeAttr(t.relation)}">
         <span style="font-weight:500;">${this.highlight(t.relation, query)}</span>
         ${t.email ? `<span style="font-size:11px;color:var(--atlas-text-muted);margin-left:4px;">${this.escapeHtml(t.email)}</span>` : ''}
       </div>
@@ -393,7 +394,7 @@ export class CreateProjectPanel {
     }
 
     this.enChargeDropdown!.innerHTML = filtered.map(e => `
-      <div class="dropdown-item" data-id="${e.id}" data-name="${this.escapeAttr(e.name)}">
+      <div class="dropdown-item" data-id="${escapeHtml(e.id)}" data-name="${this.escapeAttr(e.name)}">
         ${this.highlight(e.name, query)}
       </div>
     `).join('');
@@ -507,7 +508,7 @@ export class CreateProjectPanel {
 
       const result = await createProjet(input);
 
-      showToast(`Projet #${result.noProjet} cree avec succes !`, 'success');
+      showToast(`Projet #${escapeHtml(result.noProjet)} cree avec succes !`, 'success');
 
       // Link the current email to the new project
       await this.linkCurrentEmail(result.id, result.noProjet);
@@ -517,7 +518,7 @@ export class CreateProjectPanel {
       formEl.innerHTML = `
         <div style="text-align:center;padding:24px 12px;">
           <div style="font-size:32px;margin-bottom:12px;">&#9989;</div>
-          <p style="font-size:14px;font-weight:600;margin-bottom:4px;">Projet #${result.noProjet} cree</p>
+          <p style="font-size:14px;font-weight:600;margin-bottom:4px;">Projet #${escapeHtml(result.noProjet)} cree</p>
           <p style="font-size:12px;color:var(--atlas-text-secondary);">${this.escapeHtml(denomination)}</p>
           <p style="font-size:12px;color:var(--atlas-text-secondary);margin-top:4px;">Client : ${this.escapeHtml(this.selectedClientName)}</p>
           <p style="font-size:11px;color:var(--atlas-text-muted);margin-top:12px;">L'email a ete lie au projet.</p>
@@ -542,7 +543,7 @@ export class CreateProjectPanel {
       const fullMessage = await getMessageForLinking(token, restId);
 
       // Determine direction
-      const userEmail = localStorage.getItem('atlas_addin_user_email') || '';
+      const userEmail = localStorage.getItem('atlas_addin_user_email') || Office.context?.mailbox?.userProfile?.emailAddress || '';
       const isSent = fullMessage.from.email.toLowerCase() === userEmail.toLowerCase();
       const direction: 'reçu' | 'envoyé' = isSent ? 'envoyé' : 'reçu';
 
@@ -581,11 +582,11 @@ export class CreateProjectPanel {
   }
 
   private escapeHtml(str: string): string {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escapeHtml(str);
   }
 
   private escapeAttr(str: string): string {
-    return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;');
+    return escapeHtml(str);
   }
 
   destroy(): void {

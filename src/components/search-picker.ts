@@ -4,6 +4,7 @@
 
 import { getAllProjets, getAllTiers, getAllContacts } from '../api/airtable';
 import type { SearchResult } from '../types';
+import { escapeHtml } from '../utils/html';
 
 function normalize(str: string): string {
   return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -91,7 +92,7 @@ export class SearchPicker {
       // Replace skeleton with error
       this.skeletonContainer.style.display = 'none';
       this.resultsList.style.display = '';
-      this.resultsList.innerHTML = `<p class="empty-state">Erreur de chargement.<br/><small style="opacity:0.7">${msg.length > 120 ? msg.slice(0, 120) + '...' : msg}</small></p>`;
+      this.resultsList.innerHTML = `<p class="empty-state">Erreur de chargement.<br/><small style="opacity:0.7">${escapeHtml(msg.length > 120 ? msg.slice(0, 120) + '...' : msg)}</small></p>`;
     }
   }
 
@@ -130,10 +131,10 @@ export class SearchPicker {
     }
 
     this.resultsList.innerHTML = matches.map(r => `
-      <div class="suggestion-item" data-id="${r.id}" data-type="${r.type}" data-label="${this.escapeAttr(r.label)}" data-detail="${this.escapeAttr(r.detail)}">
-        <span class="suggestion-badge badge-${r.type}">${r.type === 'projet' ? '&#128193;' : r.type === 'tiers' ? '&#127970;' : '&#128100;'}</span>
+      <div class="suggestion-item" data-id="${escapeHtml(r.id)}" data-type="${escapeHtml(r.type)}" data-label="${this.escapeAttr(r.label)}" data-detail="${this.escapeAttr(r.detail)}">
+        <span class="suggestion-badge badge-${escapeHtml(r.type)}">${r.type === 'projet' ? '&#128193;' : r.type === 'tiers' ? '&#127970;' : '&#128100;'}</span>
         <span class="suggestion-name">${this.highlight(r.label, query)}</span>
-        <span class="suggestion-detail">${r.detail}</span>
+        <span class="suggestion-detail">${escapeHtml(r.detail)}</span>
       </div>
     `).join('');
 
@@ -160,11 +161,11 @@ export class SearchPicker {
   }
 
   private escapeHtml(str: string): string {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escapeHtml(str);
   }
 
   private escapeAttr(str: string): string {
-    return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    return escapeHtml(str);
   }
 
   destroy(): void {

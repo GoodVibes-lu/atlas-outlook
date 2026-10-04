@@ -1,15 +1,19 @@
 /**
- * roaming-storage.ts — Persistance des clés API survivant au cache clear.
+ * roaming-storage.ts — Persistance des réglages du complément survivant au cache clear.
  *
  * Problème : localStorage Outlook Mac est wipé à chaque "rm -rf WebKitWebsiteData*"
  * (nécessaire pour appliquer les mises à jour du bundle JS). Charles devait
- * re-coller PAT Airtable, clé Anthropic, token Graph à CHAQUE clear.
+ * re-coller ses réglages à CHAQUE clear.
+ *
+ * SÉCURITÉ (03/10/2026) : la clé Anthropic et le jeton Airtable ne sont PLUS stockés (ni ici ni
+ * en localStorage) : données et IA passent par le worker. `initRoamingStorage` efface ceux
+ * laissés par les anciennes versions (purgeLegacySecrets).
  *
  * Solution : `Office.context.roamingSettings` — storage Microsoft qui :
  *   • Persiste dans la mailbox (côté serveur Exchange)
  *   • Survit aux cache clears locaux
  *   • Sync automatiquement entre Mac, Windows, Web (multi-device)
- *   • Limite 32KB total → largement assez pour 3 clés
+ *   • Limite 32KB total → largement assez
  *
  * Stratégie : lire roamingSettings au démarrage, hydrater localStorage,
  * et chaque setItem de clé écrit aussi dans roamingSettings (best effort).
@@ -17,10 +21,26 @@
  * localStorage existant (premier run après migration).
  */
 
+import { purgeLegacySecrets } from './worker';
+
+const GRAPH_TOKEN_KEY = 'atlas_addin_graph_token';
+
+/**
+ * Jeton Graph collé à la main (Mac) : durée de vie ~1 h, donc gardé en sessionStorage seulement.
+ * Plus de localStorage ni de roamingSettings (origine partagée goodvibes-lu.github.io, audit M26).
+ * Il ne sert qu'aux appels directs à la boîte (graph.ts), jamais au worker (audit M8).
+ */
+export function readGraphToken(): string {
+  try { return sessionStorage.getItem(GRAPH_TOKEN_KEY) || ''; } catch { return ''; }
+}
+export function saveGraphToken(value: string): void {
+  try {
+    if (value) sessionStorage.setItem(GRAPH_TOKEN_KEY, value);
+    else sessionStorage.removeItem(GRAPH_TOKEN_KEY);
+  } catch { /* stockage indisponible */ }
+}
+
 const PERSISTED_KEYS = [
-  'atlas_addin_airtable_token',
-  'atlas_addin_anthropic_key',
-  'atlas_addin_graph_token',
   'atlas_addin_user_name',
   'atlas_addin_user_email',
 ] as const;
@@ -34,6 +54,9 @@ let roamingReady = false;
  * Idempotent. À appeler dans Office.onReady().
  */
 export async function initRoamingStorage(): Promise<void> {
+  // Toujours en premier : les anciens secrets ne doivent pas rester sur le poste ni dans la boîte.
+  await purgeLegacySecrets();
+  await purgeStoredGraphToken();
   if (roamingReady) return;
   try {
     const rs = Office.context?.roamingSettings;
@@ -74,6 +97,17 @@ export async function initRoamingStorage(): Promise<void> {
   } catch (e) {
     console.warn('[roaming-storage] init failed:', e);
   }
+}
+
+/** Efface les copies persistantes du jeton Graph laissées par les versions précédentes. */
+async function purgeStoredGraphToken(): Promise<void> {
+  try { localStorage.removeItem(GRAPH_TOKEN_KEY); } catch { /* rien */ }
+  try {
+    const rs = Office.context?.roamingSettings;
+    if (!rs || rs.get(GRAPH_TOKEN_KEY) == null) return;
+    rs.remove(GRAPH_TOKEN_KEY);
+    await new Promise<void>((resolve) => rs.saveAsync(() => resolve()));
+  } catch { /* rien */ }
 }
 
 /**

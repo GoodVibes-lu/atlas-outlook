@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Complément Outlook unifié « ATLAS » (phase 1.5 de l'agent d'inbox, 03/10/2026).
+  Remplace « ATLAS Assistant » (ancien outlook-plugin, retiré de M365 et du dépôt le 05/10/2026).
+
+  Manifeste XML CLASSIQUE volontairement : le manifeste unifié Microsoft 365 (manifest.json) n'est
+  pas pris en charge sur Outlook iPhone / Android. Celui-ci se déploie par le Centre
+  d'administration Microsoft 365 (Applications intégrées) ou en chargement latéral.
+
+  Surfaces :
+    - Panneau LECTURE : bureau (Windows classique, nouvel Outlook, Mac), web (DesktopFormFactor,
+      épinglable : SupportsPinning) ET mobile (MobileFormFactor / MobileMessageReadCommandSurface).
+    - Panneau RÉDACTION : bureau et web uniquement (pas de surface de rédaction sur mobile).
+  Domaines autorisés : uniquement le domaine du complément et worker.vibes.lu (aucun appel direct
+  à Airtable ni à l'IA : tout passe par le worker).
+  Plan d'essai : docs/agent-inbox-essai-complement.md
+-->
 <OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
            xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
@@ -6,21 +22,19 @@
            xsi:type="MailApp">
 
   <Id>4f0d857e-bcc2-4f63-bc08-322e21ec2acc</Id>
-  <Version>1.1.0</Version>
+  <Version>1.3.0</Version>
   <ProviderName>GOOD VIBES</ProviderName>
   <DefaultLocale>fr-FR</DefaultLocale>
   <DisplayName DefaultValue="ATLAS" />
-  <Description DefaultValue="Liaison emails ↔ projets ATLAS — GOOD VIBES" />
+  <Description DefaultValue="Agent d'inbox ATLAS : état du mail, actions, correspondant, brouillons et liaison aux projets · GOOD VIBES" />
   <IconUrl DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-64.png" />
   <HighResolutionIconUrl DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-128.png" />
   <SupportUrl DefaultValue="https://vibes.lu" />
 
   <AppDomains>
-    <AppDomain>https://api.airtable.com</AppDomain>
-    <AppDomain>https://content.airtable.com</AppDomain>
-    <AppDomain>https://api.anthropic.com</AppDomain>
-    <AppDomain>https://graph.microsoft.com</AppDomain>
-    <AppDomain>https://login.microsoftonline.com</AppDomain>
+    <!-- Seulement le domaine du complément et le worker (phase 1.5). -->
+    <AppDomain>https://goodvibes-lu.github.io</AppDomain>
+    <AppDomain>https://worker.vibes.lu</AppDomain>
   </AppDomains>
 
   <Hosts>
@@ -46,6 +60,7 @@
   <Rule xsi:type="RuleCollection" Mode="Or">
     <Rule xsi:type="ItemIs" ItemType="Message" FormType="Read" />
     <Rule xsi:type="ItemIs" ItemType="Message" FormType="ReadOrEdit" />
+    <Rule xsi:type="ItemIs" ItemType="Appointment" FormType="Read" />
   </Rule>
 
   <DisableEntityHighlighting>true</DisableEntityHighlighting>
@@ -236,6 +251,34 @@
               </OfficeTab>
             </ExtensionPoint>
 
+            <!-- ── Réunion (04/10/2026) : invité d'un rendez-vous, bouton « Proposer un point » ──
+                 Ouvre le même volet, onglet « Proposer un point » (ordre du jour collaboratif ATLAS).
+                 L'invitation reçue par mail (message de réunion) est déjà couverte par le menu ATLAS
+                 de MessageReadCommandSurface : l'onglet s'y ouvre aussi tout seul. -->
+            <ExtensionPoint xsi:type="AppointmentAttendeeCommandSurface">
+              <OfficeTab id="TabDefault">
+                <Group id="atlasReunionGroup">
+                  <Label resid="groupLabel" />
+                  <Control xsi:type="Button" id="atlasProposerPoint">
+                    <Label resid="reunionBtnLabel" />
+                    <Supertip>
+                      <Title resid="reunionBtnLabel" />
+                      <Description resid="reunionBtnDesc" />
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="icon16" />
+                      <bt:Image size="32" resid="icon32" />
+                      <bt:Image size="80" resid="icon80" />
+                    </Icon>
+                    <Action xsi:type="ShowTaskpane">
+                      <SourceLocation resid="ctxReunionUrl" />
+                      <SupportsPinning>true</SupportsPinning>
+                    </Action>
+                  </Control>
+                </Group>
+              </OfficeTab>
+            </ExtensionPoint>
+
             <!-- ── Composing an email: Toolbar button ── -->
             <ExtensionPoint xsi:type="MessageComposeCommandSurface">
               <OfficeTab id="TabDefault">
@@ -260,7 +303,62 @@
               </OfficeTab>
             </ExtensionPoint>
 
+            <!-- ── Smart Alerts : contrôles avant l'envoi (agent d'inbox, phase 2). PRÊT, NON ACTIVÉ ──
+                 Aujourd'hui le contrôle est MANUEL : onglet « Vérifier » du panneau de rédaction
+                 (bureau / web). Le gestionnaire d'envoi « atlasOnMessageSend » existe déjà
+                 (src/commands.ts, mode soft block : l'utilisateur peut envoyer quand même).
+                 Pourquoi pas activé : l'événement OnMessageSend exige Mailbox 1.12 dans les
+                 Requirements de CE VersionOverrides (aujourd'hui 1.5, à cause du mobile) ; un client
+                 sans 1.12 (Outlook iPhone / Android, anciens Outlook) perdrait alors TOUT le complément.
+                 Pour l'activer (manifeste distinct bureau / web, ou le jour où le mobile suit) :
+                   1. Requirements de ce VersionOverrides : DefaultMinVersion="1.12" ;
+                   2. sous Host, avant DesktopFormFactor :
+                        <Runtimes>
+                          <Runtime resid="commandsFileUrl">
+                            <Override type="javascript" resid="smartAlertsJsUrl" />
+                          </Runtime>
+                        </Runtimes>
+                      (Outlook classique Windows exige un fichier .js seul : à produire au build et
+                      à déclarer dans bt:Urls sous l'id smartAlertsJsUrl) ;
+                   3. décommenter le point d'extension ci-dessous, puis augmenter Version.
+            <ExtensionPoint xsi:type="LaunchEvent">
+              <LaunchEvents>
+                <LaunchEvent Type="OnMessageSend" FunctionName="atlasOnMessageSend" SendMode="SoftBlock" />
+              </LaunchEvents>
+              <SourceLocation resid="commandsFileUrl" />
+            </ExtensionPoint>
+            -->
+
           </DesktopFormFactor>
+
+          <!-- ── Mobile (Outlook iPhone / Android) : panneau LECTURE seulement ──
+               Mailbox 1.5 + ajouts sur mobile, pas d'épinglage ni de rédaction.
+               Icônes : 25, 32 et 48 px aux échelles 1, 2 et 3 (exigence Microsoft). -->
+          <MobileFormFactor>
+            <FunctionFile resid="commandsFileUrl" />
+            <ExtensionPoint xsi:type="MobileMessageReadCommandSurface">
+              <Group id="atlasMobileReadGroup">
+                <Label resid="groupLabel" />
+                <Control xsi:type="MobileButton" id="atlasMobileOpen">
+                  <Label resid="readBtnLabel" />
+                  <Icon xsi:type="bt:MobileIconList">
+                    <bt:Image size="25" scale="1" resid="icon25" />
+                    <bt:Image size="25" scale="2" resid="icon50" />
+                    <bt:Image size="25" scale="3" resid="icon75" />
+                    <bt:Image size="32" scale="1" resid="icon32" />
+                    <bt:Image size="32" scale="2" resid="icon64" />
+                    <bt:Image size="32" scale="3" resid="icon96" />
+                    <bt:Image size="48" scale="1" resid="icon48" />
+                    <bt:Image size="48" scale="2" resid="icon96" />
+                    <bt:Image size="48" scale="3" resid="icon144" />
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <SourceLocation resid="taskpaneMobileUrl" />
+                  </Action>
+                </Control>
+              </Group>
+            </ExtensionPoint>
+          </MobileFormFactor>
         </Host>
       </Hosts>
 
@@ -269,21 +367,32 @@
           <bt:Image id="icon16" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-16.png" />
           <bt:Image id="icon32" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-32.png" />
           <bt:Image id="icon80" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-80.png" />
+          <!-- Icônes mobiles (25/32/48 px × échelles 1/2/3) -->
+          <bt:Image id="icon25" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-25.png" />
+          <bt:Image id="icon48" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-48.png" />
+          <bt:Image id="icon50" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-50.png" />
+          <bt:Image id="icon64" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-64.png" />
+          <bt:Image id="icon75" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-75.png" />
+          <bt:Image id="icon96" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-96.png" />
+          <bt:Image id="icon144" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/assets/icon-144.png" />
         </bt:Images>
         <bt:Urls>
           <bt:Url id="taskpaneReadUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read" />
+          <bt:Url id="taskpaneMobileUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;surface=mobile" />
           <bt:Url id="taskpaneComposeUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=compose" />
           <bt:Url id="ctxLinkUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=link" />
           <bt:Url id="ctxInfoUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=info" />
           <bt:Url id="ctxCreateUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=create" />
+          <bt:Url id="ctxReunionUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=reunion" />
           <bt:Url id="commandsFileUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/commands.html" />
         </bt:Urls>
         <bt:ShortStrings>
           <bt:String id="groupLabel" DefaultValue="ATLAS" />
           <bt:String id="readBtnLabel" DefaultValue="ATLAS" />
           <bt:String id="readBtnTitle" DefaultValue="Ouvrir ATLAS" />
-          <bt:String id="composeBtnLabel" DefaultValue="Templates" />
-          <bt:String id="composeBtnTitle" DefaultValue="Templates ATLAS" />
+          <bt:String id="composeBtnLabel" DefaultValue="ATLAS" />
+          <bt:String id="composeBtnTitle" DefaultValue="Rédiger avec ATLAS" />
+          <bt:String id="reunionBtnLabel" DefaultValue="Proposer un point" />
           <bt:String id="ctxMenuLabel" DefaultValue="ATLAS" />
           <bt:String id="ctxMenuTitle" DefaultValue="Actions ATLAS" />
           <bt:String id="ctxLinkLabel" DefaultValue="Lier a un projet ATLAS" />
@@ -296,8 +405,9 @@
           <bt:String id="projetGroupLabel" DefaultValue="Projet" />
         </bt:ShortStrings>
         <bt:LongStrings>
-          <bt:String id="readBtnDesc" DefaultValue="Lier cet email à un projet, voir les infos ou créer un nouveau projet ATLAS" />
-          <bt:String id="composeBtnDesc" DefaultValue="Insérer un template email avec adaptation de tonalité automatique (ARGO)" />
+          <bt:String id="readBtnDesc" DefaultValue="Ce que l'agent ATLAS a compris de ce mail, actions proposées, correspondant ; lier ou créer un projet" />
+          <bt:String id="composeBtnDesc" DefaultValue="Réponses rapides, brouillon automatique et templates ATLAS (adaptation de tonalité ARGO)" />
+          <bt:String id="reunionBtnDesc" DefaultValue="Proposer un point à l'ordre du jour de cette réunion (titre, durée, projet lié, pièce), ou confier le tien si tu es absent" />
           <bt:String id="ctxMenuDesc" DefaultValue="Lier, consulter ou créer un projet ATLAS depuis le menu contextuel" />
           <bt:String id="ctxLinkDesc" DefaultValue="Lier cet email à un projet existant dans ATLAS" />
           <bt:String id="ctxInfoDesc" DefaultValue="Afficher les informations du projet lié à cet email" />
@@ -309,6 +419,19 @@
         </bt:LongStrings>
       </Resources>
 
+      <!-- Authentification unique (SSO Office) : application Entra « ATLAS Outlook (complément) »,
+           créée le 04/10/2026 (cf. docs/agent-inbox-entra-id.md, étape 5). Id = ID d'application (client),
+           public. Resource = URI d'ID d'application, sur le domaine qui sert le complément. -->
+      <WebApplicationInfo>
+        <Id>fc36080c-dcf7-4784-a5f8-7fa994799371</Id>
+        <Resource>api://goodvibes-lu.github.io/fc36080c-dcf7-4784-a5f8-7fa994799371</Resource>
+        <Scopes>
+          <Scope>openid</Scope>
+          <Scope>profile</Scope>
+          <Scope>email</Scope>
+          <Scope>User.Read</Scope>
+        </Scopes>
+      </WebApplicationInfo>
     </VersionOverrides>
   </VersionOverrides>
 

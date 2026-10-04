@@ -10,6 +10,7 @@ import {
   countLinkedEmails,
   fetchContactArgoProfile,
   getProjetsByClient,
+  getProjetExtraFields,
 } from '../api/airtable';
 import type { Projet, ArgoProfile } from '../types';
 
@@ -136,44 +137,10 @@ export class ProjectInfoPanel {
   }
 
   /**
-   * Fetch extra fields (Type, Budget, Descriptif) for a specific project record.
+   * Champs complémentaires (Type, Budget, Descriptif) du projet, lus via le worker.
    */
   private async fetchExtraFields(recordId: string): Promise<{ type?: string; budget?: string; descriptif?: string }> {
-    try {
-      const API_URL = 'https://api.airtable.com/v0';
-      const PROJETS_BASE = 'appKiJY0qjI4UTrWU';
-      const PROJETS_TABLE = 'tblKBSumqrxAQFt2u';
-      const TYPE_FIELD = 'fldzcy1D0UhFDnusK';
-      const BUDGET_FIELD = 'fldB7LExyJIQySlG6';
-      const DESCRIPTIF_FIELD = 'fldo2A4Ja7UaiQ3QO';
-
-      const token = localStorage.getItem('atlas_addin_airtable_token') || '';
-      const fields = [TYPE_FIELD, BUDGET_FIELD, DESCRIPTIF_FIELD].map(f => `fields%5B%5D=${f}`).join('&');
-      const url = `${API_URL}/${PROJETS_BASE}/${PROJETS_TABLE}/${recordId}?returnFieldsByFieldId=true&${fields}`;
-
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) return {};
-
-      const data = await res.json();
-      const f = data.fields || {};
-
-      // Type can be multipleSelects
-      let typeVal = '';
-      const typeRaw = f[TYPE_FIELD];
-      if (Array.isArray(typeRaw)) {
-        typeVal = typeRaw.map((v: any) => typeof v === 'string' ? v : v?.name || '').filter(Boolean).join(', ');
-      } else if (typeRaw) {
-        typeVal = typeof typeRaw === 'string' ? typeRaw : typeRaw?.name || '';
-      }
-
-      return {
-        type: typeVal || undefined,
-        budget: f[BUDGET_FIELD] ? String(f[BUDGET_FIELD]) : undefined,
-        descriptif: f[DESCRIPTIF_FIELD] || undefined,
-      };
-    } catch {
-      return {};
-    }
+    return getProjetExtraFields(recordId);
   }
 
   private showProjectInfo(container: HTMLElement): void {
@@ -261,7 +228,7 @@ export class ProjectInfoPanel {
     const btn = document.getElementById('btn-open-atlas');
     btn?.addEventListener('click', () => {
       const url = `atlas-app://open?entity=projet&id=${encodeURIComponent(p.id)}`;
-      window.open(url, '_blank');
+      window.open(url, '_blank', 'noopener');
     });
   }
 

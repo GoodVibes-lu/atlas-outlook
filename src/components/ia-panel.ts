@@ -10,6 +10,7 @@
  */
 
 import { showToast } from '../taskpane';
+import { escapeHtml } from '../utils/html';
 import {
   getEmailTagByEmailId,
   getEmailTagByConversationId,
@@ -25,7 +26,7 @@ import {
 } from '../api/airtable';
 import {
   analyzeEmailWithClaude,
-  hasAnthropicToken,
+  isAiAvailable,
 } from '../api/claude';
 import { lookupSenderFolder, recordSenderFolder } from '../api/sender-folder-index';
 import { getMessageForLinking } from '../api/graph';
@@ -167,27 +168,10 @@ export class IAPanel {
         // Résolution du dossier de classement (en parallèle du rendu initial)
         this.render();
         this.resolveFolderSuggestion().then(() => this.render()).catch(() => {});
-      } else if (hasAnthropicToken()) {
-        // ── Auto-analyse au chargement ──
-        // Si le mail n'est pas taggé ET qu'on a la clé Anthropic, on lance
-        // automatiquement l'analyse plutôt que d'afficher "Pas encore taggé"
-        // et obliger Charles à cliquer. Tout se fait en background ; on
-        // affiche un état "Analyse en cours…" pendant l'appel Claude.
-        this.renderAutoAnalyzing();
-        try {
-          const ok = await this.reanalyzeNow();
-          if (ok && this.tag) {
-            this.render();
-            this.resolveFolderSuggestion().then(() => this.render()).catch(() => {});
-          } else {
-            // Échec d'analyse — fallback sur l'écran "non taggé" avec bouton manuel
-            this.renderNotTagged();
-          }
-        } catch (e) {
-          console.warn('[IAPanel] auto-analyze failed:', e);
-          this.renderNotTagged();
-        }
       } else {
+        // Plus d'auto-analyse à l'ouverture (phase 1.5, 03/10/2026) : l'agent serveur lit chaque
+        // mail une seule fois (onglet Agent) ; ici l'analyse IA reste une action volontaire
+        // (bouton « Analyser maintenant » / « Re-analyser »).
         this.renderNotTagged();
       }
     } catch (e) {
@@ -252,23 +236,23 @@ export class IAPanel {
 
   private renderEmpty(msg: string): void {
     this.root.innerHTML = `
-      <div style="padding: 20px; text-align: center; color: #64748b; font-size: 13px;">${msg}</div>
+      <div style="padding: 20px; text-align: center; color: #64748b; font-size: 13px;">${escapeHtml(msg)}</div>
     `;
   }
 
   private renderNotTagged(): void {
-    const hasKey = hasAnthropicToken();
+    const hasKey = isAiAvailable();
     this.root.innerHTML = `
       <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
         <div style="padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; color: #9a3412;">
           <strong>Pas encore taggé par l'IA</strong>
           <p style="margin: 6px 0 0; font-size: 12px;">Le scanner ATLAS ne l'a pas (encore) analysé. Tu peux forcer l'analyse maintenant — résultat en ~3 sec.</p>
         </div>
-        <button data-action="analyze-now" class="ia-btn ia-btn-secondary" ${hasKey ? '' : 'disabled title="Configure Clé Anthropic dans Settings"'}
+        <button data-action="analyze-now" class="ia-btn ia-btn-secondary" ${hasKey ? '' : 'disabled title="IA indisponible"'}
           style="padding: 10px 16px; font-size: 14px; font-weight: 600;">
           ✨ Analyser maintenant
         </button>
-        ${hasKey ? '' : '<div style="font-size: 11px; color: #9a3412;">⚠️ Clé Anthropic manquante — onglet Settings ⚙️.</div>'}
+        ${hasKey ? '' : '<div style="font-size: 11px; color: #9a3412;">⚠️ IA indisponible.</div>'}
       </div>
     `;
     this.root.querySelector<HTMLButtonElement>('button[data-action="analyze-now"]')
@@ -303,12 +287,12 @@ export class IAPanel {
           <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">Classification IA</div>
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             <span style="padding: 4px 10px; background: #f1f5f9; border-radius: 12px; font-size: 13px; font-weight: 600;">
-              ${catLabel}
+              ${escapeHtml(catLabel)}
             </span>
             <span style="padding: 4px 10px; background: ${urgColor}; color: #fff; border-radius: 12px; font-size: 12px; font-weight: 700;">
-              Urgence ${tag.urgencyScore}/5
+              Urgence ${escapeHtml(tag.urgencyScore)}/5
             </span>
-            ${status !== 'inbox' ? `<span style="padding: 4px 10px; background: #ecfdf5; color: #065f46; border-radius: 12px; font-size: 11px;">État : ${status}</span>` : ''}
+            ${status !== 'inbox' ? `<span style="padding: 4px 10px; background: #ecfdf5; color: #065f46; border-radius: 12px; font-size: 11px;">État : ${escapeHtml(status)}</span>` : ''}
           </div>
           ${tag.summary ? `<p style="margin: 4px 0 0; font-size: 12px; color: #475569; line-height: 1.4;">${escapeHtml(tag.summary)}</p>` : ''}
         </div>
@@ -323,7 +307,7 @@ export class IAPanel {
             <button data-action="done" class="ia-btn ia-btn-success">✓ Traité</button>
             <button data-action="snooze" class="ia-btn ia-btn-warning">⏰ Reporter (demain 8h)</button>
             <button data-action="archive" class="ia-btn ia-btn-muted">📦 Archiver</button>
-            <button data-action="reanalyze" class="ia-btn ia-btn-secondary" ${hasAnthropicToken() ? '' : 'disabled title="Configure Clé Anthropic dans Settings"'}>🔄 Re-analyser</button>
+            <button data-action="reanalyze" class="ia-btn ia-btn-secondary" ${isAiAvailable() ? '' : 'disabled title="IA indisponible"'}>🔄 Re-analyser</button>
             <button data-action="broom" class="ia-btn ia-btn-secondary" title="Archive maintenant tous les mails lus +10 min dans leurs dossiers habituels (utilise l'index sender)">🧹 Coup de balai</button>
           </div>
         </div>
@@ -566,12 +550,12 @@ export class IAPanel {
   /**
    * Force une re-analyse Claude pour le mail courant. Purge l'ancien tag +
    * écrit le nouveau résultat. Résultat immédiat — pas d'attente du scan
-   * périodique côté app desktop. Nécessite ANTHROPIC_API_KEY configurée
-   * dans Settings de l'addin.
+   * périodique côté app desktop. L'IA est servie par le worker (Agency Brain),
+   * aucune clé dans le complément ; `auto` = lancée à l'ouverture (tâche de fond).
    */
-  private async reanalyzeNow(): Promise<boolean> {
-    if (!hasAnthropicToken()) {
-      showToast('Configure Clé Anthropic dans Settings de l\'addin', 'error');
+  private async reanalyzeNow(opts: { auto?: boolean } = {}): Promise<boolean> {
+    if (!isAiAvailable()) {
+      showToast('IA indisponible', 'error');
       return false;
     }
     try {
@@ -627,6 +611,7 @@ export class IAPanel {
         body,
         receivedAt,
         userEmail,
+        auto: !!opts.auto,
       });
 
       // 3. Upsert le tag dans Airtable (DELETE ancien + CREATE nouveau)
@@ -1393,6 +1378,3 @@ export class IAPanel {
   }
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c] as string));
-}

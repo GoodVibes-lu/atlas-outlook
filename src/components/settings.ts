@@ -1,12 +1,16 @@
 /**
- * Settings Panel — Configure Airtable token, Anthropic key, user info
+ * Settings Panel — Nom, email, jeton Graph de repli, outils (catégories, index).
+ *
+ * Plus de clé Anthropic ni de jeton Airtable (03/10/2026) : données ATLAS et IA passent par le
+ * worker avec le compte Microsoft de l'utilisateur (cf. api/worker.ts).
  */
 
 import { showToast } from '../taskpane';
 import { scanMailboxBuildIndex } from '../api/scan-mailbox';
 import { indexStats, clearIndex } from '../api/sender-folder-index';
 import { createAtlasCategoriesVerbose } from '../api/graph';
-import { persistKey } from '../api/roaming-storage';
+import { persistKey, readGraphToken, saveGraphToken } from '../api/roaming-storage';
+import { escapeHtml } from '../utils/html';
 
 export class SettingsPanel {
   private container: HTMLElement;
@@ -19,11 +23,11 @@ export class SettingsPanel {
   }
 
   private render(): void {
-    const airtableToken = localStorage.getItem('atlas_addin_airtable_token') || '';
-    const anthropicKey = localStorage.getItem('atlas_addin_anthropic_key') || '';
-    const graphToken = localStorage.getItem('atlas_addin_graph_token') || '';
-    const userName = localStorage.getItem('atlas_addin_user_name') || '';
-    const userEmail = localStorage.getItem('atlas_addin_user_email') || '';
+    const graphToken = readGraphToken();
+    // Pré-rempli avec le profil Outlook (plus d'écran de configuration initiale).
+    const profile = (() => { try { return Office.context?.mailbox?.userProfile; } catch { return undefined; } })();
+    const userName = localStorage.getItem('atlas_addin_user_name') || profile?.displayName || '';
+    const userEmail = localStorage.getItem('atlas_addin_user_email') || profile?.emailAddress || '';
 
     this.container.innerHTML = `
       <div class="panel-scroll">
@@ -39,27 +43,16 @@ export class SettingsPanel {
           <input type="email" class="form-input" id="setting-email" value="${this.escapeAttr(userEmail)}" placeholder="charles@vibes.lu" />
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Token Airtable (PAT)</label>
-          <input type="password" class="form-input" id="setting-airtable" value="${this.escapeAttr(airtableToken)}" placeholder="pat..." />
-          <p style="font-size:10px;color:var(--atlas-text-muted);margin-top:4px;">
-            Le même Personal Access Token que dans l'app ATLAS Desktop.
-          </p>
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Clé API Anthropic (optionnel)</label>
-          <input type="password" class="form-input" id="setting-anthropic" value="${this.escapeAttr(anthropicKey)}" placeholder="sk-ant-..." />
-          <p style="font-size:10px;color:var(--atlas-text-muted);margin-top:4px;">
-            Pour l'analyse IA et l'adaptation de tonalité ARGO. Optionnel.
-          </p>
-        </div>
+        <p style="font-size:11px;color:var(--atlas-text-secondary);margin:0 0 12px;line-height:1.4;">
+          Projets, liaisons et IA passent par le serveur ATLAS avec ton compte Microsoft :
+          aucune clé à saisir ici.
+        </p>
 
         <div class="form-group">
           <label class="form-label">Token Microsoft Graph (recommandé sur Mac)</label>
           <textarea class="form-input" id="setting-graph" rows="3"
             placeholder="eyJ0eXAiOiJKV1Qi..."
-            style="font-family: monospace; font-size: 11px;">${this.escapeAttr(graphToken)}</textarea>
+            style="font-family: monospace; font-size: 11px;">${escapeHtml(graphToken)}</textarea>
           <p style="font-size:10px;color:var(--atlas-text-muted);margin-top:4px;line-height:1.4;">
             <strong>Pourquoi :</strong> Outlook Mac n'autorise pas l'addin à scanner ta
             boîte mail (lister tes dossiers, voir où tu ranges habituellement les
@@ -67,9 +60,9 @@ export class SettingsPanel {
             <strong>Comment l'obtenir :</strong> Dans l'app ATLAS Desktop, ouvre la
             console DevTools (Cmd+Opt+I) et tape :
             <code style="background:#f1f5f9;padding:2px 4px;border-radius:3px;">copy(localStorage.getItem('atlas_ms_access_token'))</code>
-            puis colle ici. Le token expire après ~1h — il sera renouvelé tant que
-            ATLAS Desktop tourne. À refaire toutes les ~50 min ou dès qu'une action
-            échoue.
+            puis colle ici. Le token expire après ~1h et n'est gardé que le temps de
+            la session (jamais enregistré). À refaire toutes les ~50 min ou dès
+            qu'une action échoue.
           </p>
         </div>
 
@@ -183,11 +176,7 @@ export class SettingsPanel {
       }
     });
     document.getElementById('clear-cache-btn')?.addEventListener('click', () => {
-      // Clear only plugin cache, not settings
-      const keysToKeep = ['atlas_addin_airtable_token', 'atlas_addin_anthropic_key', 'atlas_addin_user_name', 'atlas_addin_user_email'];
-      const savedValues: Record<string, string> = {};
-      keysToKeep.forEach(k => { savedValues[k] = localStorage.getItem(k) || ''; });
-      // We don't clear ALL localStorage, just our cache entries
+      // Le cache des données est en mémoire (rechargé à l'ouverture suivante du volet).
       showToast('Cache vidé', 'info');
     });
   }
@@ -195,17 +184,10 @@ export class SettingsPanel {
   private saveSettings(): void {
     const name = (document.getElementById('setting-name') as HTMLInputElement).value.trim();
     const email = (document.getElementById('setting-email') as HTMLInputElement).value.trim();
-    const airtable = (document.getElementById('setting-airtable') as HTMLInputElement).value.trim();
-    const anthropic = (document.getElementById('setting-anthropic') as HTMLInputElement).value.trim();
     const graph = (document.getElementById('setting-graph') as HTMLTextAreaElement).value.trim();
 
     if (!name || !email) {
       showToast('Nom et email requis', 'error');
-      return;
-    }
-
-    if (!airtable) {
-      showToast('Token Airtable requis', 'error');
       return;
     }
 
@@ -214,12 +196,10 @@ export class SettingsPanel {
     Promise.all([
       persistKey('atlas_addin_user_name', name),
       persistKey('atlas_addin_user_email', email),
-      persistKey('atlas_addin_airtable_token', airtable),
-      persistKey('atlas_addin_anthropic_key', anthropic),
-      persistKey('atlas_addin_graph_token', graph),
     ]).catch((e) => console.warn('[Settings] persistKey failed:', e));
+    saveGraphToken(graph); // session seulement
 
-    showToast('Configuration enregistrée ✓ (synchronisée dans la mailbox)', 'success');
+    showToast('Configuration enregistrée ✓', 'success');
     this.onSave();
   }
 
@@ -233,7 +213,7 @@ export class SettingsPanel {
   }
 
   private escapeAttr(str: string): string {
-    return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    return escapeHtml(str);
   }
 
   destroy(): void {

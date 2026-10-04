@@ -8,6 +8,7 @@ import { summarizeEmail } from '../api/argo';
 import { SearchPicker } from './search-picker';
 import type { SearchResult, MailMessageFull, Projet } from '../types';
 import { showToast } from '../taskpane';
+import { escapeHtml, escapeError } from '../utils/html';
 
 interface EmailInfo {
   subject: string;
@@ -157,12 +158,12 @@ export class LinkPanel {
       this.loadAiSummary();
 
     } catch (err) {
-      card.innerHTML = `<p class="empty-state">Erreur : ${(err as Error).message}</p>`;
+      card.innerHTML = `<p class="empty-state">Erreur : ${escapeError(err)}</p>`;
     }
   }
 
   private async loadAiSummary(): Promise<void> {
-    if (!this.emailInfo || !localStorage.getItem('atlas_addin_anthropic_key')) return;
+    if (!this.emailInfo) return;
     try {
       // Get email body via Office.js for summary
       const item = Office.context.mailbox.item;
@@ -310,7 +311,7 @@ export class LinkPanel {
       const fullMessage = await getMessageForLinking(token, restId);
 
       // Determine direction
-      const userEmail = localStorage.getItem('atlas_addin_user_email') || '';
+      const userEmail = localStorage.getItem('atlas_addin_user_email') || Office.context?.mailbox?.userProfile?.emailAddress || '';
       const isSent = fullMessage.from.email.toLowerCase() === userEmail.toLowerCase();
       const direction = isSent ? 'envoyé' as const : 'reçu' as const;
 
@@ -340,7 +341,7 @@ export class LinkPanel {
       await this.offerFolderFiling(result, restId, token);
 
     } catch (err) {
-      statusEl.innerHTML = `<p style="color:var(--atlas-danger);font-size:12px;">Erreur : ${(err as Error).message}</p>`;
+      statusEl.innerHTML = `<p style="color:var(--atlas-danger);font-size:12px;">Erreur : ${escapeError(err)}</p>`;
       showToast('Erreur de liaison', 'error');
     }
   }
@@ -348,7 +349,7 @@ export class LinkPanel {
   // ── Folder Filing ──
 
   private async offerFolderFiling(result: SearchResult, messageId: string, token: string): Promise<void> {
-    const userEmail = localStorage.getItem('atlas_addin_user_email') || '';
+    const userEmail = localStorage.getItem('atlas_addin_user_email') || Office.context?.mailbox?.userProfile?.emailAddress || '';
     if (!userEmail) return;
 
     const statusEl = document.getElementById('link-status')!;
@@ -445,7 +446,7 @@ export class LinkPanel {
   }
 
   private escapeAttr(str: string): string {
-    return str.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    return escapeHtml(str);
   }
 
   // ── Office.js helpers ──
@@ -472,8 +473,7 @@ export class LinkPanel {
   }
 
   private escapeHtml(str: string | undefined | null): string {
-    if (!str) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escapeHtml(str);
   }
 
   destroy(): void {

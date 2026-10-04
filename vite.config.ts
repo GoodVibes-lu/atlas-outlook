@@ -12,6 +12,8 @@ export default defineConfig({
       input: {
         main: resolve(__dirname, 'index.html'),
         commands: resolve(__dirname, 'commands.html'),
+        // Tableau de bord de la barre de gauche (application Microsoft 365, teams-app/manifest.json).
+        tableauDeBord: resolve(__dirname, 'tableau-de-bord.html'),
       },
     },
   },

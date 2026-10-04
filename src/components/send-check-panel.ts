@@ -1,0 +1,178 @@
+/**
+ * send-check-panel.ts — Onglet « 🛡️ Vérifier » du panneau RÉDACTION (bureau et web uniquement) :
+ * contrôles avant l'envoi de l'agent d'inbox (phase 2, `.claude/BACKLOG-AGENT-INBOX.md`).
+ *
+ * Lit le message en cours (objet, destinataires, corps HTML avec le fil cité, pièces jointes) et
+ * applique les contrôles PURS de `utils/send-check.ts` : pièce jointe annoncée mais absente,
+ * homonyme / client d'un autre projet que celui du fil, « répondre à tous » inutile, tutoiement
+ * incohérent avec le fil. Les données ATLAS (contacts, clients, projet lié au fil, profil de
+ * conversation) viennent des routes existantes `/api/plugin/atlas/*` (cache 5 min) ; si elles
+ * sont indisponibles, seuls les contrôles locaux sont faits. Aucun appel IA, rien n'est envoyé ni
+ * modifié.
+ *
+ * Contrôle manuel (« Vérifier avant d'envoyer ») : l'événement d'envoi `OnMessageSend` (Smart
+ * Alerts, Mailbox 1.12) est prêt dans commands.ts mais pas activé dans le manifeste (il imposerait
+ * Mailbox 1.12 à tout le complément, mobile compris) : voir le commentaire de manifest.xml.
+ *
+ * API Office : getAsync des destinataires / objet (Mailbox 1.1), body.getAsync (1.3),
+ * getAttachmentsAsync (1.8, sous garde : sinon le contrôle de pièce jointe est sauté).
+ */
+
+import { checkAvantEnvoi, hasBlocking, GENERIC_DOMAINS, type SendCheckProblem, type SendCheckInput, type SendCheckRecipient } from '../utils/send-check';
+import { getAllContacts, getAllTiers, getAllProjets, getLinkedConversationIds, fetchContactArgoProfile } from '../api/airtable';
+import { supportsMailbox } from '../api/platform';
+import { escapeHtml } from './agent-lists';
+
+function getAsyncValue<T>(getter: ((cb: (r: Office.AsyncResult<T>) => void) => void) | undefined, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    if (!getter) { resolve(fallback); return; }
+    try {
+      getter((r) => resolve(r.status === Office.AsyncResultStatus.Succeeded ? (r.value ?? fallback) : fallback));
+    } catch { resolve(fallback); }
+  });
+}
+
+const toRecipients = (list: Office.EmailAddressDetails[] | undefined): SendCheckRecipient[] =>
+  (list || []).map(r => ({ email: String(r?.emailAddress || ''), name: String(r?.displayName || '') })).filter(r => r.email);
+
+/** Message en cours de rédaction → entrée des contrôles (sans les données ATLAS). */
+export async function readComposeItem(): Promise<SendCheckInput & { conversationId: string }> {
+  const item = Office.context.mailbox?.item as any;
+  if (!item) throw new Error('Aucun message en cours de rédaction.');
+  const [subject, to, cc, bcc, html] = await Promise.all([
+    getAsyncValue<string>(item.subject?.getAsync?.bind(item.subject), ''),
+    getAsyncValue<Office.EmailAddressDetails[]>(item.to?.getAsync?.bind(item.to), []),
+    getAsyncValue<Office.EmailAddressDetails[]>(item.cc?.getAsync?.bind(item.cc), []),
+    getAsyncValue<Office.EmailAddressDetails[]>(item.bcc?.getAsync?.bind(item.bcc), []),
+    getAsyncValue<string>(item.body?.getAsync ? (cb: any) => item.body.getAsync(Office.CoercionType.Html, cb) : undefined, ''),
+  ]);
+  // Pièces jointes : Mailbox 1.8 en rédaction ; sinon inconnu (contrôle sauté plutôt que faux positif).
+  let piecesJointes: number | null = null;
+  if (supportsMailbox('1.8') && item.getAttachmentsAsync) {
+    const list = await getAsyncValue<Office.AttachmentDetailsCompose[] | null>(item.getAttachmentsAsync.bind(item), null);
+    if (list) piecesJointes = list.filter(a => !a.isInline).length;
+  }
+  return {
+    subject,
+    html,
+    to: toRecipients(to),
+    cc: toRecipients(cc),
+    bcc: toRecipients(bcc),
+    moi: String(Office.context.mailbox?.userProfile?.emailAddress || ''),
+    piecesJointes,
+    conversationId: String(item.conversationId || ''),
+  };
+}
+
+/** Complète l'entrée avec les données ATLAS (contacts, clients, projet du fil, tutoiement connu). */
+async function enrichWithAtlas(input: SendCheckInput & { conversationId: string }): Promise<{ input: SendCheckInput; atlas: boolean }> {
+  try {
+    const [contacts, tiers, projets, linked] = await Promise.all([
+      getAllContacts(), getAllTiers(), getAllProjets(), getLinkedConversationIds().catch(() => new Map()),
+    ]);
+    // Projet du fil : conversation liée dans ATLAS, sinon « #NNN » dans l'objet.
+    let projet = input.conversationId ? projets.find(p => p.id === linked.get(input.conversationId)?.projetId) : undefined;
+    if (!projet) {
+      const no = (input.subject || '').match(/#\s*(\d{2,4})\b/)?.[1];
+      if (no) projet = projets.find(p => String(p.noProjet).replace(/\D/g, '') === no);
+    }
+    const clients = Array.from(new Set(projets.map(p => p.client).filter(Boolean)));
+    const domainesClients: Record<string, string> = {};
+    for (const t of tiers) {
+      const dom = (t.email || '').toLowerCase().split('@')[1];
+      if (dom && !GENERIC_DOMAINS.has(dom) && !domainesClients[dom]) domainesClients[dom] = t.relation;
+    }
+    // Tutoiement connu : profil de conversation du destinataire principal (un seul).
+    let tutoiementConnu = false;
+    const principal = [...(input.to || [])].find(r => !/@vibes\.lu$/i.test(r.email));
+    if (principal && (input.to || []).length === 1) {
+      const profile = await fetchContactArgoProfile(principal.email).catch(() => null);
+      tutoiementConnu = profile?.tonPrefere === 'Amical';
+    }
+    return {
+      atlas: true,
+      input: {
+        ...input,
+        contacts: contacts.map(c => ({ email: c.email, nom: c.personneDeContact, societe: c.relationSociete })),
+        projetDuFil: projet ? { nom: projet.noProjet ? `#${projet.noProjet} ${projet.denomination}` : projet.denomination, client: projet.client } : null,
+        clients,
+        domainesClients,
+        tutoiementConnu,
+      },
+    };
+  } catch (e) {
+    console.warn('[SendCheck] données ATLAS indisponibles, contrôles locaux seulement :', e);
+    return { input, atlas: false };
+  }
+}
+
+export class SendCheckPanel {
+  private container: HTMLElement;
+  private busy = false;
+  private destroyed = false;
+
+  constructor(container: HTMLElement) {
+    this.container = container;
+    this.render();
+    this.run();
+  }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.container.innerHTML = '';
+  }
+
+  private render(): void {
+    this.container.innerHTML = `
+      <div class="panel-scroll">
+        <div class="section-heading">Vérifier avant d'envoyer</div>
+        <p class="agent-muted" style="margin-bottom:8px;">Pièce jointe annoncée, mauvais destinataire probable, « répondre à tous », tutoiement. Sans IA, rien n'est envoyé.</p>
+        <div id="send-check-result" class="send-check-result"></div>
+        <button type="button" class="btn btn-primary btn-block agent-btn" id="send-check-run">Vérifier avant d'envoyer</button>
+      </div>
+    `;
+    this.container.querySelector('#send-check-run')?.addEventListener('click', () => this.run());
+  }
+
+  private async run(): Promise<void> {
+    if (this.busy) return;
+    const host = this.container.querySelector<HTMLElement>('#send-check-result');
+    const btn = this.container.querySelector<HTMLButtonElement>('#send-check-run');
+    if (!host) return;
+    this.busy = true;
+    if (btn) btn.disabled = true;
+    host.innerHTML = '<div class="agent-loading"><div class="spinner"></div><span>Vérification…</span></div>';
+    try {
+      const local = await readComposeItem();
+      const { input, atlas } = await enrichWithAtlas(local);
+      if (this.destroyed) return;
+      const problems = checkAvantEnvoi(input);
+      this.renderResult(host, problems, { atlas, pjConnue: input.piecesJointes !== null && input.piecesJointes !== undefined });
+    } catch (e) {
+      if (this.destroyed) return;
+      host.innerHTML = `<p class="agent-muted">Vérification impossible (${escapeHtml((e as Error).message)}).</p>`;
+    } finally {
+      this.busy = false;
+      if (btn) { btn.disabled = false; btn.textContent = 'Revérifier'; }
+    }
+  }
+
+  private renderResult(host: HTMLElement, problems: SendCheckProblem[], ctx: { atlas: boolean; pjConnue: boolean }): void {
+    const notes: string[] = [];
+    if (!ctx.atlas) notes.push('Fiches ATLAS indisponibles : homonymes et clients d\'autres projets non vérifiés.');
+    if (!ctx.pjConnue) notes.push('Pièces jointes illisibles dans cette version d\'Outlook : contrôle sauté.');
+    const notesHtml = notes.map(n => `<p class="agent-muted">${escapeHtml(n)}</p>`).join('');
+    if (!problems.length) {
+      host.innerHTML = `<div class="send-check-ok">✓ Rien à signaler.</div>${notesHtml}`;
+      return;
+    }
+    const bloquant = hasBlocking(problems);
+    host.innerHTML = `
+      <div class="send-check-head ${bloquant ? 'is-blocking' : ''}">${bloquant ? 'À corriger avant d\'envoyer' : 'À vérifier'} (${problems.length})</div>
+      <ul class="send-check-list">
+        ${problems.map(p => `<li class="send-check-item ${p.gravite === 'bloquant' ? 'is-blocking' : ''}">${p.gravite === 'bloquant' ? '⛔' : '⚠️'} ${escapeHtml(p.message)}</li>`).join('')}
+      </ul>
+      ${notesHtml}
+    `;
+  }
+}

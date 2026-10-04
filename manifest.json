@@ -31,7 +31,7 @@
       },
       "ribbons": [
         {
-          "contexts": ["mailRead"],
+          "contexts": ["mailRead", "meetingDetailsAttendee"],
           "tabs": [
             {
               "builtInTabId": "TabDefault",

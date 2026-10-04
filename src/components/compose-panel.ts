@@ -1,11 +1,25 @@
 /**
  * Compose Panel — Templates + ARGO tone adaptation for email composition
+ *
+ * Phase 6 de l'agent d'inbox (à la demande) : « Modèles de réponse » de l'agent (fiches
+ * Communications remplies pour le dernier mail reçu du fil, `conversationId`), insérés au curseur
+ * si Mailbox 1.2 est disponible (`body.setSelectedDataAsync`, testé par isSetSupported), sinon
+ * texte à copier ; « Pièces jointes lourdes ? » (Mailbox 1.8, `getAttachmentsAsync`, testé) →
+ * « Déposer sur le cloud et insérer les liens » : brouillon enregistré (saveAsync), le worker lit
+ * les pièces par Graph, les dépose dans le transit du CLOUD (30 jours, jamais le NAS) et renvoie
+ * les liens courts vibes.lu/p/…, insérés au curseur (bouton compatible Outlook) ; pièces déposées
+ * retirées du brouillon si la case reste cochée (removeAttachmentAsync). Lien court d'un lien de
+ * partage collé : toujours possible. Aucun envoi, jamais de signature.
  */
 
 import { getEmailTemplates, fetchContactArgoProfile } from '../api/airtable';
 import { getSalutation, getClosing, adaptEmailBody, analyzeReceivedEmail, generateQuickReplies, generateFreeReply } from '../api/argo';
 import type { EmailTemplate, ArgoProfile } from '../types';
 import { showToast } from '../taskpane';
+import { supportsMailbox } from '../api/platform';
+import { renderModeles, renderPiecesLourdes, type DepotCtx } from './agent-outils';
+import { convertToRestId } from '../api/graph';
+import { escapeHtml, escapeError, sanitizeHtml } from '../utils/html';
 
 export class ComposePanel {
   private container: HTMLElement;
@@ -22,6 +36,7 @@ export class ComposePanel {
     this.isReply = options?.isReply ?? false;
     this.render();
     this.loadContext();
+    this.renderOutilsAgent();
   }
 
   private render(): void {
@@ -82,6 +97,12 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
         </div>
         ` : ''}
 
+        <div id="agent-modeles-compose" class="agent-section" hidden></div>
+        <div id="agent-pj-compose-wrap" class="agent-section" hidden>
+          <button type="button" class="btn btn-secondary btn-block agent-btn" id="agent-pj-compose-btn">Pièces jointes lourdes ?</button>
+          <div id="agent-pj-compose" hidden></div>
+        </div>
+
         <div class="section-heading">Template</div>
         <div class="form-group">
           <select class="dropdown-select" id="template-select">
@@ -128,6 +149,95 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
     document.getElementById('free-reply-send-btn')?.addEventListener('click', () => this.sendFreeReply());
   }
 
+  // ── Agent d'inbox, phase 6 : modèles de réponse et pièces jointes lourdes ──
+
+  private renderOutilsAgent(): void {
+    let conversationId = '';
+    try { conversationId = String((Office.context.mailbox?.item as any)?.conversationId || ''); } catch { /* hors Outlook */ }
+    const modeles = this.container.querySelector<HTMLElement>('#agent-modeles-compose');
+    // Réponse (fil connu) seulement : le modèle est rempli pour le dernier mail reçu du fil.
+    if (modeles && conversationId) {
+      renderModeles(modeles, {
+        conversationId, onInfo: showToast,
+        ...(supportsMailbox('1.2') ? { inserer: (texte: string) => this.insererTexte(texte) } : {}),
+      });
+    }
+    // getAttachmentsAsync (compose) : Mailbox 1.8, absent sur mobile → bouton masqué.
+    const wrap = this.container.querySelector<HTMLElement>('#agent-pj-compose-wrap');
+    if (!wrap || !supportsMailbox('1.8')) return;
+    wrap.hidden = false;
+    const btn = this.container.querySelector<HTMLButtonElement>('#agent-pj-compose-btn');
+    const host = this.container.querySelector<HTMLElement>('#agent-pj-compose');
+    btn?.addEventListener('click', () => {
+      if (!host) return;
+      btn.disabled = true;
+      try {
+        (Office.context.mailbox.item as any).getAttachmentsAsync((r: any) => {
+          btn.disabled = false;
+          if (r?.status !== Office.AsyncResultStatus.Succeeded) { showToast('Pièces jointes illisibles', 'error'); return; }
+          const pieces = (Array.isArray(r.value) ? r.value : []).map((a: any) => ({ id: a?.id ? String(a.id) : undefined, nom: String(a?.name || ''), octets: Number(a?.size) || 0, isInline: !!a?.isInline }));
+          void renderPiecesLourdes(host, { pieces, onInfo: showToast, depot: this.depotBrouillon() }).then(() => {
+            if (host.hidden) showToast('Pièces jointes sous le seuil : rien à faire', 'info');
+          });
+        });
+      } catch {
+        btn.disabled = false;
+        showToast('Pièces jointes illisibles', 'error');
+      }
+    });
+  }
+
+  /**
+   * Dépôt des pièces du brouillon : enregistrement (saveAsync, Mailbox 1.3) pour que le worker lise
+   * les pièces par Graph, insertion des liens au curseur (Mailbox 1.2), retrait des pièces (1.1).
+   */
+  private depotBrouillon(): DepotCtx | undefined {
+    if (!supportsMailbox('1.3')) return undefined;
+    const item = Office.context.mailbox.item as any;
+    return {
+      source: () => new Promise((resolve, reject) => {
+        try {
+          item.saveAsync((r: any) => {
+            if (r?.status !== Office.AsyncResultStatus.Succeeded || !r.value) { reject(new Error('Brouillon non enregistré')); return; }
+            let mailbox = '';
+            try { mailbox = String(Office.context.mailbox.userProfile?.emailAddress || ''); } catch { /* boîte par défaut côté worker */ }
+            resolve({ messageId: convertToRestId(String(r.value)), ...(mailbox ? { mailbox } : {}) });
+          });
+        } catch (e) { reject(e instanceof Error ? e : new Error('Brouillon non enregistré')); }
+      }),
+      idRest: (id: string) => convertToRestId(id),
+      inserer: (html: string) => new Promise<boolean>(resolve => {
+        if (!supportsMailbox('1.2')) { resolve(false); return; }
+        try {
+          item.body.setSelectedDataAsync(sanitizeHtml(html), { coercionType: Office.CoercionType.Html }, (r: any) => resolve(r?.status === Office.AsyncResultStatus.Succeeded));
+        } catch { resolve(false); }
+      }),
+      retirer: async (ids: string[]) => {
+        let n = 0;
+        for (const id of ids) {
+          const ok = await new Promise<boolean>(resolve => {
+            try { item.removeAttachmentAsync(id, (r: any) => resolve(r?.status === Office.AsyncResultStatus.Succeeded)); } catch { resolve(false); }
+          });
+          if (ok) n++;
+        }
+        return n;
+      },
+    };
+  }
+
+  /** Insère un texte (modèle rempli) au curseur : body.setSelectedDataAsync, Mailbox 1.2 (testé par l'appelant). */
+  private insererTexte(texte: string): Promise<boolean> {
+    const esc = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const html = texte.split(/\n{2,}/).map(p => `<p>${esc(p).replace(/\n/g, '<br/>')}</p>`).join('');
+    return new Promise(resolve => {
+      try {
+        (Office.context.mailbox.item as any).body.setSelectedDataAsync(html, { coercionType: Office.CoercionType.Html }, (r: any) => {
+          resolve(r?.status === Office.AsyncResultStatus.Succeeded);
+        });
+      } catch { resolve(false); }
+    });
+  }
+
   private async loadContext(): Promise<void> {
     const recipientInfo = document.getElementById('recipient-info')!;
 
@@ -162,7 +272,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
               const to = result.value;
               this.recipientEmail = to[0]?.emailAddress || '';
               recipientInfo.innerHTML = `
-                <div class="email-card-subject">${to.map((r: any) => `${r.displayName || ''} &lt;${r.emailAddress}&gt;`).join(', ')}</div>
+                <div class="email-card-subject">${to.map((r: any) => `${escapeHtml(r.displayName || '')} &lt;${escapeHtml(r.emailAddress)}&gt;`).join(', ')}</div>
               `;
               this.loadArgoProfile();
             } else {
@@ -174,7 +284,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
           if (Array.isArray(to) && to.length > 0) {
             this.recipientEmail = to[0]?.emailAddress || '';
             recipientInfo.innerHTML = `
-              <div class="email-card-subject">${to.map((r: any) => `${r.displayName || ''} &lt;${r.emailAddress}&gt;`).join(', ')}</div>
+              <div class="email-card-subject">${to.map((r: any) => `${escapeHtml(r.displayName || '')} &lt;${escapeHtml(r.emailAddress)}&gt;`).join(', ')}</div>
             `;
             this.loadArgoProfile();
           }
@@ -185,7 +295,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       await this.loadTemplates();
 
     } catch (err) {
-      recipientInfo.innerHTML = `<p style="color:var(--atlas-danger);font-size:12px;">${(err as Error).message}</p>`;
+      recipientInfo.innerHTML = `<p style="color:var(--atlas-danger);font-size:12px;">${escapeError(err)}</p>`;
     }
   }
 
@@ -204,10 +314,10 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
 
         profileInfo.innerHTML = `
           <div style="font-size:12px;">
-            <strong>${this.argoProfile.prenom} ${this.argoProfile.nom}</strong><br/>
+            <strong>${escapeHtml(this.argoProfile.prenom)} ${escapeHtml(this.argoProfile.nom)}</strong><br/>
             Ton : <span style="color:${isTu ? 'var(--atlas-success)' : 'var(--atlas-primary)'}">${isTu ? '👋 Tutoiement' : '🤝 Vouvoiement'}</span><br/>
-            Langue : ${this.argoProfile.languePreferee || 'FR'}
-            ${this.argoProfile.tutoiementAvec.length > 0 ? `<br/>Tutoiement avec : ${this.argoProfile.tutoiementAvec.join(', ')}` : ''}
+            Langue : ${escapeHtml(this.argoProfile.languePreferee || 'FR')}
+            ${this.argoProfile.tutoiementAvec.length > 0 ? `<br/>Tutoiement avec : ${escapeHtml(this.argoProfile.tutoiementAvec.join(', '))}` : ''}
           </div>
         `;
       }
@@ -235,10 +345,10 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
 
         info.innerHTML = `
           <div style="font-size:12px;">
-            Sentiment : <strong>${analysis.sentiment}</strong><br/>
-            Urgence : <strong>${analysis.urgence}</strong><br/>
-            Ton détecté : <strong>${analysis.tonUtilise}</strong>
-            ${analysis.suggestions.length > 0 ? `<br/><br/>Suggestions :<ul style="margin:4px 0 0 16px;">${analysis.suggestions.map(s => `<li>${s}</li>`).join('')}</ul>` : ''}
+            Sentiment : <strong>${escapeHtml(analysis.sentiment)}</strong><br/>
+            Urgence : <strong>${escapeHtml(analysis.urgence)}</strong><br/>
+            Ton détecté : <strong>${escapeHtml(analysis.tonUtilise)}</strong>
+            ${analysis.suggestions.length > 0 ? `<br/><br/>Suggestions :<ul style="margin:4px 0 0 16px;">${analysis.suggestions.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : ''}
           </div>
         `;
       });
@@ -253,7 +363,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       select.innerHTML = `
         <option value="">— Sélectionner un template —</option>
         ${this.templates.map(t => `
-          <option value="${t.id}">${t.nom} ${t.marque ? `(${t.marque})` : ''}</option>
+          <option value="${escapeHtml(t.id)}">${escapeHtml(t.nom)} ${t.marque ? `(${escapeHtml(t.marque)})` : ''}</option>
         `).join('')}
       `;
     } catch (err) {
@@ -286,8 +396,8 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       const varsContainer = document.getElementById('variables-container')!;
       varsContainer.innerHTML = vars.map(v => `
         <div class="form-group">
-          <label class="form-label">${v}</label>
-          <input type="text" class="form-input var-input" data-var="${v}" placeholder="${v}" />
+          <label class="form-label">${escapeHtml(v)}</label>
+          <input type="text" class="form-input var-input" data-var="${escapeHtml(v)}" placeholder="${escapeHtml(v)}" />
         </div>
       `).join('');
 
@@ -329,7 +439,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
     document.querySelectorAll('.var-input').forEach((input) => {
       const varName = (input as HTMLInputElement).getAttribute('data-var')!;
       const value = (input as HTMLInputElement).value || `{{${varName}}}`;
-      body = body.replaceAll(`{{${varName}}}`, value);
+      body = body.replaceAll(`{{${varName}}}`, escapeHtml(value));
       subject = subject.replaceAll(`{{${varName}}}`, value);
     });
 
@@ -337,17 +447,18 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
     const salutation = getSalutation(this.argoProfile, this.userName);
     const closing = getClosing(this.argoProfile, this.userName);
 
-    const hasAI = !!localStorage.getItem('atlas_addin_anthropic_key') && !!this.argoProfile;
-    const langBadge = content.lang !== 'FR' ? `<span style="display:inline-block;background:var(--atlas-primary);color:#fff;border-radius:3px;padding:1px 6px;font-size:9px;margin-left:6px;">${content.lang}</span>` : '';
+    // IA servie par le worker (aucune clé dans le complément) : adaptation dès qu'un profil ARGO existe.
+    const hasAI = !!this.argoProfile;
+    const langBadge = content.lang !== 'FR' ? `<span style="display:inline-block;background:var(--atlas-primary);color:#fff;border-radius:3px;padding:1px 6px;font-size:9px;margin-left:6px;">${escapeHtml(content.lang)}</span>` : '';
 
     preview.innerHTML = `
-      ${hasAI ? `<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;font-size:10px;color:var(--atlas-primary);"><span>✨</span> Sera adapte par ARGO (${this.argoProfile!.tonPrefere === 'Amical' ? 'tu' : 'vous'}, ${content.lang})${langBadge}</div>` : ''}
+      ${hasAI ? `<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;font-size:10px;color:var(--atlas-primary);"><span>✨</span> Sera adapte par ARGO (${this.argoProfile!.tonPrefere === 'Amical' ? 'tu' : 'vous'}, ${escapeHtml(content.lang)})${langBadge}</div>` : ''}
       <div style="margin-bottom:8px;font-weight:600;font-size:12px;">Objet: ${this.escapeHtml(subject)}</div>
       <hr style="border:none;border-top:1px solid var(--atlas-border);margin:8px 0;"/>
-      <p>${salutation}</p>
-      <div>${body}</div>
-      <p>${closing}</p>
-      <p>${this.userName}<br/>GOOD VIBES events & communications</p>
+      <p>${escapeHtml(salutation)}</p>
+      <div>${sanitizeHtml(body)}</div>
+      <p>${escapeHtml(closing)}</p>
+      <p>${escapeHtml(this.userName)}<br/>GOOD VIBES events & communications</p>
     `;
   }
 
@@ -369,7 +480,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       document.querySelectorAll('.var-input').forEach((input) => {
         const varName = (input as HTMLInputElement).getAttribute('data-var')!;
         const value = (input as HTMLInputElement).value || '';
-        body = body.replaceAll(`{{${varName}}}`, value);
+        body = body.replaceAll(`{{${varName}}}`, escapeHtml(value));
         subject = subject.replaceAll(`{{${varName}}}`, value);
       });
 
@@ -377,12 +488,12 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       const salutation = getSalutation(this.argoProfile, this.userName);
       const closing = getClosing(this.argoProfile, this.userName);
 
-      let fullHtml = `<p>${salutation}</p>${body}<p>${closing}</p><p>${this.userName}<br/>GOOD VIBES events &amp; communications</p>`;
+      let fullHtml = `<p>${escapeHtml(salutation)}</p>${sanitizeHtml(body)}<p>${escapeHtml(closing)}</p><p>${escapeHtml(this.userName)}<br/>GOOD VIBES events &amp; communications</p>`;
 
-      // Full AI adaptation if Anthropic key available — Claude rewrites naturally
-      if (this.argoProfile && localStorage.getItem('atlas_addin_anthropic_key')) {
+      // Adaptation IA complète (worker + Agency Brain) — Claude réécrit naturellement
+      if (this.argoProfile) {
         try {
-          fullHtml = await adaptEmailBody(fullHtml, this.argoProfile, this.userName);
+          fullHtml = sanitizeHtml(await adaptEmailBody(fullHtml, this.argoProfile, this.userName));
         } catch { /* fallback to assembled version */ }
       }
 
@@ -434,7 +545,6 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
 
   /** Load 3 quick reply suggestions from AI */
   private async loadQuickReplies(): Promise<void> {
-    if (!localStorage.getItem('atlas_addin_anthropic_key')) return;
     try {
       const item = Office.context.mailbox.item;
       if (!item) return;
@@ -467,7 +577,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
           const reply = replies[idx];
           if (reply) {
             const mailItem = Office.context.mailbox.item;
-            (mailItem as any)?.displayReplyForm?.({ htmlBody: reply.body });
+            (mailItem as any)?.displayReplyForm?.({ htmlBody: sanitizeHtml(reply.body) });
             showToast('Reponse rapide ouverte', 'success');
           }
         });
@@ -496,7 +606,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       });
 
       const senderName = item.from?.displayName || '';
-      this.freeReplyHtml = await generateFreeReply(subject, bodyText, senderName, instruction, this.argoProfile, this.userName);
+      this.freeReplyHtml = sanitizeHtml(await generateFreeReply(subject, bodyText, senderName, instruction, this.argoProfile, this.userName));
 
       // Show preview
       const previewSection = document.getElementById('free-reply-preview')!;
@@ -535,18 +645,18 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       document.querySelectorAll('.var-input').forEach((input) => {
         const varName = (input as HTMLInputElement).getAttribute('data-var')!;
         const value = (input as HTMLInputElement).value || '';
-        body = body.replaceAll(`{{${varName}}}`, value);
+        body = body.replaceAll(`{{${varName}}}`, escapeHtml(value));
       });
 
       // Apply ARGO salutation + closing
       const salutation = getSalutation(this.argoProfile, this.userName);
       const closing = getClosing(this.argoProfile, this.userName);
-      let fullHtml = `<p>${salutation}</p>${body}<p>${closing}</p><p>${this.userName}<br/>GOOD VIBES events &amp; communications</p>`;
+      let fullHtml = `<p>${escapeHtml(salutation)}</p>${sanitizeHtml(body)}<p>${escapeHtml(closing)}</p><p>${escapeHtml(this.userName)}<br/>GOOD VIBES events &amp; communications</p>`;
 
-      // Full AI adaptation if Anthropic key available
-      if (this.argoProfile && localStorage.getItem('atlas_addin_anthropic_key')) {
+      // Adaptation IA complète (worker + Agency Brain)
+      if (this.argoProfile) {
         try {
-          fullHtml = await adaptEmailBody(fullHtml, this.argoProfile, this.userName);
+          fullHtml = sanitizeHtml(await adaptEmailBody(fullHtml, this.argoProfile, this.userName));
         } catch { /* fallback */ }
       }
 
@@ -567,7 +677,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
   }
 
   private escapeHtml(str: string): string {
-    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escapeHtml(str);
   }
 
   destroy(): void {

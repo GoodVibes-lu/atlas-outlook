@@ -4,6 +4,7 @@
  */
 
 import type { MailMessageFull, MailAttachment } from '../types';
+import { readGraphToken } from './roaming-storage';
 
 const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 
@@ -91,8 +92,8 @@ export async function getApiContext(): Promise<ApiContext> {
     errors.push(`SSO: ${(err as Error).message?.slice(0, 80)}`);
   }
 
-  // ── C. Token Graph stocké en localStorage (collé manuellement par user) ──
-  const stored = localStorage.getItem('atlas_addin_graph_token');
+  // ── C. Token Graph collé manuellement (session seulement, jamais persistant) ──
+  const stored = readGraphToken();
   if (stored) {
     console.info('[Mailbox API] using localStorage Graph token');
     cachedToken = stored;
@@ -100,7 +101,7 @@ export async function getApiContext(): Promise<ApiContext> {
     tokenExpiry = Date.now() + 30 * 60 * 1000;
     return { token: stored, base: GRAPH_URL };
   }
-  errors.push('localStorage vide');
+  errors.push('aucun jeton collé');
 
   throw new Error(`Aucun token mailbox dispo. Tentatives : ${errors.join(' / ')}`);
 }

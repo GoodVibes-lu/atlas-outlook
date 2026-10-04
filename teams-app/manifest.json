@@ -1,0 +1,44 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.17",
+  "version": "0.2.0",
+  "id": "9b7f9d18-3043-447b-b095-38fa3ac528a4",
+  "developer": {
+    "name": "GOOD VIBES events & communications",
+    "websiteUrl": "https://vibes.lu",
+    "privacyUrl": "https://vibes.lu/privacy",
+    "termsOfUseUrl": "https://vibes.lu/terms"
+  },
+  "name": {
+    "short": "ATLAS",
+    "full": "ATLAS : tableau de bord de l'agent d'inbox"
+  },
+  "description": {
+    "short": "Le travail préparé par l'agent ATLAS : piles, relances, clients qui attendent.",
+    "full": "Tableau de bord de l'agent d'inbox ATLAS dans la barre de gauche d'Outlook (nouvel Outlook Windows, web, Mac) : mails à traiter, en attente, à filtrer (nouveaux expéditeurs), relances dues, clients qui attendent depuis plus de 48 h, et ce que l'agent a fait (avec Annuler). Chaque ligne ouvre le mail. Aucun envoi automatique."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#6366F1",
+  "staticTabs": [
+    {
+      "entityId": "atlas-tableau-de-bord",
+      "name": "ATLAS",
+      "contentUrl": "https://goodvibes-lu.github.io/atlas-outlook/tableau-de-bord.html",
+      "websiteUrl": "https://atlas.vibes.lu",
+      "scopes": ["personal"]
+    }
+  ],
+  "permissions": ["identity"],
+  "validDomains": [
+    "goodvibes-lu.github.io",
+    "worker.vibes.lu"
+  ],
+  "webApplicationInfo": {
+    "id": "fc36080c-dcf7-4784-a5f8-7fa994799371",
+    "resource": "api://goodvibes-lu.github.io/fc36080c-dcf7-4784-a5f8-7fa994799371"
+  },
+  "showLoadingIndicator": false
+}
