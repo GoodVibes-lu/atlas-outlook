@@ -8,7 +8,7 @@
  *
  * Règle d'or : AUCUN appel IA à l'ouverture d'un mail. L'état vient de
  * GET /api/plugin/agent/state (calculé une seule fois par l'agent serveur). S'il est « pending »,
- * on affiche « Analyse en cours » et on relit UNE fois après quelques secondes. La ré-analyse
+ * on affiche « Analyse en cours » (le worker enfile alors le mail en priorité) et on relit à 5 s, 15 s, 30 s, puis bouton « Actualiser ». La ré-analyse
  * reste une action volontaire (onglet IA, bouton « Re-analyser »).
  *
  * Tant que l'état est en mode `blanc` (mode à blanc, phase 1.7), l'action principale et le menu
@@ -65,7 +65,8 @@ const MOTIF_BROUILLON: Record<string, string> = {
   'relance-envoi': 'Relance d\'un envoi sans réponse',
 };
 
-const PENDING_RETRY_MS = 5000;
+/** Relectures espacées de l'état tant que l'agent analyse (puis bouton « Actualiser »). */
+const PENDING_RETRY_DELAYS_MS = [5000, 15000, 30000];
 
 const PILE_LABELS: Record<AgentPile, string> = {
   a_traiter: 'À traiter par toi',
@@ -156,7 +157,7 @@ export class AgentPanel {
   private mobile = isMobile();
   private destroyed = false;
   private retryTimer: number | null = null;
-  private retried = false;
+  private tentatives = 0;
   private item: CurrentItem | null = null;
   private state: EtatAvecBrouillon | null = null;
   private suggestions: EmailActionSuggestion[] | null = null;
@@ -287,13 +288,14 @@ export class AgentPanel {
           <div><strong>Analyse en cours</strong><br/><span class="agent-muted">L'agent traite ce mail, résultat dans quelques secondes.</span></div>
         </div>
       `;
-      if (!this.retried) {
-        // Une seule nouvelle lecture, quelques secondes plus tard (jamais d'appel IA ici).
-        this.retried = true;
+      const delai = PENDING_RETRY_DELAYS_MS[this.tentatives];
+      if (delai !== undefined) {
+        // Relectures espacées (5 s, 15 s, 30 s) ; jamais d'appel IA ici.
+        this.tentatives++;
         this.retryTimer = window.setTimeout(() => {
           this.retryTimer = null;
           if (!this.destroyed) this.loadState();
-        }, PENDING_RETRY_MS);
+        }, delai);
       } else {
         host.innerHTML = `
           <div class="agent-notice">
@@ -302,10 +304,22 @@ export class AgentPanel {
           <button type="button" class="btn btn-secondary btn-block agent-btn" id="agent-reload">Actualiser</button>
         `;
         this.$('agent-reload')?.addEventListener('click', () => {
+          this.tentatives = 0;
           host.innerHTML = '<div class="agent-loading"><div class="spinner"></div><span>Lecture…</span></div>';
           this.loadState();
         });
       }
+      return;
+    }
+
+    if (r.kind === 'non_analyse') {
+      host.innerHTML = `
+        <div class="agent-notice agent-notice-muted">
+          <div>${r.raison === 'ancien'
+            ? 'Ce mail est trop ancien pour l\'agent : les autres onglets restent utilisables.'
+            : 'L\'agent ne retrouve pas ce mail dans la boîte : les autres onglets restent utilisables.'}</div>
+        </div>
+      `;
       return;
     }
 

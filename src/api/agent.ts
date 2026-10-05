@@ -41,9 +41,19 @@ async function pluginFetch<T>(method: 'GET' | 'POST' | 'DELETE', path: string, p
 
 export type AgentStateResult =
   | { kind: 'state'; state: InboxMessageState }
-  | { kind: 'pending' }
+  | { kind: 'pending'; enFile?: boolean }
+  /** Le worker n'analysera pas ce mail (plus de 30 jours, ou introuvable dans la boîte). */
+  | { kind: 'non_analyse'; raison: 'ancien' | 'introuvable' }
   | { kind: 'absent' }
   | { kind: 'error'; message: string };
+
+/** Réponse du worker sans état : « pending » (éventuellement mis en file) ou « non_analyse ». */
+function lireReponseSansEtat(d: any): AgentStateResult | null {
+  const st = d?.status ?? d?.state?.status;
+  if (st === 'pending') return d?.enFile === true ? { kind: 'pending', enFile: true } : { kind: 'pending' };
+  if (st === 'non_analyse') return { kind: 'non_analyse', raison: d?.raison === 'introuvable' ? 'introuvable' : 'ancien' };
+  return null;
+}
 
 /**
  * Lit l'état calculé par l'agent pour un message (clé : internetMessageId). Lecture seule, sans IA.
@@ -55,13 +65,14 @@ export async function fetchAgentState(messageId: string, mailbox: string): Promi
   const qs = `messageId=${encodeURIComponent(messageId)}&mailbox=${encodeURIComponent(mailbox || '')}`;
   try {
     const data = await pluginFetch<any>('GET', `agent/state?${qs}`);
-    if (data?.status === 'pending' || data?.state?.status === 'pending') return { kind: 'pending' };
+    const lu = lireReponseSansEtat(data);
+    if (lu) return lu;
     const state = (data?.state && typeof data.state === 'object' ? data.state : data) as InboxMessageState;
     if (state && typeof state.pile === 'string') return { kind: 'state', state };
     return { kind: 'absent' };
   } catch (e) {
     if (e instanceof PluginHttpError && e.status === 404) {
-      return e.data?.status === 'pending' ? { kind: 'pending' } : { kind: 'absent' };
+      return lireReponseSansEtat(e.data) || { kind: 'absent' };
     }
     return { kind: 'error', message: humanError(e) };
   }
