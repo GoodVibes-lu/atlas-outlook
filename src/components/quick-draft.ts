@@ -12,12 +12,14 @@
 
 import { fetchQuickReply, fetchAutoDraft, type QuickReplyType } from '../api/agent';
 import { showToast } from '../taskpane';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
 
-const QUICK_BUTTONS: Array<{ type: QuickReplyType; label: string }> = [
-  { type: 'acknowledge', label: '👋 Bien reçu' },
-  { type: 'quote_pending', label: '📋 Devis suit' },
-  { type: 'polite_refusal', label: '❌ Refus poli' },
-  { type: 'reschedule', label: '📅 Reporter' },
+const QUICK_BUTTONS: Array<{ type: QuickReplyType; label: string; icon: string }> = [
+  { type: 'acknowledge', label: 'Bien reçu', icon: 'check' },
+  { type: 'quote_pending', label: 'Le devis suit', icon: 'template' },
+  { type: 'polite_refusal', label: 'Refus poli', icon: 'x' },
+  { type: 'reschedule', label: 'Reporter', icon: 'calendar-plus' },
 ];
 
 function escapeHtml(s: string): string {
@@ -54,31 +56,35 @@ export class QuickDraftPanel {
 
   private render(): void {
     this.container.innerHTML = `
-      <div class="panel-scroll">
-        <div class="section-heading">Réponse rapide</div>
-        <p class="agent-muted" style="margin-bottom:8px;">Modèle inséré en tête du message (sans IA).</p>
-        <div class="quick-grid">
-          ${QUICK_BUTTONS.map(b => `<button type="button" class="btn btn-secondary agent-btn quick-btn" data-type="${b.type}">${b.label}</button>`).join('')}
-        </div>
-        <div class="quick-options">
-          <label>Langue
-            <select class="dropdown-select" id="quick-lang">
-              <option value="FR">Français</option>
-              <option value="EN">English</option>
-              <option value="DE">Deutsch</option>
-            </select>
-          </label>
-          <label>Ton
-            <select class="dropdown-select" id="quick-address">
-              <option value="vous">Vouvoiement</option>
-              <option value="tu">Tutoiement</option>
-            </select>
-          </label>
-        </div>
+      <div class="panel-scroll stack">
+        <section class="section" aria-labelledby="qd-h-quick">
+          <h2 class="section-heading" id="qd-h-quick">Réponse en un clic</h2>
+          <p class="help">Un texte type est inséré en tête du message. Sans ARGO, gratuit.</p>
+          <div class="quick-grid">
+            ${QUICK_BUTTONS.map(b => `<button type="button" class="btn btn-secondary agent-btn quick-btn" data-type="${b.type}">${icon(b.icon, 14)}${b.label}</button>`).join('')}
+          </div>
+          <div class="quick-options">
+            <label>Langue
+              <select class="dropdown-select" id="quick-lang">
+                <option value="FR">Français</option>
+                <option value="EN">English</option>
+                <option value="DE">Deutsch</option>
+              </select>
+            </label>
+            <label>Ton
+              <select class="dropdown-select" id="quick-address">
+                <option value="vous">Vouvoiement</option>
+                <option value="tu">Tutoiement</option>
+              </select>
+            </label>
+          </div>
+        </section>
 
-        <div class="section-heading" style="margin-top:16px;">✨ Brouillon automatique</div>
-        <p class="agent-muted" style="margin-bottom:8px;">ATLAS rédige une réponse d'après le fil (langue et tutoiement détectés). Rien n'est envoyé.</p>
-        <button type="button" class="btn btn-primary btn-block agent-btn" id="auto-draft-btn">Rédiger le brouillon</button>
+        <section class="section" aria-labelledby="qd-h-auto">
+          <h2 class="section-heading" id="qd-h-auto">Brouillon complet par ARGO</h2>
+          <p class="help">ARGO rédige une réponse d'après le fil (langue et tutoiement repris). Rien n'est envoyé : tu relis avant.</p>
+          <button type="button" class="btn btn-argo btn-block agent-btn" id="auto-draft-btn">${icon('bolt', 14)}<span>Rédiger avec ARGO</span><span class="argo-tag" aria-hidden="true">IA</span></button>
+        </section>
       </div>
     `;
     this.container.querySelectorAll<HTMLButtonElement>('.quick-btn').forEach(btn => {
@@ -125,7 +131,7 @@ export class QuickDraftPanel {
       await this.insertAtTop(body);
       showToast('Réponse rapide insérée', 'success');
     } catch (err) {
-      showToast(`Erreur : ${(err as Error).message}`, 'error');
+      showToast(`${humanError(err)}`, 'error');
     } finally {
       this.busy = false;
     }
@@ -135,7 +141,7 @@ export class QuickDraftPanel {
     if (this.busy) return;
     const btn = this.container.querySelector<HTMLButtonElement>('#auto-draft-btn');
     this.busy = true;
-    if (btn) { btn.disabled = true; btn.textContent = '✨ ATLAS rédige…'; }
+    if (btn) { btn.disabled = true; btn.innerHTML = `${icon('bolt', 14)}<span>ARGO rédige…</span>`; }
     try {
       const item = this.item();
       const subject = await getAsyncValue<string>(item?.subject?.getAsync?.bind(item.subject), '');
@@ -159,10 +165,10 @@ export class QuickDraftPanel {
       await this.insertAtTop(draft.body);
       showToast('Brouillon inséré : relis-le avant d\'envoyer', 'success');
     } catch (err) {
-      showToast(`Erreur : ${(err as Error).message}`, 'error');
+      showToast(`${humanError(err)}`, 'error');
     } finally {
       this.busy = false;
-      if (btn) { btn.disabled = false; btn.textContent = 'Rédiger le brouillon'; }
+      if (btn) { btn.disabled = false; btn.innerHTML = `${icon('bolt', 14)}<span>Rédiger avec ARGO</span><span class="argo-tag" aria-hidden="true">IA</span>`; }
     }
   }
 }

@@ -20,6 +20,9 @@ import { supportsMailbox } from '../api/platform';
 import { renderModeles, renderPiecesLourdes, type DepotCtx } from './agent-outils';
 import { convertToRestId } from '../api/graph';
 import { escapeHtml, escapeError, sanitizeHtml } from '../utils/html';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
+import { inlineLoadingHtml, errorHtml } from '../ui/states';
 
 export class ComposePanel {
   private container: HTMLElement;
@@ -41,99 +44,70 @@ export class ComposePanel {
 
   private render(): void {
     this.container.innerHTML = `
-      <div class="panel-scroll">
-        <div class="section-heading">Destinataire</div>
-        <div id="recipient-info" class="email-card">
-          <div class="spinner" style="margin:8px auto;"></div>
-        </div>
+      <div class="panel-scroll stack">
+        <section class="section" aria-labelledby="cp-h-dest">
+          <h2 class="section-heading" id="cp-h-dest">${this.isReply ? 'Tu réponds à' : 'Destinataire'}</h2>
+          <div id="recipient-info" class="email-card">${inlineLoadingHtml('Lecture du destinataire…')}</div>
+        </section>
 
-        <div id="argo-profile-section" style="display:none;">
-          <div class="section-heading">Profil ARGO</div>
-          <div id="argo-profile-info" class="email-card"></div>
-        </div>
+        <section id="argo-profile-section" class="section" style="display:none;" aria-labelledby="cp-h-prof">
+          <h2 class="section-heading" id="cp-h-prof">Comment lui écrire, selon ARGO</h2>
+          <div id="argo-profile-info" class="card"></div>
+        </section>
 
-        <div id="received-analysis" style="display:none;">
-          <div class="section-heading">Analyse du mail recu</div>
-          <div id="received-analysis-info" class="email-card"></div>
-        </div>
+        <section id="received-analysis" class="section" style="display:none;" aria-labelledby="cp-h-ana">
+          <h2 class="section-heading" id="cp-h-ana">Le mail reçu, lu par ARGO</h2>
+          <div id="received-analysis-info" class="card"></div>
+        </section>
 
         ${this.isReply ? `
-        <div id="quick-replies-section" style="display:none;">
-          <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
-            <span style="font-size:14px;">⚡</span>
-            <span class="section-heading" style="margin:0;">Reponses rapides IA</span>
-          </div>
-          <div id="quick-replies-container" style="display:flex; flex-direction:column; gap:6px;"></div>
-        </div>
+        <section id="quick-replies-section" class="section" style="display:none;" aria-labelledby="cp-h-quick">
+          <h2 class="section-heading" id="cp-h-quick">Réponses proposées par ARGO</h2>
+          <div id="quick-replies-container" class="stack-sm"></div>
+        </section>
 
-        <div id="free-reply-section">
-          <div style="display:flex; align-items:center; gap:6px; margin-bottom:8px;">
-            <span style="font-size:14px;">✨</span>
-            <span class="section-heading" style="margin:0;">L'IA écrit pour toi</span>
-          </div>
-          <div class="form-group" style="margin-bottom:4px;">
-            <textarea class="form-input" id="free-reply-instruction" rows="3" placeholder="Brief court — l'IA déploie en mail complet.
-Ex: 'décline, trop cher, on verra l'an prochain'
-Ex: 'confirme + propose RDV mardi 10h'
-Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
-          </div>
-          <p style="font-size:10px;color:var(--atlas-text-muted);margin:0 0 8px;line-height:1.3;">
-            Salutation + langue + tutoiement détectés du mail reçu. Signature gérée par Exclaimer.
-          </p>
-          <button class="btn btn-primary btn-block" id="free-reply-btn" style="font-size:13px;">
-            ✨ L'IA écrit la réponse
-          </button>
-          <div id="free-reply-preview" style="display:none; margin-top:10px;">
-            <div class="section-heading" style="font-size:10px;">APERCU</div>
+        <section id="free-reply-section" class="section" aria-labelledby="cp-h-free">
+          <h2 class="section-heading" id="cp-h-free">Dis à ARGO quoi répondre</h2>
+          <textarea class="form-input" id="free-reply-instruction" rows="3" aria-labelledby="cp-h-free" placeholder="En quelques mots : « décline, trop cher, on verra l'an prochain » ou « confirme et propose mardi 10 h ». Vide : réponse polie d'attente."></textarea>
+          <p class="help">Salutation, langue et tutoiement repris du mail reçu. La signature est ajoutée par Exclaimer.</p>
+          <button type="button" class="btn btn-argo btn-block" id="free-reply-btn">${icon('bolt', 14)}<span>Rédiger avec ARGO</span><span class="argo-tag" aria-hidden="true">IA</span></button>
+          <div id="free-reply-preview" class="stack-sm" style="display:none;">
+            <p class="eyebrow">Aperçu</p>
             <div id="free-reply-content" class="template-preview"></div>
-            <button class="btn btn-primary btn-block" id="free-reply-send-btn" style="margin-top:8px; font-size:14px;">
-              Repondre avec ce texte
-            </button>
+            <button type="button" class="btn btn-primary btn-block" id="free-reply-send-btn">${icon('reply', 14)}Répondre avec ce texte</button>
           </div>
-        </div>
-
-        <div style="border-top:1px solid var(--atlas-border); margin:16px 0 8px; padding-top:12px;">
-          <div class="section-heading" style="font-size:10px; color:var(--atlas-text-muted);">OU UTILISER UN TEMPLATE</div>
-        </div>
+        </section>
         ` : ''}
 
         <div id="agent-modeles-compose" class="agent-section" hidden></div>
         <div id="agent-pj-compose-wrap" class="agent-section" hidden>
-          <button type="button" class="btn btn-secondary btn-block agent-btn" id="agent-pj-compose-btn">Pièces jointes lourdes ?</button>
+          <button type="button" class="btn btn-secondary btn-block agent-btn" id="agent-pj-compose-btn">${icon('paperclip', 14)}Pièces jointes lourdes ?</button>
           <div id="agent-pj-compose" hidden></div>
         </div>
 
-        <div class="section-heading">Template</div>
-        <div class="form-group">
+        <section class="section" aria-labelledby="cp-h-tpl">
+          <h2 class="section-heading" id="cp-h-tpl">${this.isReply ? 'Ou partir d\'un modèle' : 'Modèle de mail'}</h2>
+          <label class="sr-only" for="template-select">Choisir un modèle</label>
           <select class="dropdown-select" id="template-select">
-            <option value="">Chargement des templates...</option>
+            <option value="">Chargement des modèles…</option>
           </select>
-        </div>
-
-        <div id="template-variables" style="display:none;">
-          <div class="section-heading">Variables</div>
-          <div id="variables-container"></div>
-        </div>
-
-        <div id="template-preview-section" style="display:none;">
-          <div class="section-heading">Aperçu</div>
-          <div id="template-preview" class="template-preview"></div>
-        </div>
-
-        <div style="margin-top:16px; display:flex; flex-direction:column; gap:8px;">
-          ${this.isReply ? `
-            <button class="btn btn-primary btn-block" id="reply-btn" disabled style="font-size:14px;">
-              Repondre avec ce template
-            </button>
-          ` : `
-            <button class="btn btn-primary btn-block" id="insert-btn" disabled>
-              Inserer au curseur
-            </button>
-            <button class="btn btn-secondary btn-block" id="replace-btn" disabled style="font-size:11px;">
-              Remplacer tout le contenu
-            </button>
-          `}
-        </div>
+          <div id="template-variables" class="stack-sm" style="display:none;">
+            <p class="eyebrow">À compléter</p>
+            <div id="variables-container"></div>
+          </div>
+          <div id="template-preview-section" class="stack-sm" style="display:none;">
+            <p class="eyebrow">Aperçu</p>
+            <div id="template-preview" class="template-preview"></div>
+          </div>
+          <div class="stack-sm">
+            ${this.isReply ? `
+              <button type="button" class="btn btn-primary btn-block" id="reply-btn" disabled>${icon('reply', 14)}Répondre avec ce modèle</button>
+            ` : `
+              <button type="button" class="btn btn-primary btn-block" id="insert-btn" disabled>${icon('template', 14)}Insérer au curseur</button>
+              <button type="button" class="btn btn-ghost btn-block" id="replace-btn" disabled>Remplacer tout le contenu</button>
+            `}
+          </div>
+        </section>
       </div>
     `;
 
@@ -255,8 +229,8 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
         if (from) {
           this.recipientEmail = from.emailAddress || '';
           recipientInfo.innerHTML = `
-            <div style="font-size:11px;color:var(--atlas-text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Repondre a</div>
-            <div class="email-card-subject">${this.escapeHtml(from.displayName || '')} &lt;${this.escapeHtml(from.emailAddress || '')}&gt;</div>
+            <div class="email-card-subject">${this.escapeHtml(from.displayName || from.emailAddress || '')}</div>
+            <div class="email-card-meta">${this.escapeHtml(from.emailAddress || '')}</div>
             <div class="email-card-meta" style="margin-top:4px;">${this.escapeHtml(typeof item.subject === 'string' ? item.subject : '')}</div>
           `;
           this.loadArgoProfile();
@@ -276,7 +250,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
               `;
               this.loadArgoProfile();
             } else {
-              recipientInfo.innerHTML = '<p style="font-size:12px;color:var(--atlas-text-secondary);">Ajoutez un destinataire pour activer l\'adaptation ARGO</p>';
+              recipientInfo.innerHTML = '<p class="help">Ajoute un destinataire : ARGO adaptera le ton à cette personne.</p>';
             }
           });
         } else if ((item as any).to) {
@@ -295,7 +269,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       await this.loadTemplates();
 
     } catch (err) {
-      recipientInfo.innerHTML = `<p style="color:var(--atlas-danger);font-size:12px;">${escapeError(err)}</p>`;
+      recipientInfo.innerHTML = errorHtml(err, { title: 'Destinataire illisible', retry: false, compact: true });
     }
   }
 
@@ -313,12 +287,9 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
           this.argoProfile.tutoiementAvec.some(n => n.toLowerCase().includes(this.userName.toLowerCase()));
 
         profileInfo.innerHTML = `
-          <div style="font-size:12px;">
-            <strong>${escapeHtml(this.argoProfile.prenom)} ${escapeHtml(this.argoProfile.nom)}</strong><br/>
-            Ton : <span style="color:${isTu ? 'var(--atlas-success)' : 'var(--atlas-primary)'}">${isTu ? '👋 Tutoiement' : '🤝 Vouvoiement'}</span><br/>
-            Langue : ${escapeHtml(this.argoProfile.languePreferee || 'FR')}
-            ${this.argoProfile.tutoiementAvec.length > 0 ? `<br/>Tutoiement avec : ${escapeHtml(this.argoProfile.tutoiementAvec.join(', '))}` : ''}
-          </div>
+          <p class="person-name">${escapeHtml(this.argoProfile.prenom)} ${escapeHtml(this.argoProfile.nom)}</p>
+          <div class="chips"><span class="chip">${isTu ? 'Tutoiement' : 'Vouvoiement'}</span><span class="chip">${escapeHtml(this.argoProfile.languePreferee || 'FR')}</span></div>
+          ${this.argoProfile.tutoiementAvec.length > 0 ? `<p class="help" style="margin-top:6px;">Tutoie : ${escapeHtml(this.argoProfile.tutoiementAvec.join(', '))}</p>` : ''}
         `;
       }
     } catch { /* non-blocking */ }
@@ -344,12 +315,12 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
         section.style.display = 'block';
 
         info.innerHTML = `
-          <div style="font-size:12px;">
-            Sentiment : <strong>${escapeHtml(analysis.sentiment)}</strong><br/>
-            Urgence : <strong>${escapeHtml(analysis.urgence)}</strong><br/>
-            Ton détecté : <strong>${escapeHtml(analysis.tonUtilise)}</strong>
-            ${analysis.suggestions.length > 0 ? `<br/><br/>Suggestions :<ul style="margin:4px 0 0 16px;">${analysis.suggestions.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : ''}
-          </div>
+          <dl class="facts" style="margin-top:0;">
+            <dt>Ressenti</dt><dd>${escapeHtml(analysis.sentiment)}</dd>
+            <dt>Urgence</dt><dd>${escapeHtml(analysis.urgence)}</dd>
+            <dt>Ton</dt><dd>${escapeHtml(analysis.tonUtilise)}</dd>
+          </dl>
+          ${analysis.suggestions.length > 0 ? `<p class="eyebrow" style="margin-top:10px;">Pistes de réponse</p><ul class="agent-facts" style="margin-top:4px;">${analysis.suggestions.map(s => `<li>${escapeHtml(s)}</li>`).join('')}</ul>` : ''}
         `;
       });
     } catch { /* non-blocking */ }
@@ -361,13 +332,13 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       const select = document.getElementById('template-select') as HTMLSelectElement;
 
       select.innerHTML = `
-        <option value="">— Sélectionner un template —</option>
+        <option value="">Choisir un modèle</option>
         ${this.templates.map(t => `
           <option value="${escapeHtml(t.id)}">${escapeHtml(t.nom)} ${t.marque ? `(${escapeHtml(t.marque)})` : ''}</option>
         `).join('')}
       `;
     } catch (err) {
-      showToast('Erreur chargement templates', 'error');
+      showToast('Modèles indisponibles pour le moment : réessaie dans un instant.', 'error');
     }
   }
 
@@ -449,11 +420,11 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
 
     // IA servie par le worker (aucune clé dans le complément) : adaptation dès qu'un profil ARGO existe.
     const hasAI = !!this.argoProfile;
-    const langBadge = content.lang !== 'FR' ? `<span style="display:inline-block;background:var(--atlas-primary);color:#fff;border-radius:3px;padding:1px 6px;font-size:9px;margin-left:6px;">${escapeHtml(content.lang)}</span>` : '';
+    const langBadge = content.lang !== 'FR' ? ` <span class="badge">${escapeHtml(content.lang)}</span>` : '';
 
     preview.innerHTML = `
-      ${hasAI ? `<div style="display:flex;align-items:center;gap:4px;margin-bottom:6px;font-size:10px;color:var(--atlas-primary);"><span>✨</span> Sera adapte par ARGO (${this.argoProfile!.tonPrefere === 'Amical' ? 'tu' : 'vous'}, ${escapeHtml(content.lang)})${langBadge}</div>` : ''}
-      <div style="margin-bottom:8px;font-weight:600;font-size:12px;">Objet: ${this.escapeHtml(subject)}</div>
+      ${hasAI ? `<p class="help" style="margin-bottom:6px;">${icon('bolt', 12)}ARGO l'adaptera à la personne (${this.argoProfile!.tonPrefere === 'Amical' ? 'tu' : 'vous'}, ${escapeHtml(content.lang)})${langBadge}</p>` : ''}
+      <div style="margin-bottom:8px;font-weight:650;font-size:12px;">Objet : ${this.escapeHtml(subject)}</div>
       <hr style="border:none;border-top:1px solid var(--atlas-border);margin:8px 0;"/>
       <p>${escapeHtml(salutation)}</p>
       <div>${sanitizeHtml(body)}</div>
@@ -469,7 +440,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
     const replaceBtn = document.getElementById('replace-btn') as HTMLButtonElement;
     insertBtn.disabled = true;
     replaceBtn.disabled = true;
-    insertBtn.textContent = 'Personnalisation IA...';
+    insertBtn.textContent = 'ARGO adapte le modèle…';
 
     try {
       const content = this.getTemplateContent();
@@ -499,7 +470,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
 
       // Insert into Outlook compose window
       const item = Office.context.mailbox.item;
-      if (!item) { showToast('Aucun email ouvert', 'error'); return; }
+      if (!item) { showToast('Aucun mail ouvert', 'error'); return; }
 
       // Set subject (only if template has one and it's not a reply)
       if (subject && !this.isReply) {
@@ -510,34 +481,34 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
         // Replace entire body
         (item as any).body?.setAsync?.(fullHtml, { coercionType: Office.CoercionType.Html }, (result: any) => {
           if (result.status === Office.AsyncResultStatus.Succeeded) {
-            showToast('Template applique — contenu remplace', 'success');
+            showToast('Modèle appliqué : le contenu a été remplacé', 'success');
           } else {
-            showToast('Erreur d\'insertion', 'error');
+            showToast('Insertion impossible : réessaie.', 'error');
           }
         });
       } else {
         // Insert at cursor position (keeps existing content)
         (item as any).body?.setSelectedDataAsync?.(fullHtml, { coercionType: Office.CoercionType.Html }, (result: any) => {
           if (result.status === Office.AsyncResultStatus.Succeeded) {
-            showToast('Template insere au curseur', 'success');
+            showToast('Modèle inséré au curseur', 'success');
           } else {
             // Fallback: prepend if setSelectedDataAsync not supported
             (item as any).body?.prependAsync?.(fullHtml, { coercionType: Office.CoercionType.Html }, (r2: any) => {
               if (r2.status === Office.AsyncResultStatus.Succeeded) {
-                showToast('Template insere en debut de mail', 'success');
+                showToast('Modèle inséré en début de mail', 'success');
               } else {
-                showToast('Erreur d\'insertion', 'error');
+                showToast('Insertion impossible : réessaie.', 'error');
               }
             });
           }
         });
       }
     } catch (err) {
-      showToast(`Erreur : ${(err as Error).message}`, 'error');
+      showToast(`${humanError(err)}`, 'error');
     } finally {
       insertBtn.disabled = false;
       replaceBtn.disabled = false;
-      insertBtn.textContent = 'Inserer au curseur';
+      insertBtn.innerHTML = `${icon('template', 14)}Insérer au curseur`;
     }
   }
 
@@ -566,7 +537,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       section.style.display = 'block';
 
       container.innerHTML = replies.map((r, i) => `
-        <button class="btn btn-secondary btn-block quick-reply-btn" data-idx="${i}" style="text-align:left; padding:10px 12px; font-size:12px; line-height:1.4;">
+        <button type="button" class="btn btn-secondary btn-block quick-reply-btn" data-idx="${i}" style="white-space:normal; text-align:left;">${icon('reply', 14)}
           <strong>${this.escapeHtml(r.label)}</strong>
         </button>
       `).join('');
@@ -578,7 +549,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
           if (reply) {
             const mailItem = Office.context.mailbox.item;
             (mailItem as any)?.displayReplyForm?.({ htmlBody: sanitizeHtml(reply.body) });
-            showToast('Reponse rapide ouverte', 'success');
+            showToast('Réponse ouverte', 'success');
           }
         });
       });
@@ -588,11 +559,11 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
   /** Generate a free-form reply from user instruction */
   private async generateFreeReplyContent(): Promise<void> {
     const instruction = (document.getElementById('free-reply-instruction') as HTMLTextAreaElement)?.value?.trim();
-    if (!instruction) { showToast('Decrivez ce que vous voulez repondre', 'error'); return; }
+    if (!instruction) { showToast('Dis en quelques mots ce que tu veux répondre.', 'error'); return; }
 
     const btn = document.getElementById('free-reply-btn') as HTMLButtonElement;
     btn.disabled = true;
-    btn.textContent = '✨ Generation en cours...';
+    btn.innerHTML = `${icon('bolt', 14)}<span>ARGO rédige…</span>`;
 
     try {
       const item = Office.context.mailbox.item;
@@ -614,10 +585,10 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
       previewSection.style.display = 'block';
       previewContent.innerHTML = this.freeReplyHtml;
     } catch (err) {
-      showToast(`Erreur IA : ${(err as Error).message}`, 'error');
+      showToast(`${humanError(err)}`, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = '✨ Generer la reponse';
+      btn.innerHTML = `${icon('bolt', 14)}<span>Rédiger avec ARGO</span><span class="argo-tag" aria-hidden="true">IA</span>`;
     }
   }
 
@@ -626,7 +597,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
     if (!this.freeReplyHtml) return;
     const item = Office.context.mailbox.item;
     (item as any)?.displayReplyForm?.({ htmlBody: this.freeReplyHtml });
-    showToast('Reponse ouverte', 'success');
+    showToast('Réponse ouverte', 'success');
   }
 
   /** Reply mode: open Outlook reply form with adapted template content */
@@ -635,7 +606,7 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
 
     const replyBtn = document.getElementById('reply-btn') as HTMLButtonElement;
     replyBtn.disabled = true;
-    replyBtn.textContent = 'Personnalisation IA...';
+    replyBtn.textContent = 'ARGO adapte le modèle…';
 
     try {
       const content = this.getTemplateContent();
@@ -666,13 +637,13 @@ Ex: vide → réponse polie 'je reviens vers toi'"></textarea>
         (item as any).displayReplyForm?.({
           htmlBody: fullHtml,
         });
-        showToast('Reponse ouverte avec le template adapte', 'success');
+        showToast('Réponse ouverte avec le modèle adapté', 'success');
       }
     } catch (err) {
-      showToast(`Erreur : ${(err as Error).message}`, 'error');
+      showToast(`${humanError(err)}`, 'error');
     } finally {
       replyBtn.disabled = false;
-      replyBtn.textContent = 'Repondre avec ce template';
+      replyBtn.innerHTML = `${icon('reply', 14)}Répondre avec ce modèle`;
     }
   }
 

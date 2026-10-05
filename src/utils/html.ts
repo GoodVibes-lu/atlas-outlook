@@ -4,6 +4,7 @@
  * passe par escapeHtml (texte) ou sanitizeHtml (HTML riche) avant d'être injectée.
  */
 import DOMPurify from 'dompurify';
+import { humanError } from '../api/net';
 
 export function escapeHtml(str: unknown): string {
   if (str === null || str === undefined || str === '') return '';
@@ -12,9 +13,9 @@ export function escapeHtml(str: unknown): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-/** Message d'une erreur quelconque, prêt à être injecté. */
+/** Message LISIBLE d'une erreur quelconque (jamais le texte technique brut), prêt à être injecté. */
 export function escapeError(err: unknown): string {
-  return escapeHtml(err instanceof Error ? err.message : String(err ?? ''));
+  return escapeHtml(humanError(err));
 }
 
 /**

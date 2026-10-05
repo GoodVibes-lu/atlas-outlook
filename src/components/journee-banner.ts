@@ -17,28 +17,32 @@
 import { fetchJournee, type AgentJournee, type AgentListePile } from '../api/agent';
 import { renderMailList, type MailListOptions } from './agent-lists';
 
-function plural(n: number, one: string, many: string): string {
-  return `${n} ${n > 1 ? many : one}`;
-}
+interface Compteur { texte: string; n: number; libelle: string; pile?: AgentListePile; alerte?: boolean }
 
-interface Compteur { texte: string; pile?: AgentListePile }
+function c(n: number, libelle: string, extra: Partial<Compteur> = {}): Compteur {
+  return { n, libelle, texte: `${n} ${libelle}`, ...extra };
+}
 
 function compteurs(j: AgentJournee): Compteur[] {
   const out: Compteur[] = [
-    { texte: `${j.aTraiter} à traiter`, pile: 'a_traiter' },
-    { texte: `${j.enAttente} en attente`, pile: 'en_attente' },
-    { texte: plural(j.relancesDues, 'relance due', 'relances dues') },
-    { texte: plural(j.clientsPlus48h, 'client > 48 h', 'clients > 48 h') },
+    c(j.aTraiter, 'à traiter', { pile: 'a_traiter', alerte: j.aTraiter > 0 }),
+    c(j.enAttente, 'en attente', { pile: 'en_attente' }),
+    c(j.relancesDues, j.relancesDues > 1 ? 'relances dues' : 'relance due'),
+    c(j.clientsPlus48h, j.clientsPlus48h > 1 ? 'clients > 48 h' : 'client > 48 h', { alerte: j.clientsPlus48h > 0 }),
   ];
-  if (j.aFiltrer > 0) out.push({ texte: `${j.aFiltrer} à filtrer`, pile: 'a_filtrer' });
+  if (j.aFiltrer > 0) out.push(c(j.aFiltrer, 'à filtrer', { pile: 'a_filtrer' }));
   // Phase 3 : mails « répondre plus tard » encore masqués (affiché seulement s'il y en a).
-  if (j.plusTard > 0) out.push({ texte: `${j.plusTard} plus tard`, pile: 'plus_tard' });
+  if (j.plusTard > 0) out.push(c(j.plusTard, 'plus tard', { pile: 'plus_tard' }));
   // Phase 5 : good@ (présent seulement pour ses membres autorisés).
   if (j.equipe) {
-    out.push({ texte: `${j.equipe.aAttribuer} à attribuer (good@)`, pile: 'equipe_a_attribuer' });
-    out.push({ texte: `${j.equipe.pourMoi} pour toi sur good@`, pile: 'equipe_pour_moi' });
+    out.push(c(j.equipe.aAttribuer, 'à attribuer (good@)', { pile: 'equipe_a_attribuer' }));
+    out.push(c(j.equipe.pourMoi, 'pour toi sur good@', { pile: 'equipe_pour_moi' }));
   }
   return out;
+}
+
+function chipInner(x: Compteur): string {
+  return `<span class="journee-n">${x.n}</span><span class="journee-l">${x.libelle}</span>`;
 }
 
 /** Texte du bandeau (exporté pour le plan d'essai et la cohérence avec le brief). */
@@ -54,19 +58,20 @@ export async function refreshJourneeBanner(host: HTMLElement | null, opts: Pick<
   if (!host) return;
   const j = await fetchJournee();
   if (!j) {
+    // Bandeau facultatif : absent si la route ne répond pas (jamais d'erreur ici).
     host.innerHTML = '';
-    host.style.display = 'none';
+    host.hidden = true;
     return;
   }
-  host.style.display = '';
+  host.hidden = false;
   const cs = compteurs(j);
   host.innerHTML = `
-    <div class="journee-banner" role="status" aria-label="Ma journée">
+    <section class="journee-banner" aria-label="Ma journée">
       <span class="journee-title">Ma journée</span>
-      <span class="journee-counts">${cs.map(c => c.pile
-        ? `<button type="button" class="journee-count" data-pile="${c.pile}" aria-expanded="false" title="Voir la liste">${c.texte}</button>`
-        : `<span class="journee-count-static">${c.texte}</span>`).join('<span class="journee-sep"> · </span>')}</span>
-    </div>
+      <div class="journee-counts">${cs.map(x => x.pile
+        ? `<button type="button" class="journee-count${x.alerte ? ' is-alert' : ''}" data-pile="${x.pile}" aria-expanded="false" aria-controls="journee-list" title="Voir la liste : ${x.libelle}">${chipInner(x)}</button>`
+        : `<span class="journee-count is-static${x.alerte ? ' is-alert' : ''}">${chipInner(x)}</span>`).join('')}</div>
+    </section>
     <div class="journee-list" id="journee-list" hidden></div>
   `;
   const list = host.querySelector<HTMLElement>('#journee-list')!;
@@ -102,8 +107,8 @@ export async function refreshJourneeBanner(host: HTMLElement | null, opts: Pick<
 async function updateCounts(host: HTMLElement): Promise<void> {
   const j = await fetchJournee();
   if (!j) return;
-  for (const c of compteurs(j)) {
-    const btn = c.pile ? host.querySelector<HTMLButtonElement>(`button[data-pile="${c.pile}"]`) : null;
-    if (btn) btn.textContent = c.texte;
+  for (const x of compteurs(j)) {
+    const btn = x.pile ? host.querySelector<HTMLButtonElement>(`button[data-pile="${x.pile}"]`) : null;
+    if (btn) { btn.innerHTML = chipInner(x); btn.classList.toggle('is-alert', !!x.alerte); }
   }
 }

@@ -17,6 +17,8 @@
 import { fetchEquipe, prendreMail, relacherMail, attribuerMail, ajouterCommentaire } from '../api/agent';
 import type { InboxEquipe, InboxEquipeVue } from '../api/inbox-agent.types';
 import { escapeHtml } from './agent-lists';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
 
 type InfoFn = (message: string, type?: 'success' | 'error' | 'info') => void;
 
@@ -99,7 +101,7 @@ export async function renderEquipe(host: HTMLElement, opts: EquipeOptions): Prom
     v = await fetchEquipe(opts.messageId, opts.mailbox);
   } catch (e) {
     host.hidden = false;
-    host.innerHTML = `<div class="agent-section-title">Équipe</div><p class="agent-error" role="alert">Équipe indisponible : ${escapeHtml((e as Error).message)}</p>`;
+    host.innerHTML = `<div class="agent-section-title">Équipe</div><p class="agent-error" role="alert">Équipe indisponible : ${escapeHtml(humanError(e))}</p>`;
     return;
   }
   if (!host.isConnected) return;
@@ -134,7 +136,7 @@ function afficher(host: HTMLElement, v: InboxEquipeVue, opts: EquipeOptions): vo
       await recharger(r.ok ? succes : undefined);
     } catch (e) {
       occupe(false);
-      opts.onInfo?.(`Erreur : ${(e as Error).message}`, 'error');
+      opts.onInfo?.(`${humanError(e)}`, 'error');
     }
   };
   btn('prendre')?.addEventListener('click', () => agir(() => prendreMail(v.messageId, v.mailbox), 'Tu as pris ce mail : l\'équipe le voit'));
@@ -160,7 +162,7 @@ function afficher(host: HTMLElement, v: InboxEquipeVue, opts: EquipeOptions): vo
       await recharger('Commentaire interne ajouté');
     } catch (e) {
       occupe(false);
-      opts.onInfo?.(`Erreur : ${(e as Error).message}`, 'error');
+      opts.onInfo?.(`${humanError(e)}`, 'error');
     }
   });
 }

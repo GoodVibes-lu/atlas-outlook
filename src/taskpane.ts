@@ -33,12 +33,15 @@ import { isMobile } from './api/platform';
 import { initRoamingStorage } from './api/roaming-storage';
 import { purgeLegacySecrets } from './api/worker';
 import { maybeAutoSweep } from './api/auto-sweep';
+import { icon } from './ui/icons';
+import { humanError } from './api/net';
 import type { AddinMode } from './types';
 
 // ── State ──
 
 let currentPanel: { destroy: () => void } | null = null;
 let currentTab = '';
+let previousTab = '';
 
 // ── Toast ──
 
@@ -48,10 +51,16 @@ export function showToast(message: string, type: 'success' | 'error' | 'info' = 
 
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.textContent = message;
+  toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  // Jamais de texte technique brut, et plus d'emoji décoratifs en tête de message.
+  const text = String(message || '')
+    .replace(/[☀-➿\u{1F300}-\u{1FAFF}️‍✓✔✗⏰⏳]/gu, '')
+    .replace(/\s{2,}/g, ' ').replace(/^[\s:·-]+|[\s:·-]+$/g, '').trim();
+  toast.innerHTML = `${icon(type === 'success' ? 'check-circle' : type === 'error' ? 'alert' : 'info', 16)}<span></span>`;
+  toast.querySelector('span')!.textContent = /load failed|failed to fetch|typeerror|networkerror/i.test(text) ? humanError(new Error(text)) : text;
   document.body.appendChild(toast);
 
-  setTimeout(() => toast.remove(), 3500);
+  setTimeout(() => toast.remove(), type === 'error' ? 6000 : 3500);
 }
 
 // ── Helpers ──
@@ -97,79 +106,84 @@ function renderApp(): void {
   const isCompose = mode === 'compose' && !mobile;
   const hasDetectedProject = !isCompose ? detectProjectInSubject() : false;
   document.body.classList.toggle('is-mobile', mobile);
+  applyOfficeTheme();
 
-  // Determine available tabs based on mode
-  let tabs: Array<{ id: string; label: string; icon: string }>;
-
-  if (isCompose) {
-    tabs = [
-      { id: 'compose', label: '\uD83D\uDCDD Templates', icon: '' },
-      { id: 'quick', label: '\u26A1 Rapide', icon: '' },
-      { id: 'check', label: '\uD83D\uDEE1\uFE0F V\u00e9rifier', icon: '' },
-      { id: 'settings', label: '\u2699\uFE0F', icon: '' },
-    ];
-  } else if (mobile) {
-    // Mobile : lecture seule, une colonne, pas de rédaction (ni « Répondre » ni « Créer »).
-    tabs = [
-      { id: 'agent', label: '\uD83E\uDDED Agent', icon: '' },
-      { id: 'ia', label: '\u2728 IA', icon: '' },
-      { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
-      { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
-      { id: 'settings', label: '\u2699\uFE0F', icon: '' },
-    ];
-  } else if (hasDetectedProject) {
-    // Project detected in subject: remove "Créer" tab, default to link
-    tabs = [
-      { id: 'agent', label: '\uD83E\uDDED Agent', icon: '' },
-      { id: 'ia', label: '\u2728 IA', icon: '' },
-      { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
-      { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
-      { id: 'reply', label: '\uD83D\uDCAC R\u00e9pondre', icon: '' },
-      { id: 'settings', label: '\u2699\uFE0F', icon: '' },
-    ];
-  } else {
-    tabs = [
-      { id: 'agent', label: '\uD83E\uDDED Agent', icon: '' },
-      { id: 'ia', label: '\u2728 IA', icon: '' },
-      { id: 'link', label: '\uD83D\uDD17 Lier', icon: '' },
-      { id: 'info', label: '\uD83D\uDCC1 Projet', icon: '' },
-      { id: 'create', label: '\u2795 Cr\u00e9er', icon: '' },
-      { id: 'reply', label: '\uD83D\uDCAC R\u00e9pondre', icon: '' },
-      { id: 'settings', label: '\u2699\uFE0F', icon: '' },
-    ];
-  }
+  // Onglets : libellé court lisible + icône SVG + description (infobulle, lecteur d'écran).
+  // Réglages : bouton dédié en en-tête (plus d'onglet « ⚙ »). Refonte 05/10/2026.
+  type Tab = { id: string; label: string; icon: string; title: string };
+  const T: Record<string, Tab> = {
+    agent: { id: 'agent', label: 'Ce mail', icon: 'inbox', title: 'Ce mail : résumé, quoi faire, correspondant' },
+    ia: { id: 'ia', label: 'Classer', icon: 'tag', title: 'Classer avec ARGO : thème, urgence, dossier' },
+    link: { id: 'link', label: 'Lier', icon: 'link', title: 'Lier ce mail à un projet ou un contact ATLAS' },
+    info: { id: 'info', label: 'Projet', icon: 'folder', title: 'Le projet ATLAS de ce mail' },
+    create: { id: 'create', label: 'Créer', icon: 'plus', title: 'Créer un projet à partir de ce mail' },
+    reply: { id: 'reply', label: 'Répondre', icon: 'reply', title: 'Répondre avec un modèle' },
+    compose: { id: 'compose', label: 'Modèles', icon: 'template', title: 'Insérer un modèle de mail' },
+    quick: { id: 'quick', label: 'Rédiger', icon: 'bolt', title: 'Réponse rapide et brouillon ARGO' },
+    check: { id: 'check', label: 'Vérifier', icon: 'shield-check', title: 'Vérifier avant l\'envoi' },
+    reunion: { id: 'reunion', label: 'Point', icon: 'calendar-plus', title: 'Proposer un point à l\'ordre du jour' },
+  };
+  let tabs: Tab[];
+  if (isCompose) tabs = [T.compose, T.quick, T.check];
+  // Mobile : lecture seule, pas de rédaction (ni « Répondre » ni « Créer »).
+  else if (mobile) tabs = [T.agent, T.ia, T.link, T.info];
+  // Projet détecté dans le sujet : pas de « Créer ».
+  else if (hasDetectedProject) tabs = [T.agent, T.ia, T.link, T.info, T.reply];
+  else tabs = [T.agent, T.ia, T.link, T.info, T.create, T.reply];
 
   // Invitation / rendez-vous de réunion (04/10/2026) : onglet « Proposer un point » (ordre du jour
   // collaboratif), par défaut ; le reste du panneau reste disponible.
   const reunionItem = !isCompose && !!lireElementReunion();
-  if (reunionItem) tabs = [{ id: 'reunion', label: '\uD83D\uDCCB Proposer un point', icon: '' }, ...tabs];
+  if (reunionItem) tabs = [T.reunion, ...tabs];
 
-  // Onglet actif : paramètre d'URL > Agent (lecture, état serveur sans IA) > Templates (rédaction).
+  // Onglet actif : paramètre d'URL > Agent (lecture, état serveur sans IA) > Modèles (rédaction).
   let defaultTab: string;
-  if (tab && tabs.some(t => t.id === tab)) {
+  if (tab && (tab === 'settings' || tabs.some(t => t.id === tab))) {
     defaultTab = tab;
   } else {
     defaultTab = isCompose ? 'compose' : reunionItem ? 'reunion' : 'agent';
   }
 
   app.innerHTML = `
-    <div class="header">
-      <span class="header-logo">ATLAS</span>
-      <span class="header-subtitle">GOOD VIBES</span>
-    </div>
-    ${isCompose ? '' : '<div id="journee-host" style="display:none;"></div>'}
-    <div class="nav-tabs">
+    <header class="header">
+      <span class="brand" aria-label="ATLAS, GOOD VIBES"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">ATLAS</span></span>
+      <span class="header-context">${isCompose ? 'Rédaction' : 'Lecture'}</span>
+      <button type="button" class="icon-btn" id="btn-settings" data-tab="settings" aria-label="Réglages" title="Réglages">${icon('settings', 18)}</button>
+    </header>
+    ${isCompose ? '' : '<div id="journee-host" hidden></div>'}
+    <nav class="nav-tabs" role="tablist" aria-label="Sections du panneau" style="--tab-count:${tabs.length}">
       ${tabs.map(t => `
-        <button class="nav-tab ${t.id === defaultTab ? 'active' : ''}" data-tab="${t.id}">
-          ${t.label}
+        <button type="button" class="nav-tab" role="tab" id="tab-${t.id}" data-tab="${t.id}" title="${t.title}"
+          aria-controls="panel-content" aria-selected="false" tabindex="-1">
+          ${icon(t.icon, 18)}<span class="nav-tab-label">${t.label}</span>
         </button>
       `).join('')}
-    </div>
-    <div id="panel-content" class="content"></div>
+    </nav>
+    <main id="panel-content" class="content" role="tabpanel" tabindex="-1"></main>
   `;
 
+  app.querySelector('#btn-settings')?.addEventListener('click', () => {
+    switchTab(currentTab === 'settings' ? (previousTab || defaultTab) : 'settings');
+  });
+
+  // Navigation clavier entre onglets (flèches, Début, Fin).
+  const tabEls = Array.from(app.querySelectorAll<HTMLButtonElement>('.nav-tab'));
+  tabEls.forEach((el, i) => {
+    el.addEventListener('keydown', (ev) => {
+      let j = -1;
+      if (ev.key === 'ArrowRight') j = (i + 1) % tabEls.length;
+      else if (ev.key === 'ArrowLeft') j = (i - 1 + tabEls.length) % tabEls.length;
+      else if (ev.key === 'Home') j = 0;
+      else if (ev.key === 'End') j = tabEls.length - 1;
+      if (j < 0) return;
+      ev.preventDefault();
+      tabEls[j].focus();
+      tabEls[j].click();
+    });
+  });
+
   // Tab click handlers
-  app.querySelectorAll('.nav-tab').forEach(tabEl => {
+  tabEls.forEach(tabEl => {
     tabEl.addEventListener('click', () => {
       const tabId = tabEl.getAttribute('data-tab')!;
       switchTab(tabId);
@@ -185,14 +199,39 @@ function renderApp(): void {
   }
 }
 
+/**
+ * Thème : suit le thème d'Outlook quand Office.js le donne (fond du corps sombre ⇒ sombre), sinon
+ * la préférence du système (CSS prefers-color-scheme).
+ */
+function applyOfficeTheme(): void {
+  try {
+    const bg = (Office.context as any)?.officeTheme?.bodyBackgroundColor as string | undefined;
+    const m = bg && /^#?([0-9a-f]{6})$/i.exec(bg.trim());
+    if (!m) return;
+    const n = parseInt(m[1], 16);
+    const lum = (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
+    document.documentElement.setAttribute('data-theme', lum < 0.5 ? 'dark' : 'light');
+  } catch { /* hors Outlook : préférence du système */ }
+}
+
 function switchTab(tabId: string): void {
   if (tabId === currentTab) return;
+  if (currentTab && currentTab !== 'settings') previousTab = currentTab;
   currentTab = tabId;
 
-  // Update active tab styling
-  document.querySelectorAll('.nav-tab').forEach(tabEl => {
-    tabEl.classList.toggle('active', tabEl.getAttribute('data-tab') === tabId);
+  // Onglet actif (classe + ARIA) ; Réglages = bouton d'en-tête enfoncé.
+  document.querySelectorAll<HTMLElement>('.nav-tab').forEach(tabEl => {
+    const on = tabEl.getAttribute('data-tab') === tabId;
+    tabEl.classList.toggle('active', on);
+    tabEl.setAttribute('aria-selected', on ? 'true' : 'false');
+    tabEl.tabIndex = on ? 0 : -1;
   });
+  document.getElementById('btn-settings')?.setAttribute('aria-pressed', tabId === 'settings' ? 'true' : 'false');
+  const panel = document.getElementById('panel-content');
+  if (panel) {
+    if (tabId === 'settings') { panel.setAttribute('aria-label', 'Réglages'); panel.removeAttribute('aria-labelledby'); }
+    else { panel.setAttribute('aria-labelledby', `tab-${tabId}`); panel.removeAttribute('aria-label'); }
+  }
 
   // Destroy current panel
   currentPanel?.destroy();
@@ -252,7 +291,7 @@ async function triggerAutoSweep(): Promise<void> {
   try {
     const r = await maybeAutoSweep();
     if (r && r.archived > 0) {
-      showToast(`🧹 ${r.archived} mail${r.archived > 1 ? 's' : ''} archivé${r.archived > 1 ? 's' : ''} automatiquement`, 'success');
+      showToast(`${r.archived} mail${r.archived > 1 ? 's' : ''} archivé${r.archived > 1 ? 's' : ''} automatiquement`, 'success');
     }
   } catch (e) {
     console.warn('[ATLAS] auto-sweep failed:', e);

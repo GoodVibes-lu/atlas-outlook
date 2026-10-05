@@ -1,7 +1,12 @@
 /**
- * Project Info Panel — Show project details when email is linked
- * Detects projects by #NNN in subject or by conversation ID match.
- * Shows extended info, ARGO contact card, email count, and ATLAS deep link.
+ * Project Info Panel · Onglet « Projet » : le projet ATLAS de ce mail.
+ * Détection par #NNN dans le sujet, sinon par la conversation déjà liée.
+ * Fiche projet, mails liés, profil ARGO de l'expéditeur, lien vers ATLAS.
+ *
+ * Refonte 05/10/2026 (retour « Load failed ») : chaque bloc a son propre état. La détection en
+ * échec affiche un message lisible + « Réessayer » ; les compléments (nombre de mails, champs
+ * détaillés, profil ARGO) sont lus en parallèle avec allSettled : l'un en échec n'empêche pas la
+ * fiche de s'afficher. Jamais de texte technique à l'écran (ui/states.ts).
  */
 
 import {
@@ -9,293 +14,198 @@ import {
   getLinkedConversationIds,
   countLinkedEmails,
   fetchContactArgoProfile,
-  getProjetsByClient,
   getProjetExtraFields,
 } from '../api/airtable';
 import type { Projet, ArgoProfile } from '../types';
+import { escapeHtml } from '../utils/html';
+import { icon } from '../ui/icons';
+import { loadingHtml, emptyHtml, renderError } from '../ui/states';
 
-// ── Status color mapping ──
-
-const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
-  'Demande':      { bg: '#FFF3CD', text: '#856404' },
-  'Devis envoyé': { bg: '#CCE5FF', text: '#004085' },
-  'Confirmé':     { bg: '#D4EDDA', text: '#155724' },
-  'En cours':     { bg: '#D1ECF1', text: '#0C5460' },
-  'Terminé':      { bg: '#E2E3E5', text: '#383D41' },
-  'Facturé':      { bg: '#D6D8DB', text: '#1B1E21' },
-  'Annulé':       { bg: '#F8D7DA', text: '#721C24' },
-  'Archivé':      { bg: '#E2E3E5', text: '#6C757D' },
+/** Statut → ton sémantique (statut réel seulement, cf. DS : pas de couleur décorative). */
+const STATUS_TONE: Record<string, 'neutral' | 'info' | 'success' | 'warning' | 'danger' | 'muted'> = {
+  'Demande': 'warning',
+  'Devis envoyé': 'info',
+  'Confirmé': 'success',
+  'En cours': 'info',
+  'Terminé': 'muted',
+  'Facturé': 'muted',
+  'Annulé': 'danger',
+  'Archivé': 'muted',
 };
 
-function getStatusBadge(statut: string): string {
-  const colors = STATUS_COLORS[statut] || { bg: '#E9ECEF', text: '#495057' };
-  return `<span style="
-    display:inline-block;
-    padding:2px 8px;
-    border-radius:10px;
-    font-size:11px;
-    font-weight:600;
-    background:${colors.bg};
-    color:${colors.text};
-    letter-spacing:0.3px;
-  ">${escapeHtml(statut || '—')}</span>`;
+function statusBadge(statut: string): string {
+  if (!statut) return '';
+  const tone = STATUS_TONE[statut] || 'neutral';
+  return `<span class="badge badge-${tone}">${escapeHtml(statut)}</span>`;
 }
 
-function escapeHtml(str: string | undefined | null): string {
-  if (!str) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function fmtDate(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('fr-LU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
+
+type Extra = { type?: string; budget?: string; descriptif?: string };
 
 export class ProjectInfoPanel {
   private container: HTMLElement;
-  private projet: Projet | null = null;
-  private projetExtra: { type?: string; budget?: string; descriptif?: string } = {};
-  private emailCount = 0;
-  private argoProfile: ArgoProfile | null = null;
+  private destroyed = false;
   private senderEmail = '';
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.render();
-    this.detectProject();
-  }
-
-  private render(): void {
     this.container.innerHTML = `
       <div class="panel-scroll">
-        <div class="section-heading">Projet detect&eacute;</div>
-        <div id="project-info-content">
-          <div class="spinner" style="margin:12px auto;"></div>
-        </div>
-        <div id="argo-contact-card" style="display:none;"></div>
+        <div id="project-info-content"></div>
+        <div id="argo-contact-card"></div>
       </div>
     `;
+    void this.detectProject();
   }
 
+  private get content(): HTMLElement | null { return this.container.querySelector('#project-info-content'); }
+
   private async detectProject(): Promise<void> {
-    const content = document.getElementById('project-info-content')!;
+    const content = this.content;
+    if (!content) return;
+    content.innerHTML = loadingHtml('Recherche du projet de ce mail…', 3);
 
+    let item: any = null;
+    try { item = Office.context.mailbox.item; } catch { item = null; }
+    if (!item) {
+      content.innerHTML = emptyHtml({ icon: 'mail', title: 'Aucun mail sélectionné', text: 'Ouvre un mail pour voir le projet ATLAS auquel il se rattache.' });
+      return;
+    }
+    const subject: string = item.subject || '';
+    this.senderEmail = item.from?.emailAddress || '';
+
+    let projet: Projet | null = null;
     try {
-      const item = Office.context.mailbox.item;
-      if (!item) {
-        content.innerHTML = '<p class="empty-state">Aucun email s&eacute;lectionn&eacute;</p>';
-        return;
-      }
-
-      const subject = (item as any).subject || '';
-      this.senderEmail = (item as any).from?.emailAddress || '';
-
-      // 1) Try to detect #NNN in subject
+      // 1) #NNN dans le sujet
       const match = subject.match(/#\s*(\d{2,4})/);
       if (match) {
         const projets = await getAllProjets();
-        this.projet = projets.find(p => String(p.noProjet) === match[1]) || null;
+        projet = projets.find(p => String(p.noProjet) === match[1]) || null;
       }
-
-      // 2) Fallback: conversation ID match
-      if (!this.projet) {
-        const conversationId = (item as any).conversationId || '';
+      // 2) Conversation déjà liée à un projet
+      if (!projet) {
+        const conversationId: string = item.conversationId || '';
         if (conversationId) {
           const convMap = await getLinkedConversationIds();
           const linked = convMap.get(conversationId);
           if (linked) {
             const projets = await getAllProjets();
-            this.projet = projets.find(p => p.id === linked.projetId) || null;
+            projet = projets.find(p => p.id === linked.projetId) || null;
           }
         }
       }
-
-      if (this.projet) {
-        // Fetch extra fields, email count, and ARGO profile in parallel
-        const [emailCount, argoProfile, extraFields] = await Promise.all([
-          countLinkedEmails(this.projet.id),
-          this.senderEmail ? fetchContactArgoProfile(this.senderEmail) : Promise.resolve(null),
-          this.fetchExtraFields(this.projet.id),
-        ]);
-
-        this.emailCount = emailCount;
-        this.argoProfile = argoProfile;
-        this.projetExtra = extraFields;
-
-        this.showProjectInfo(content);
-
-        if (this.argoProfile) {
-          this.showArgoCard();
-        }
-      } else {
-        content.innerHTML = `
-          <div class="empty-state">
-            <div class="empty-state-icon">&#128193;</div>
-            <p>Aucun projet d&eacute;tect&eacute; dans le sujet ou la conversation.<br/>
-            Utilisez l'onglet "Lier" pour associer manuellement.</p>
-          </div>
-        `;
-      }
     } catch (err) {
-      content.innerHTML = `<p style="color:var(--atlas-danger);font-size:12px;">${escapeHtml((err as Error).message)}</p>`;
+      if (this.destroyed) return;
+      renderError(content, err, () => { void this.detectProject(); }, { title: 'Projet non vérifié' });
+      // Le profil de l'expéditeur ne dépend pas du projet : on le tente quand même.
+      void this.loadArgoCard();
+      return;
     }
+    if (this.destroyed) return;
+
+    if (!projet) {
+      content.innerHTML = emptyHtml({
+        icon: 'folder',
+        title: 'Aucun projet rattaché',
+        text: 'Ni numéro de projet (#123) dans le sujet, ni conversation déjà liée. Lie ce mail à un projet depuis l\'onglet « Lier ».',
+        action: { id: 'goto-link', label: 'Lier ce mail', icon: 'link' },
+      });
+      content.querySelector('[data-action="goto-link"]')?.addEventListener('click', () => {
+        document.querySelector<HTMLButtonElement>('.nav-tab[data-tab="link"]')?.click();
+      });
+      void this.loadArgoCard();
+      return;
+    }
+
+    // Compléments en parallèle : un échec n'empêche pas la fiche.
+    const [count, extra, profile] = await Promise.allSettled([
+      countLinkedEmails(projet.id),
+      getProjetExtraFields(projet.id) as Promise<Extra>,
+      this.senderEmail ? fetchContactArgoProfile(this.senderEmail) : Promise.resolve(null),
+    ]);
+    if (this.destroyed) return;
+    this.showProjectInfo(content, projet,
+      extra.status === 'fulfilled' ? (extra.value || {}) : {},
+      count.status === 'fulfilled' ? count.value : null,
+      extra.status === 'rejected' || count.status === 'rejected');
+    this.showArgoCard(profile.status === 'fulfilled' ? profile.value : null);
   }
 
-  /**
-   * Champs complémentaires (Type, Budget, Descriptif) du projet, lus via le worker.
-   */
-  private async fetchExtraFields(recordId: string): Promise<{ type?: string; budget?: string; descriptif?: string }> {
-    return getProjetExtraFields(recordId);
-  }
-
-  private showProjectInfo(container: HTMLElement): void {
-    if (!this.projet) return;
-
-    const p = this.projet;
-    const extra = this.projetExtra;
-
-    // Truncate descriptif to 200 chars
-    let descriptifDisplay = '';
-    if (extra.descriptif) {
-      descriptifDisplay = extra.descriptif.length > 200
-        ? extra.descriptif.slice(0, 200) + '...'
-        : extra.descriptif;
-    }
+  private showProjectInfo(container: HTMLElement, p: Projet, extra: Extra, emailCount: number | null, partial: boolean): void {
+    const ref = p.refProjet ? p.refProjet : `#${p.noProjet}`;
+    const descriptif = extra.descriptif
+      ? (extra.descriptif.length > 220 ? `${extra.descriptif.slice(0, 220)}…` : extra.descriptif)
+      : '';
+    const rows: Array<[string, string]> = [];
+    if (p.client) rows.push(['Client', p.client]);
+    if (extra.type) rows.push(['Type', extra.type]);
+    if (extra.budget) rows.push(['Budget', extra.budget]);
+    if (p.enCharge) rows.push(['En charge', p.enCharge]);
+    if (p.dateDebut) rows.push(['Début', fmtDate(p.dateDebut)]);
+    if (p.dateFin) rows.push(['Fin', fmtDate(p.dateFin)]);
 
     container.innerHTML = `
-      <div class="project-info" style="position:relative;">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-          <h4 style="margin:0;flex:1;font-size:14px;">${p.refProjet ? escapeHtml(p.refProjet) : '#' + escapeHtml(String(p.noProjet))} ${escapeHtml(p.denomination)}</h4>
-          ${getStatusBadge(p.statut)}
-        </div>
-
-        ${p.client ? `
-        <div class="project-info-row">
-          <span class="project-info-label">Client</span>
-          <span class="project-info-value">${escapeHtml(p.client)}</span>
-        </div>
-        ` : ''}
-
-        ${extra.type ? `
-        <div class="project-info-row">
-          <span class="project-info-label">Type</span>
-          <span class="project-info-value">${escapeHtml(extra.type)}</span>
-        </div>
-        ` : ''}
-
-        ${extra.budget ? `
-        <div class="project-info-row">
-          <span class="project-info-label">Budget</span>
-          <span class="project-info-value">${escapeHtml(extra.budget)}</span>
-        </div>
-        ` : ''}
-
-        ${p.enCharge ? `
-        <div class="project-info-row">
-          <span class="project-info-label">En charge</span>
-          <span class="project-info-value">${escapeHtml(p.enCharge)}</span>
-        </div>
-        ` : ''}
-
-        ${p.dateDebut ? `
-        <div class="project-info-row">
-          <span class="project-info-label">D&eacute;but</span>
-          <span class="project-info-value">${new Date(p.dateDebut).toLocaleDateString('fr-LU', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
-        </div>
-        ` : ''}
-
-        ${p.dateFin ? `
-        <div class="project-info-row">
-          <span class="project-info-label">Fin</span>
-          <span class="project-info-value">${new Date(p.dateFin).toLocaleDateString('fr-LU', { day: 'numeric', month: 'long', year: 'numeric' })}</span>
-        </div>
-        ` : ''}
-
-        ${descriptifDisplay ? `
-        <div style="margin-top:8px;padding:6px 8px;background:var(--atlas-bg-hover,#f5f5f5);border-radius:6px;font-size:11px;color:var(--atlas-text-secondary,#666);line-height:1.4;">
-          ${escapeHtml(descriptifDisplay)}
-        </div>
-        ` : ''}
-
-        <div style="display:flex;align-items:center;gap:12px;margin-top:10px;padding-top:8px;border-top:1px solid var(--atlas-border,#e0e0e0);">
-          <span style="font-size:11px;color:var(--atlas-text-secondary,#888);">
-            &#128231; ${this.emailCount} email${this.emailCount !== 1 ? 's' : ''} li&eacute;${this.emailCount !== 1 ? 's' : ''}
-          </span>
-          <span style="flex:1;"></span>
-          <button id="btn-open-atlas" class="btn btn-sm btn-primary" style="font-size:11px;padding:4px 10px;">
-            Ouvrir dans ATLAS
-          </button>
-        </div>
-      </div>
+      <article class="card project-card" aria-labelledby="pi-title">
+        <header class="card-head">
+          <span class="eyebrow">${icon('folder', 12)}Projet ${escapeHtml(ref)}</span>
+          ${statusBadge(p.statut)}
+        </header>
+        <h2 class="card-title" id="pi-title">${escapeHtml(p.denomination || ref)}</h2>
+        ${rows.length ? `<dl class="facts">${rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join('')}</dl>` : ''}
+        ${descriptif ? `<p class="card-note">${escapeHtml(descriptif)}</p>` : ''}
+        <footer class="card-foot">
+          <span class="meta">${icon('mail', 14)}${emailCount === null ? 'Mails liés : indisponible' : `${emailCount} mail${emailCount !== 1 ? 's' : ''} lié${emailCount !== 1 ? 's' : ''}`}</span>
+          <button id="btn-open-atlas" type="button" class="btn btn-secondary btn-sm">${icon('external', 14)}Ouvrir dans ATLAS</button>
+        </footer>
+        ${partial ? `<p class="help">Certains détails n'ont pas pu être lus. <button type="button" class="link-btn" id="pi-retry">Réessayer</button></p>` : ''}
+      </article>
     `;
 
-    // Bind ATLAS deep link button
-    const btn = document.getElementById('btn-open-atlas');
-    btn?.addEventListener('click', () => {
+    container.querySelector('#btn-open-atlas')?.addEventListener('click', () => {
       const url = `atlas-app://open?entity=projet&id=${encodeURIComponent(p.id)}`;
       window.open(url, '_blank', 'noopener');
     });
+    container.querySelector('#pi-retry')?.addEventListener('click', () => { void this.detectProject(); });
   }
 
-  private showArgoCard(): void {
-    if (!this.argoProfile) return;
+  /** Profil ARGO de l'expéditeur (silencieux s'il est absent ou indisponible). */
+  private async loadArgoCard(): Promise<void> {
+    if (!this.senderEmail) return;
+    try {
+      const profile = await fetchContactArgoProfile(this.senderEmail);
+      if (!this.destroyed) this.showArgoCard(profile);
+    } catch { /* bloc facultatif */ }
+  }
 
-    const card = document.getElementById('argo-contact-card');
+  private showArgoCard(a: ArgoProfile | null): void {
+    const card = this.container.querySelector<HTMLElement>('#argo-contact-card');
     if (!card) return;
-
-    const a = this.argoProfile;
+    if (!a) { card.innerHTML = ''; return; }
     const fullName = [a.prenom, a.nom].filter(Boolean).join(' ') || this.senderEmail;
-
-    const tonLabel = a.tonPrefere === 'Amical' ? 'Tu' : a.tonPrefere === 'Professionnel' ? 'Vous' : '';
-    const tonBadge = tonLabel
-      ? `<span style="
-          display:inline-block;
-          padding:1px 6px;
-          border-radius:8px;
-          font-size:10px;
-          font-weight:600;
-          background:${tonLabel === 'Tu' ? '#D4EDDA' : '#CCE5FF'};
-          color:${tonLabel === 'Tu' ? '#155724' : '#004085'};
-          margin-left:6px;
-        ">${tonLabel}</span>`
-      : '';
-
-    const langBadge = a.languePreferee
-      ? `<span style="
-          display:inline-block;
-          padding:1px 6px;
-          border-radius:8px;
-          font-size:10px;
-          font-weight:500;
-          background:#E9ECEF;
-          color:#495057;
-          margin-left:4px;
-        ">${escapeHtml(a.languePreferee)}</span>`
-      : '';
-
-    card.style.display = 'block';
+    const ton = a.tonPrefere === 'Amical' ? 'Tutoiement' : a.tonPrefere === 'Professionnel' ? 'Vouvoiement' : '';
     card.innerHTML = `
-      <div class="section-heading" style="margin-top:12px;">Profil ARGO &mdash; Exp&eacute;diteur</div>
-      <div style="
-        background:var(--atlas-bg-hover,#f8f9fa);
-        border:1px solid var(--atlas-border,#e0e0e0);
-        border-radius:8px;
-        padding:10px 12px;
-        font-size:12px;
-      ">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
-          <span style="font-weight:600;font-size:13px;">${escapeHtml(fullName)}</span>
-          ${tonBadge}
-          ${langBadge}
+      <section class="section" aria-labelledby="pi-argo">
+        <h2 class="section-heading" id="pi-argo">Expéditeur, selon ARGO</h2>
+        <div class="card person-card">
+          <div class="person-avatar" aria-hidden="true">${icon('user', 16)}</div>
+          <div class="person-body">
+            <p class="person-name">${escapeHtml(fullName)}</p>
+            <p class="meta">${escapeHtml(this.senderEmail)}</p>
+            ${ton || a.languePreferee ? `<div class="chips">${ton ? `<span class="chip">${ton}</span>` : ''}${a.languePreferee ? `<span class="chip">${escapeHtml(a.languePreferee)}</span>` : ''}</div>` : ''}
+            ${a.tutoiementAvec.length > 0 ? `<p class="help">Tutoie : ${a.tutoiementAvec.map(t => escapeHtml(t)).join(', ')}</p>` : ''}
+          </div>
         </div>
-        <div style="color:var(--atlas-text-secondary,#888);font-size:11px;">
-          ${escapeHtml(this.senderEmail)}
-        </div>
-        ${a.tutoiementAvec.length > 0 ? `
-        <div style="margin-top:6px;font-size:11px;color:var(--atlas-text-secondary,#666);">
-          Tutoiement avec : ${a.tutoiementAvec.map(t => escapeHtml(t)).join(', ')}
-        </div>
-        ` : ''}
-      </div>
+      </section>
     `;
   }
 
   destroy(): void {
+    this.destroyed = true;
     this.container.innerHTML = '';
   }
 }

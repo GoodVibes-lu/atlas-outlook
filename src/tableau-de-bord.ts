@@ -30,6 +30,7 @@ import { fetchJournee, invalidateJournee, type AgentJournee, type AgentListePile
 import { renderMailList, renderJournal, escapeHtml, PILE_LIBELLES } from './components/agent-lists';
 import { ATLAS_BASE } from './api/platform';
 import { renderQuestion, renderRattrapage } from './components/agent-outils';
+import { humanError } from './api/net';
 
 /** TeamsJS (chargé par tableau-de-bord.html depuis le CDN Microsoft), facultatif. */
 const teams: any = (window as any).microsoftTeams;
@@ -61,7 +62,9 @@ async function initHost(): Promise<void> {
 }
 
 function applyTheme(theme: string): void {
-  document.body.dataset.theme = theme === 'dark' || theme === 'contrast' ? 'dark' : 'light';
+  const t = theme === 'dark' || theme === 'contrast' ? 'dark' : 'light';
+  document.body.dataset.theme = t;
+  document.documentElement.dataset.theme = t; // jetons de couleur (styles.css, :root[data-theme])
 }
 
 /** Ouvre une adresse depuis l'onglet (Outlook sur le web pour un mail, ATLAS pour une fiche). */
@@ -226,7 +229,7 @@ async function start(): Promise<void> {
     await getWorkerToken();
     await refreshAll(true);
   } catch (e) {
-    renderError((e as Error).message || 'erreur inconnue');
+    renderError(humanError(e));
     return;
   }
   if (refreshTimer === null) {

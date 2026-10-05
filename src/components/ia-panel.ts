@@ -10,7 +10,10 @@
  */
 
 import { showToast } from '../taskpane';
+import { outlookFetch, humanError, noteDiag } from '../api/net';
 import { escapeHtml } from '../utils/html';
+import { icon } from '../ui/icons';
+import { loadingHtml, inlineLoadingHtml, emptyHtml, errorHtml, renderError } from '../ui/states';
 import {
   getEmailTagByEmailId,
   getEmailTagByConversationId,
@@ -51,21 +54,29 @@ const CATEGORIES = [
 ];
 
 const CATEGORY_LABELS: Record<string, string> = {
-  demande_devis: '💼 Demande devis',
-  validation_client: '✅ Validation client',
-  refus_client: '❌ Refus client',
-  question_staff: '👥 Question staff',
-  facture_fournisseur: '🧾 Facture fournisseur',
-  prospection_entrante: '📞 Prospection entrante',
-  prospection_sortante: '📤 Prospection sortante',
-  rdv_planning: '📅 RDV / Planning',
-  newsletter: '📰 Newsletter',
-  notification_systeme: '🤖 Notification système',
-  spam: '🚫 Spam',
-  autre: '📩 Autre',
-  federation_association: '🏛 Fédération / Association',
-  demande_interne_staff: '🏠 Interne staff',
-  fournisseur: '🚚 Fournisseur',
+  demande_devis: 'Demande de devis',
+  validation_client: 'Validation client',
+  refus_client: 'Refus client',
+  question_staff: 'Question staff',
+  facture_fournisseur: 'Facture fournisseur',
+  prospection_entrante: 'Prospection entrante',
+  prospection_sortante: 'Prospection sortante',
+  rdv_planning: 'Rendez-vous, planning',
+  newsletter: 'Newsletter',
+  notification_systeme: 'Notification automatique',
+  spam: 'Indésirable',
+  autre: 'Autre',
+  federation_association: 'Fédération, association',
+  demande_interne_staff: 'Demande interne',
+  fournisseur: 'Fournisseur',
+};
+
+/** Icône (forme, jamais couleur) de chaque thème. */
+const CATEGORY_ICONS: Record<string, string> = {
+  demande_devis: 'template', validation_client: 'check-circle', refus_client: 'x', question_staff: 'team',
+  facture_fournisseur: 'paperclip', prospection_entrante: 'inbox', prospection_sortante: 'external',
+  rdv_planning: 'calendar-plus', newsletter: 'list', notification_systeme: 'activity', spam: 'alert',
+  autre: 'mail', federation_association: 'building', demande_interne_staff: 'user', fournisseur: 'archive',
 };
 
 /**
@@ -91,8 +102,22 @@ const CATEGORY_FOLDER_ALIASES: Record<string, string[]> = {
   fournisseur: ['fournisseur', 'fournisseurs', 'suppliers'],
 };
 
-const URGENCY_COLORS: Record<number, string> = {
-  1: '#94a3b8', 2: '#60a5fa', 3: '#f59e0b', 4: '#ef4444', 5: '#dc2626',
+const URGENCY_LABELS: Record<number, string> = {
+  1: 'Peut attendre', 2: 'Faible', 3: 'À traiter', 4: 'Urgent', 5: 'Très urgent',
+};
+
+/** Jauge d'urgence : 5 segments, le rouge seulement à partir de « Urgent » (statut réel). */
+function urgencyHtml(score: number): string {
+  const n = Math.max(0, Math.min(5, Math.round(Number(score) || 0)));
+  const label = URGENCY_LABELS[n] || 'Non évaluée';
+  return `<span class="urgency${n >= 4 ? ' is-high' : ''}" role="img" aria-label="Urgence ${n} sur 5 : ${label}">
+    <span class="urgency-bars" aria-hidden="true">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= n ? 'on' : ''}"></i>`).join('')}</span>
+    <span class="urgency-label">${label}</span>
+  </span>`;
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  done: 'Traité', snoozed: 'Reporté', archived: 'Archivé', inbox: 'À traiter',
 };
 
 // Suggestion de dossier de classement résolue dynamiquement.
@@ -138,12 +163,7 @@ export class IAPanel {
   destroy(): void { /* no async work to cancel */ }
 
   private renderLoading(): void {
-    this.root.innerHTML = `
-      <div style="padding: 16px; text-align: center; color: #64748b;">
-        <div class="spinner"></div>
-        <p style="font-size: 12px; margin-top: 8px;">Chargement IA…</p>
-      </div>
-    `;
+    this.root.innerHTML = `<div class="panel-scroll">${loadingHtml('Lecture du classement ARGO…', 4)}</div>`;
   }
 
   private async load(): Promise<void> {
@@ -176,7 +196,8 @@ export class IAPanel {
       }
     } catch (e) {
       console.warn('[IAPanel] load failed:', e);
-      this.renderEmpty('Erreur lors du chargement.');
+      this.root.innerHTML = '<div class="panel-scroll"><div id="ia-err"></div></div>';
+      renderError(this.root.querySelector('#ia-err')!, e, () => { this.renderLoading(); this.load(); }, { title: 'Classement indisponible' });
     }
   }
 
@@ -186,13 +207,9 @@ export class IAPanel {
    * taggé" puis doit cliquer.
    */
   private renderAutoAnalyzing(): void {
-    this.root.innerHTML = `
-      <div style="padding: 20px; display: flex; flex-direction: column; gap: 12px; align-items: center;">
-        <div style="font-size: 28px;">✨</div>
-        <div style="font-size: 13px; font-weight: 600; color: #4f46e5;">Analyse IA en cours…</div>
-        <div style="font-size: 11px; color: #64748b; text-align: center;">Claude classe ce mail. Quelques secondes.</div>
-      </div>
-    `;
+    this.root.innerHTML = `<div class="panel-scroll">
+      <div class="argo-progress" role="status"><span class="argo-progress-bar" aria-hidden="true"></span><span>ARGO classe ce mail, quelques secondes…</span></div>
+    </div>`;
   }
 
   /**
@@ -235,41 +252,34 @@ export class IAPanel {
   }
 
   private renderEmpty(msg: string): void {
-    this.root.innerHTML = `
-      <div style="padding: 20px; text-align: center; color: #64748b; font-size: 13px;">${escapeHtml(msg)}</div>
-    `;
+    this.root.innerHTML = `<div class="panel-scroll">${emptyHtml({ icon: 'mail', title: msg, text: 'Sélectionne un mail dans ta boîte pour voir son classement.' })}</div>`;
   }
 
   private renderNotTagged(): void {
     const hasKey = isAiAvailable();
     this.root.innerHTML = `
-      <div style="padding: 16px; display: flex; flex-direction: column; gap: 12px;">
-        <div style="padding: 12px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px; color: #9a3412;">
-          <strong>Pas encore taggé par l'IA</strong>
-          <p style="margin: 6px 0 0; font-size: 12px;">Le scanner ATLAS ne l'a pas (encore) analysé. Tu peux forcer l'analyse maintenant — résultat en ~3 sec.</p>
-        </div>
-        <button data-action="analyze-now" class="ia-btn ia-btn-secondary" ${hasKey ? '' : 'disabled title="IA indisponible"'}
-          style="padding: 10px 16px; font-size: 14px; font-weight: 600;">
-          ✨ Analyser maintenant
+      <div class="panel-scroll stack">
+        ${emptyHtml({ icon: 'tag', title: 'Pas encore classé', text: 'ARGO n\'a pas encore lu ce mail. Lance le classement : thème, urgence et dossier conseillé en quelques secondes.' })}
+        <button type="button" data-action="analyze-now" class="btn btn-argo btn-block" ${hasKey ? '' : 'disabled'}>
+          ${icon('bolt', 14)}<span>Classer avec ARGO</span><span class="argo-tag" aria-hidden="true">IA</span>
         </button>
-        ${hasKey ? '' : '<div style="font-size: 11px; color: #9a3412;">⚠️ IA indisponible.</div>'}
+        <div id="ia-progress" hidden></div>
+        ${hasKey ? '' : '<p class="help">ARGO est indisponible pour le moment.</p>'}
       </div>
     `;
+    const progress = this.root.querySelector<HTMLElement>('#ia-progress');
     this.root.querySelector<HTMLButtonElement>('button[data-action="analyze-now"]')
       ?.addEventListener('click', async (ev) => {
         const btn = ev.currentTarget as HTMLButtonElement;
         btn.disabled = true;
-        btn.textContent = '⏳ Analyse en cours…';
+        if (progress) { progress.hidden = false; progress.innerHTML = '<div class="argo-progress" role="status"><span class="argo-progress-bar" aria-hidden="true"></span><span>ARGO lit le mail…</span></div>'; }
         try {
           const ok = await this.reanalyzeNow();
-          if (ok) this.render(); // bascule sur la vue taggée
-          else {
-            btn.disabled = false;
-            btn.textContent = '✨ Analyser maintenant';
-          }
+          if (ok) this.render(); // bascule sur la vue classée
+          else { btn.disabled = false; if (progress) progress.hidden = true; }
         } catch {
           btn.disabled = false;
-          btn.textContent = '✨ Analyser maintenant';
+          if (progress) progress.hidden = true;
         }
       });
   }
@@ -277,61 +287,50 @@ export class IAPanel {
   private render(): void {
     const tag = this.tag!;
     const catLabel = CATEGORY_LABELS[tag.category] || tag.category;
-    const urgColor = URGENCY_COLORS[tag.urgencyScore] || '#94a3b8';
     const status = tag.inboxStatus;
 
     this.root.innerHTML = `
-      <div style="padding: 14px; display: flex; flex-direction: column; gap: 14px;">
-        <!-- Catégorie + urgence -->
-        <div style="display: flex; flex-direction: column; gap: 6px;">
-          <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">Classification IA</div>
-          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-            <span style="padding: 4px 10px; background: #f1f5f9; border-radius: 12px; font-size: 13px; font-weight: 600;">
-              ${escapeHtml(catLabel)}
-            </span>
-            <span style="padding: 4px 10px; background: ${urgColor}; color: #fff; border-radius: 12px; font-size: 12px; font-weight: 700;">
-              Urgence ${escapeHtml(tag.urgencyScore)}/5
-            </span>
-            ${status !== 'inbox' ? `<span style="padding: 4px 10px; background: #ecfdf5; color: #065f46; border-radius: 12px; font-size: 11px;">État : ${escapeHtml(status)}</span>` : ''}
+      <div class="panel-scroll stack">
+        <section class="section" aria-labelledby="ia-h-class">
+          <h2 class="section-heading" id="ia-h-class">Classement ARGO</h2>
+          <div class="card ia-class">
+            <div class="ia-class-row">
+              <span class="ia-cat">${icon(CATEGORY_ICONS[tag.category] || 'tag', 16)}<span>${escapeHtml(catLabel)}</span></span>
+              ${status && status !== 'inbox' ? `<span class="badge badge-neutral">${escapeHtml(STATUS_LABELS[status] || status)}</span>` : ''}
+            </div>
+            ${urgencyHtml(tag.urgencyScore)}
+            ${tag.summary ? `<p class="card-note">${escapeHtml(tag.summary)}</p>` : ''}
           </div>
-          ${tag.summary ? `<p style="margin: 4px 0 0; font-size: 12px; color: #475569; line-height: 1.4;">${escapeHtml(tag.summary)}</p>` : ''}
-        </div>
+        </section>
 
-        <!-- Dossier de classement (suggestion intelligente) -->
-        ${this.renderFolderSection()}
+        <section class="section" aria-labelledby="ia-h-folder">
+          <h2 class="section-heading" id="ia-h-folder">Où ranger ce mail</h2>
+          ${this.renderFolderSection()}
+        </section>
 
-        <!-- Actions principales -->
-        <div style="display: flex; flex-direction: column; gap: 8px;">
-          <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">Actions</div>
-          <div style="display: flex; gap: 6px; flex-wrap: wrap;">
-            <button data-action="done" class="ia-btn ia-btn-success">✓ Traité</button>
-            <button data-action="snooze" class="ia-btn ia-btn-warning">⏰ Reporter (demain 8h)</button>
-            <button data-action="archive" class="ia-btn ia-btn-muted">📦 Archiver</button>
-            <button data-action="reanalyze" class="ia-btn ia-btn-secondary" ${isAiAvailable() ? '' : 'disabled title="IA indisponible"'}>🔄 Re-analyser</button>
-            <button data-action="broom" class="ia-btn ia-btn-secondary" title="Archive maintenant tous les mails lus +10 min dans leurs dossiers habituels (utilise l'index sender)">🧹 Coup de balai</button>
+        <section class="section" aria-labelledby="ia-h-actions">
+          <h2 class="section-heading" id="ia-h-actions">Que faire</h2>
+          <div class="action-grid">
+            <button type="button" data-action="done" class="btn btn-primary">${icon('check', 14)}Traité</button>
+            <button type="button" data-action="snooze" class="btn btn-secondary">${icon('clock', 14)}Demain 8 h</button>
+            <button type="button" data-action="archive" class="btn btn-secondary">${icon('archive', 14)}Archiver</button>
+            <button type="button" data-action="broom" class="btn btn-secondary" title="Range maintenant les mails lus depuis plus de 10 minutes dans leurs dossiers habituels">${icon('broom', 14)}Ranger la boîte</button>
           </div>
-        </div>
+          <p class="help">Traité et Archiver rangent aussi le mail dans le dossier ci-dessus.</p>
+        </section>
 
-        <!-- Correction -->
-        <div style="display: flex; flex-direction: column; gap: 6px;">
-          <label style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">Corriger la catégorie (apprentissage)</label>
-          <select id="ia-cat-select" style="padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 13px; color: #1a1a1a; background: #fff;">
-            ${CATEGORIES.map(cat => `<option value="${cat}" ${cat === tag.category ? 'selected' : ''}>${CATEGORY_LABELS[cat] || cat}</option>`).join('')}
-          </select>
-          <button data-action="correct" class="ia-btn ia-btn-primary" style="margin-top: 4px;">Enregistrer la correction</button>
-        </div>
+        <details class="disclosure">
+          <summary>${icon('chevron-right', 14)}Corriger le classement</summary>
+          <div class="disclosure-body stack-sm">
+            <label class="form-label" for="ia-cat-select">Le bon thème</label>
+            <select id="ia-cat-select" class="form-input">
+              ${CATEGORIES.map(cat => `<option value="${cat}" ${cat === tag.category ? 'selected' : ''}>${escapeHtml(CATEGORY_LABELS[cat] || cat)}</option>`).join('')}
+            </select>
+            <button type="button" data-action="correct" class="btn btn-secondary btn-sm">${icon('check', 14)}Enregistrer, ARGO apprend</button>
+            <button type="button" data-action="reanalyze" class="btn btn-argo btn-sm" ${isAiAvailable() ? '' : 'disabled'}>${icon('bolt', 14)}<span>Reclasser avec ARGO</span><span class="argo-tag" aria-hidden="true">IA</span></button>
+          </div>
+        </details>
       </div>
-
-      <style>
-        .ia-btn { padding: 8px 12px; border: 0; border-radius: 6px; font-weight: 600; font-size: 12px; cursor: pointer; }
-        .ia-btn-success { background: #10b981; color: #fff; }
-        .ia-btn-warning { background: #f59e0b; color: #fff; }
-        .ia-btn-muted { background: #94a3b8; color: #fff; }
-        .ia-btn-primary { background: #cc2200; color: #fff; }
-        .ia-btn-secondary { background: #6366f1; color: #fff; }
-        .ia-btn:hover { opacity: 0.9; }
-        .ia-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-      </style>
     `;
 
     // Click handlers
@@ -355,11 +354,14 @@ export class IAPanel {
       });
     }
     this.root.querySelectorAll<HTMLLIElement>('li[data-folder-id]').forEach((li) => {
-      li.addEventListener('click', () => {
+      const pick = () => {
         this.folderPickerSelectedId = li.dataset.folderId || '';
         this.folderPickerSelectedPath = li.dataset.folderPath || '';
         this.render();
-      });
+        this.root.querySelector<HTMLElement>('li.is-selected')?.focus();
+      };
+      li.addEventListener('click', pick);
+      li.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); pick(); } });
     });
     // Champ création de dossier — bind le change pour mémoriser
     const newPathInput = this.root.querySelector<HTMLInputElement>('#folder-picker-new-path');
@@ -375,18 +377,25 @@ export class IAPanel {
     // Picker dossier : ne nécessite pas de tag (peut être déclenché avant que
     // la classification soit faite, juste pour préparer le mapping).
     if (action === 'broom') {
-      showToast('🧹 Coup de balai en cours…', 'info');
+      showToast('Rangement de la boîte en cours…', 'info');
       try {
         const { forceAutoSweep } = await import('../api/auto-sweep');
         const r = await forceAutoSweep();
         if (r.archived > 0) {
-          showToast(`🧹 ${r.archived} mail${r.archived > 1 ? 's' : ''} archivé${r.archived > 1 ? 's' : ''}. Scanné ${r.scanned}, ${r.skipped.noFolder} sans dossier connu.`, 'success');
+          showToast(`${r.archived} mail${r.archived > 1 ? 's' : ''} rangé${r.archived > 1 ? 's' : ''} dans leurs dossiers habituels.`, 'success');
         } else {
-          showToast(`🧹 Rien à archiver. Scanné ${r.scanned} (${r.skipped.unread} non-lus, ${r.skipped.tooFresh} <10min, ${r.skipped.noFolder} sans dossier appris)`, 'info');
+          showToast(`Rien à ranger : ${r.scanned} mails vus, ${r.skipped.noFolder} sans dossier connu.`, 'info');
         }
       } catch (e) {
-        showToast(`Erreur balai : ${(e as Error).message?.slice(0, 80)}`, 'error');
+        showToast(`${humanError(e)}`, 'error');
       }
+      return;
+    }
+    if (action === 'retry' && this.folderPickerOpen) {
+      this.foldersLoadError = null;
+      this.allFoldersCache = null;
+      this.loadAllFolders().then(() => this.render()).catch(() => this.render());
+      this.render();
       return;
     }
     if (action === 'change-folder') {
@@ -421,7 +430,7 @@ export class IAPanel {
         projetId: this.tag?.linkedProjetId,
       };
       this.folderPickerOpen = false;
-      showToast(`Dossier choisi : ${folderPath}. Clic Traité/Archiver pour ranger.`, 'info');
+      showToast(`Dossier choisi : ${folderPath}. Clique sur Traité ou Archiver pour y ranger le mail.`, 'info');
       this.render();
       return;
     }
@@ -461,10 +470,10 @@ export class IAPanel {
         };
         this.folderPickerOpen = false;
         this.folderPickerCreateMode = false;
-        showToast(`✓ Dossier "${path}" créé. Clic Traité/Archiver pour ranger.`, 'success');
+        showToast(`Dossier « ${path} » créé : clique sur Traité ou Archiver pour y ranger le mail.`, 'success');
         this.render();
       } catch (e) {
-        showToast(`Erreur création : ${(e as Error).message?.slice(0, 100)}`, 'error');
+        showToast(`${humanError(e)}`, 'error');
       }
       return;
     }
@@ -482,11 +491,11 @@ export class IAPanel {
             this.applyCategoryForState('done').catch(() => {});
             const r = await this.tryMoveToHabitualFolder('done');
             if (r.folderPath) {
-              showToast(`Traité ✓ + déplacé dans ${r.folderPath} 📁`, 'success');
+              showToast(`Traité et rangé dans ${r.folderPath}`, 'success');
             } else if (r.error && r.error !== 'aucune suggestion') {
-              showToast(`Traité ✓ — déplacement échoué : ${r.error}`, 'error');
+              showToast(`Traité, mais pas rangé : ${r.error}`, 'error');
             } else {
-              showToast('Marqué comme traité ✓', 'success');
+              showToast('Marqué comme traité', 'success');
             }
           }
           break;
@@ -497,7 +506,7 @@ export class IAPanel {
             // Applique catégorie ⏰ ATLAS · Reporté — visible dans la liste inbox
             // sans avoir besoin d'ouvrir le task-pane
             this.applyCategoryForState('snoozed').catch(() => {});
-            showToast('Reporté à demain 8h ⏰ (visible dans l\'inbox avec tag bleu)', 'success');
+            showToast('Reporté à demain 8 h', 'success');
           }
           break;
         case 'archive':
@@ -507,11 +516,11 @@ export class IAPanel {
             this.applyCategoryForState('archived').catch(() => {});
             const r = await this.tryMoveToHabitualFolder('archive');
             if (r.folderPath) {
-              showToast(`Archivé + déplacé dans ${r.folderPath} 📁`, 'success');
+              showToast(`Archivé dans ${r.folderPath}`, 'success');
             } else if (r.error && r.error !== 'aucune suggestion') {
-              showToast(`Archivé — déplacement échoué : ${r.error}`, 'error');
+              showToast(`Archivé, mais pas rangé : ${r.error}`, 'error');
             } else {
-              showToast('Archivé 📦 (aucun dossier habituel — déplace manuellement)', 'success');
+              showToast('Archivé (aucun dossier habituel : range-le à la main)', 'success');
             }
           }
           break;
@@ -541,7 +550,7 @@ export class IAPanel {
       this.render();
     } catch (e) {
       console.warn('[IAPanel] action failed:', e);
-      showToast('Erreur', 'error');
+      showToast('Action impossible pour le moment : réessaie.', 'error');
     } finally {
       buttons.forEach(b => b.disabled = false);
     }
@@ -555,14 +564,14 @@ export class IAPanel {
    */
   private async reanalyzeNow(opts: { auto?: boolean } = {}): Promise<boolean> {
     if (!isAiAvailable()) {
-      showToast('IA indisponible', 'error');
+      showToast('ARGO est indisponible pour le moment.', 'error');
       return false;
     }
     try {
       const item = Office.context.mailbox?.item as any;
       if (!item) { showToast('Aucun mail sélectionné', 'error'); return false; }
       const userEmail = Office.context.mailbox?.userProfile?.emailAddress || '';
-      if (!userEmail) { showToast('Pas d\'email utilisateur Office.js', 'error'); return false; }
+      if (!userEmail) { showToast('Adresse de ta boîte introuvable : rouvre le panneau', 'error'); return false; }
 
       // 1. Récupère les infos du mail via Office.js (pas besoin de token Graph)
       const ewsId: string = item.itemId || '';
@@ -600,7 +609,7 @@ export class IAPanel {
         } catch { resolve(''); }
       });
 
-      showToast('Analyse Claude en cours…', 'info');
+      showToast('ARGO lit le mail…', 'info');
 
       // 2. Appelle Claude
       const analysis = await analyzeEmailWithClaude({
@@ -640,7 +649,7 @@ export class IAPanel {
         inboxStatus: 'inbox',
         linkedProjetId: this.tag?.linkedProjetId,
       };
-      showToast(`Re-analysé ✓ : ${CATEGORY_LABELS[analysis.category] || analysis.category}`, 'success');
+      showToast(`Classé : ${CATEGORY_LABELS[analysis.category] || analysis.category}`, 'success');
       // Applique la catégorie urgence (visible dans la liste inbox)
       this.applyCategoryForState('tagged').catch(() => {});
       // Re-résout aussi le dossier de classement (la catégorie a peut-être changé)
@@ -648,212 +657,139 @@ export class IAPanel {
       return true;
     } catch (e) {
       console.warn('[IAPanel] reanalyze failed:', e);
-      showToast(`Erreur re-analyse : ${(e as Error).message || 'inconnue'}`, 'error');
+      showToast(`${humanError(e)}`, 'error');
       return false;
     }
   }
 
-  /** Section "Dossier de classement" affichée dans le rendu IA. */
+  /** Section « Où ranger ce mail » affichée dans le rendu du classement. */
   private renderFolderSection(): string {
     const s = this.folderSuggestion;
     if (!s) {
-      return `<div style="padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; font-size: 11px; color: #64748b;">📁 Résolution du dossier en cours…</div>`;
+      return `<div class="card folder-card is-pending">${inlineLoadingHtml('Recherche du dossier habituel…')}</div>`;
     }
+    const picker = this.folderPickerOpen ? this.renderFolderPicker() : '';
     if (s.source === 'none') {
-      // Aucune suggestion exploitable, MAIS Charles peut quand même picker
-      // un dossier manuellement — ça apprendra pour la prochaine fois.
-      const dbg = s.debug ? escapeHtml(s.debug).slice(0, 200) : 'aucun signal';
+      // Le détail technique va dans Réglages › Diagnostic, jamais à l'écran.
+      if (s.debug && !this.folderDebugNoted) {
+        this.folderDebugNoted = true;
+        noteDiag({ at: Date.now(), service: 'outlook', label: 'dossier conseillé : aucun signal', status: 0, ms: 0, detail: s.debug.slice(0, 200) });
+      }
       return `
-        <div style="padding: 10px; background: #fafafa; border: 1px dashed #cbd5e1; border-radius: 6px;">
-          <div style="font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Aucun dossier suggéré</div>
-          <div style="font-size: 11px; color: #94a3b8; font-family: monospace; margin-bottom: 6px;">Debug : ${dbg}</div>
-          <div style="display: flex; justify-content: flex-start;">
-            <button data-action="change-folder" style="background: white; border: 1px solid #cbd5e1; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; color: #475569; font-weight: 600;">
-              📂 Choisir un dossier (ATLAS apprend)
-            </button>
+        <div class="card folder-card is-empty">
+          <div class="folder-card-icon">${icon('folder', 18)}</div>
+          <div class="folder-card-body">
+            <p class="folder-card-title">Aucun dossier connu pour cet expéditeur</p>
+            <p class="help">Choisis-en un : ATLAS le retiendra pour les prochains mails.</p>
+            ${this.folderPickerOpen ? '' : `<button type="button" data-action="change-folder" class="btn btn-secondary btn-sm">${icon('folder-move', 14)}Choisir un dossier</button>`}
           </div>
         </div>
-        ${this.folderPickerOpen ? this.renderFolderPicker() : ''}
-      `;
-    }
-    // Construit la suggestion + bouton "Changer" (chip discret en haut-droite).
-    // Le bouton ouvre un dropdown <select> avec tous les dossiers Outlook.
-    const changeBtn = `
-      <div style="display: flex; justify-content: flex-end; margin-top: 6px;">
-        <button data-action="change-folder" style="background: rgba(255,255,255,0.6); border: 1px solid currentColor; padding: 3px 8px; border-radius: 4px; font-size: 10px; cursor: pointer; opacity: 0.7; color: inherit;">
-          📂 Changer
-        </button>
-      </div>
-    `;
-    const picker = this.folderPickerOpen ? this.renderFolderPicker() : '';
-
-    if (s.source === 'index-sender') {
-      return `
-        <div style="padding: 10px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px; color: #047857;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Tu ranges déjà ces mails ici ✓</div>
-          <div style="font-size: 13px; font-weight: 600; color: #065f46;">${escapeHtml(s.folderPath)}</div>
-          <div style="font-size: 11px; margin-top: 4px;">Index local : ${s.patternMailCount} mail${(s.patternMailCount || 0) > 1 ? 's' : ''} de cet expéditeur déjà rangés ici. ATLAS suit ton habitude.</div>
-          ${changeBtn}
-        </div>
         ${picker}
       `;
     }
-    if (s.source === 'mapped') {
-      return `
-        <div style="padding: 10px; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 6px; color: #047857;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier habituel (appris)</div>
-          <div style="font-size: 13px; font-weight: 600; color: #065f46;">${escapeHtml(s.folderPath)} ✓</div>
-          <div style="font-size: 11px; margin-top: 2px;">Sera utilisé automatiquement au clic sur Traité ou Archiver.</div>
-          ${changeBtn}
-        </div>
-        ${picker}
-      `;
-    }
-    if (s.source === 'manual-override') {
-      return `
-        <div style="padding: 10px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; color: #92400e;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier choisi (à apprendre)</div>
-          <div style="font-size: 13px; font-weight: 600; color: #78350f;">${escapeHtml(s.folderPath)}</div>
-          <div style="font-size: 11px; margin-top: 4px;">Au clic Traité/Archiver, le mail file ici et ATLAS retient ton choix pour la prochaine fois.</div>
-          ${changeBtn}
-        </div>
-        ${picker}
-      `;
-    }
-    if (s.source === 'sender-pattern') {
-      return `
-        <div style="padding: 10px; background: #f5f3ff; border: 1px solid #c4b5fd; border-radius: 6px; color: #6d28d9;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Tu ranges déjà ces mails ici</div>
-          <div style="font-size: 13px; font-weight: 600; color: #5b21b6;">${escapeHtml(s.folderPath)}</div>
-          <div style="font-size: 11px; margin-top: 4px;">Observé : ${s.patternMailCount} mail${(s.patternMailCount || 0) > 1 ? 's' : ''} de cet expéditeur déjà dans ce dossier.</div>
-          ${changeBtn}
-        </div>
-        ${picker}
-      `;
-    }
-    if (s.source === 'category-match') {
-      return `
-        <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px; color: #1d4ed8;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier suggéré (par catégorie IA)</div>
-          <div style="font-size: 13px; font-weight: 600; color: #1e3a8a;">${escapeHtml(s.folderPath)}</div>
-          <div style="font-size: 11px; margin-top: 4px;">Match basé sur la catégorie. Si c'est pas le bon dossier, change-le ↓</div>
-          ${changeBtn}
-        </div>
-        ${picker}
-      `;
-    }
-    if (s.source === 'match') {
-      return `
-        <div style="padding: 10px; background: #eff6ff; border: 1px solid #93c5fd; border-radius: 6px; color: #1d4ed8;">
-          <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Dossier suggéré (match par nom)</div>
-          <div style="font-size: 13px; font-weight: 600; color: #1e3a8a;">${escapeHtml(s.folderPath)}</div>
-          <div style="font-size: 11px; margin-top: 4px;">ATLAS y range le mail au clic Traité/Archiver et s'en souviendra.</div>
-          ${changeBtn}
-        </div>
-        ${picker}
-      `;
-    }
-    // source === 'create'
+    const n = s.patternMailCount || 0;
+    const plural = n > 1 ? 's' : '';
+    const META: Record<string, { label: string; why: string; tone: string }> = {
+      'index-sender': { label: 'Ton habitude', why: `${n} mail${plural} de cet expéditeur déjà rangé${plural} ici.`, tone: 'is-known' },
+      mapped: { label: 'Dossier du projet', why: 'Appris lors d\'un rangement précédent.', tone: 'is-known' },
+      'manual-override': { label: 'Ton choix', why: 'Le mail ira ici et ATLAS retiendra ce choix.', tone: 'is-chosen' },
+      'sender-pattern': { label: 'Ton habitude', why: `${n} mail${plural} de cet expéditeur déjà dans ce dossier.`, tone: 'is-known' },
+      'category-match': { label: 'Suggestion', why: `Dossier proche du thème « ${CATEGORY_LABELS[this.tag?.category || ''] || 'du mail'} ».`, tone: 'is-suggested' },
+      match: { label: 'Suggestion', why: 'Nom de dossier proche du client ou du projet.', tone: 'is-suggested' },
+      create: { label: 'Nouveau dossier', why: 'Aucun dossier existant ne correspond : ATLAS le créera au rangement.', tone: 'is-suggested' },
+    };
+    const m = META[s.source] || META.match;
     return `
-      <div style="padding: 10px; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; color: #92400e;">
-        <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">📁 Nouveau dossier suggéré</div>
-        <div style="font-size: 13px; font-weight: 600; color: #78350f;">${escapeHtml(s.folderPath)}</div>
-        <div style="font-size: 11px; margin-top: 4px;">Aucun dossier Outlook existant ne match. Au clic Traité/Archiver, ATLAS le crée.</div>
-        ${changeBtn}
+      <div class="card folder-card ${m.tone}">
+        <div class="folder-card-icon">${icon(s.source === 'create' ? 'plus' : 'folder', 18)}</div>
+        <div class="folder-card-body">
+          <span class="eyebrow">${m.tone === 'is-known' ? icon('check', 12) : ''}${escapeHtml(m.label)}</span>
+          <p class="folder-card-title" title="${escapeHtml(s.folderPath)}">${escapeHtml(s.folderPath)}</p>
+          <p class="help">${escapeHtml(m.why)}</p>
+        </div>
+        ${this.folderPickerOpen ? '' : `<button type="button" data-action="change-folder" class="btn btn-ghost btn-sm folder-card-change">Changer</button>`}
       </div>
       ${picker}
     `;
   }
 
-  /**
-   * Dropdown <select> avec tous les dossiers Outlook. Apparaît au clic sur
-   * "Changer". Sélection → tap Confirmer → la suggestion devient
-   * 'manual-override' avec ce dossier.
-   */
   // État du picker : query de recherche + valeur sélectionnée
   private folderPickerQuery = '';
   private folderPickerSelectedId = '';
   private folderPickerSelectedPath = '';
   private folderPickerCreateMode = false;
   private folderPickerNewPath = '';
-  private folderPickerSuggestingAI = false; // loading state pendant l'appel Claude
+  private folderPickerSuggestingAI = false; // ARGO propose un nom de dossier
+  private folderDebugNoted = false;
+  private foldersLoadError: unknown = null;
 
+  /** Sélecteur de dossier (recherche + liste) ou création d'un dossier. */
   private renderFolderPicker(): string {
     const folders = this.allFoldersCache || [];
+    if (this.foldersLoadError) {
+      return `<div class="picker">${errorHtml(this.foldersLoadError, { title: 'Liste des dossiers indisponible', compact: true })}</div>`;
+    }
     if (folders.length === 0) {
-      return `
-        <div style="padding: 10px; background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 6px; margin-top: 6px;">
-          <div style="font-size: 11px; color: #64748b;">⏳ Chargement de la liste des dossiers… (peut prendre 3-5 sec sur les grosses boîtes)</div>
-        </div>
-      `;
+      return `<div class="picker">${inlineLoadingHtml('Lecture de tes dossiers Outlook (quelques secondes sur une grosse boîte)…')}</div>`;
     }
 
     const q = this.folderPickerQuery.toLowerCase().trim();
-    const filtered = folders
+    const all = folders
       .slice()
       .sort((a, b) => a.path.localeCompare(b.path, 'fr'))
-      .filter((f) => !q || f.path.toLowerCase().includes(q))
-      .slice(0, 100); // limit display à 100 max pour perf
+      .filter((f) => !q || f.path.toLowerCase().includes(q));
+    const filtered = all.slice(0, 100); // 100 lignes au plus
 
-    // Mode CRÉATION : input pour le nom du nouveau dossier + suggestion IA
     if (this.folderPickerCreateMode) {
-      const aiHint = this.folderPickerSuggestingAI
-        ? `<div style="font-size: 10px; color: #9a3412; margin-bottom: 6px; font-style: italic;">⏳ Claude analyse ta structure de dossiers…</div>`
-        : this.folderPickerNewPath
-        ? `<div style="font-size: 10px; color: #047857; margin-bottom: 6px;">✨ Suggéré par Claude (basé sur tes dossiers existants). Tu peux éditer.</div>`
-        : '';
+      const busy = this.folderPickerSuggestingAI;
       return `
-        <div style="padding: 10px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 6px; margin-top: 6px;">
-          <div style="font-size: 10px; font-weight: 700; color: #9a3412; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">➕ Créer un nouveau dossier</div>
-          ${aiHint}
-          <input type="text" id="folder-picker-new-path" placeholder="Ex: Clients/Vossloh — ou juste 'Vossloh'"
-            value="${escapeHtml(this.folderPickerNewPath)}"
-            ${this.folderPickerSuggestingAI ? 'disabled' : ''}
-            style="width: 100%; padding: 8px; border: 1px solid #fed7aa; border-radius: 4px; font-size: 12px; margin-bottom: 6px; box-sizing: border-box; ${this.folderPickerSuggestingAI ? 'background: #fef3c7; color: #94a3b8;' : ''}" />
-          <p style="font-size: 10px; color: #9a3412; margin: 0 0 8px; line-height: 1.4;">
-            Tu peux créer un dossier imbriqué avec "/" (ex: Clients/Vossloh/2026).
-            Les niveaux manquants seront créés.
-          </p>
-          <div style="display: flex; gap: 6px;">
-            <button data-action="create-folder-confirm" ${this.folderPickerSuggestingAI ? 'disabled' : ''}
-              style="flex: 1; padding: 6px; background: ${this.folderPickerSuggestingAI ? '#fed7aa' : '#ea580c'}; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: ${this.folderPickerSuggestingAI ? 'wait' : 'pointer'};">Créer + utiliser</button>
-            <button data-action="create-folder-cancel" style="padding: 6px 10px; background: #e2e8f0; color: #334155; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">Annuler</button>
+        <div class="picker">
+          <p class="picker-title">${icon('plus', 14)}Nouveau dossier</p>
+          ${busy
+            ? '<div class="argo-progress" role="status"><span class="argo-progress-bar" aria-hidden="true"></span><span>ARGO propose un nom d\'après tes dossiers…</span></div>'
+            : this.folderPickerNewPath ? `<p class="help">${icon('bolt', 12)}Proposé par ARGO d'après tes dossiers, modifiable.</p>` : ''}
+          <label class="form-label" for="folder-picker-new-path">Nom du dossier</label>
+          <input type="text" class="form-input" id="folder-picker-new-path" placeholder="Clients/Vossloh ou Vossloh"
+            value="${escapeHtml(this.folderPickerNewPath)}" ${busy ? 'disabled' : ''} />
+          <p class="help">Utilise « / » pour un sous-dossier (Clients/Vossloh/2026) : les niveaux manquants sont créés.</p>
+          <div class="btn-row">
+            <button type="button" data-action="create-folder-confirm" class="btn btn-primary btn-sm" ${busy ? 'disabled' : ''}>${icon('check', 14)}Créer et utiliser</button>
+            <button type="button" data-action="create-folder-cancel" class="btn btn-ghost btn-sm">Annuler</button>
           </div>
         </div>
       `;
     }
 
-    // Mode SÉLECTION : recherche + liste filtrée
     const list = filtered.length === 0
-      ? `<li style="padding: 10px; color: #94a3b8; font-size: 11px; text-align: center;">Aucun dossier ne correspond à "${escapeHtml(this.folderPickerQuery)}"</li>`
+      ? `<li class="picker-empty">Aucun dossier ne contient « ${escapeHtml(this.folderPickerQuery)} »</li>`
       : filtered.map((f) => {
           const isSel = f.id === this.folderPickerSelectedId;
-          return `<li data-folder-id="${escapeHtml(f.id)}" data-folder-path="${escapeHtml(f.path)}"
-            class="folder-row"
-            style="padding: 6px 10px; cursor: pointer; font-size: 12px; ${isSel ? 'background: #ddd6fe; font-weight: 600; color: #4c1d95;' : 'color: #334155;'} border-bottom: 1px solid #f1f5f9;">
-            📁 ${escapeHtml(f.path)}
+          const depth = f.path.split('/').length - 1;
+          const name = f.path.split('/').pop() || f.path;
+          const parent = depth ? f.path.slice(0, f.path.length - name.length - 1) : '';
+          return `<li role="option" tabindex="0" aria-selected="${isSel}" data-folder-id="${escapeHtml(f.id)}" data-folder-path="${escapeHtml(f.path)}" class="folder-row${isSel ? ' is-selected' : ''}" title="${escapeHtml(f.path)}">
+            ${icon(isSel ? 'check' : 'folder', 14)}<span class="folder-row-name">${escapeHtml(name)}</span>${parent ? `<span class="folder-row-parent">${escapeHtml(parent)}</span>` : ''}
           </li>`;
         }).join('');
 
     return `
-      <div style="padding: 10px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 6px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <div style="font-size: 10px; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">📂 Choisir un dossier (${folders.length})</div>
-          <button data-action="open-create-folder" style="background: white; border: 1px solid #cbd5e1; padding: 3px 8px; border-radius: 4px; font-size: 10px; cursor: pointer; color: #475569; font-weight: 600;">➕ Nouveau</button>
+      <div class="picker">
+        <div class="picker-head">
+          <p class="picker-title">${icon('folder-move', 14)}Choisir un dossier <span class="picker-count">${folders.length}</span></p>
+          <button type="button" data-action="open-create-folder" class="btn btn-ghost btn-sm">${icon('plus', 14)}Nouveau</button>
         </div>
-        <input type="text" id="folder-picker-search" placeholder="🔍 Rechercher (Markcom, Vossloh, Clients/...)"
-          value="${escapeHtml(this.folderPickerQuery)}"
-          style="width: 100%; padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; margin-bottom: 6px; box-sizing: border-box;" />
-        <ul style="margin: 0; padding: 0; list-style: none; max-height: 240px; overflow-y: auto; background: white; border: 1px solid #e2e8f0; border-radius: 4px;">
-          ${list}
-        </ul>
-        ${filtered.length > 100 ? `<div style="font-size: 10px; color: #64748b; margin-top: 4px;">↑ Affichage limité à 100. Précise ta recherche pour réduire.</div>` : ''}
-        <div style="display: flex; gap: 6px; margin-top: 8px;">
-          <button data-action="confirm-folder" ${!this.folderPickerSelectedId ? 'disabled' : ''}
-            style="flex: 1; padding: 8px; background: ${this.folderPickerSelectedId ? '#4f46e5' : '#cbd5e1'}; color: white; border: none; border-radius: 4px; font-size: 12px; font-weight: 600; cursor: ${this.folderPickerSelectedId ? 'pointer' : 'not-allowed'};">
-            ${this.folderPickerSelectedId ? `Utiliser ${escapeHtml(this.folderPickerSelectedPath.slice(0, 35))}` : 'Sélectionne un dossier'}
+        <div class="search-wrapper">
+          <span class="search-icon">${icon('search', 14)}</span>
+          <input type="search" class="search-input" id="folder-picker-search" placeholder="Rechercher un dossier" aria-label="Rechercher un dossier"
+            value="${escapeHtml(this.folderPickerQuery)}" />
+        </div>
+        <ul class="picker-list" role="listbox" aria-label="Dossiers Outlook">${list}</ul>
+        ${all.length > 100 ? `<p class="help">100 premiers dossiers affichés : précise ta recherche.</p>` : ''}
+        <div class="btn-row">
+          <button type="button" data-action="confirm-folder" class="btn btn-primary btn-sm" ${!this.folderPickerSelectedId ? 'disabled' : ''}>
+            ${this.folderPickerSelectedId ? `${icon('check', 14)}Ranger ici` : 'Sélectionne un dossier'}
           </button>
-          <button data-action="cancel-folder" style="padding: 8px 12px; background: #e2e8f0; color: #334155; border: none; border-radius: 4px; font-size: 12px; cursor: pointer;">Annuler</button>
+          <button type="button" data-action="cancel-folder" class="btn btn-ghost btn-sm">Annuler</button>
         </div>
       </div>
     `;
@@ -929,7 +865,7 @@ export class IAPanel {
             return;
           }
         } catch (e) {
-          patternDebug = `Erreur lookup : ${(e as Error).message?.slice(0, 100)}`;
+          patternDebug = `Erreur lookup : ${humanError(e)}`;
           console.warn('[IAPanel] sender-pattern lookup failed:', e);
         }
       }
@@ -1050,7 +986,7 @@ export class IAPanel {
     const url = `${apiBase}/me/messages?$filter=${filter}&$top=100&$select=id,parentFolderId,subject&$orderby=receivedDateTime desc`;
     let res: Response;
     try {
-      res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      res = await outlookFetch(url, { headers: { Authorization: `Bearer ${token}` } });
     } catch (e) {
       console.error('[IAPanel] sender-pattern fetch failed (network):', e);
       return null;
@@ -1072,7 +1008,7 @@ export class IAPanel {
     if (msgs.length < 3) return null;
 
     // Récupère l'ID du dossier Inbox pour l'exclure
-    const inboxRes = await fetch(`${apiBase}/me/mailFolders/inbox?$select=id`, {
+    const inboxRes = await outlookFetch(`${apiBase}/me/mailFolders/inbox?$select=id`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     const inboxData = inboxRes.ok ? await inboxRes.json() : {};
@@ -1103,7 +1039,7 @@ export class IAPanel {
     // Résoudre le path lisible du folder (1 niveau parent suffit pour le contexte)
     let folderPath = bestId.slice(0, 8); // fallback ID si pas de nom
     try {
-      const fres = await fetch(`${apiBase}/me/mailFolders/${bestId}?$select=displayName,parentFolderId`, {
+      const fres = await outlookFetch(`${apiBase}/me/mailFolders/${bestId}?$select=displayName,parentFolderId`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (fres.ok) {
@@ -1113,7 +1049,7 @@ export class IAPanel {
         folderPath = dn || folderPath;
         // Tente de récupérer le parent pour afficher "Parent/Folder"
         if (pfId && pfId !== inboxId) {
-          const pres = await fetch(`${apiBase}/me/mailFolders/${pfId}?$select=displayName`, {
+          const pres = await outlookFetch(`${apiBase}/me/mailFolders/${pfId}?$select=displayName`, {
             headers: { Authorization: `Bearer ${token}` },
           });
           if (pres.ok) {
@@ -1272,7 +1208,7 @@ export class IAPanel {
 
       return { folderPath: suggestion.folderPath };
     } catch (e) {
-      const msg = (e as Error).message?.slice(0, 150) || 'erreur inconnue';
+      const msg = humanError(e);
       console.warn('[IAPanel] tryMoveToHabitualFolder failed:', e);
       return { folderPath: '', error: msg };
     }
@@ -1366,6 +1302,7 @@ export class IAPanel {
    */
   private async loadAllFolders(): Promise<void> {
     if (this.allFoldersCache && this.allFoldersCache.length > 0) return;
+    this.foldersLoadError = null;
     try {
       const { getApiContext } = await import('../api/graph');
       const ctx = await getApiContext();
@@ -1373,7 +1310,7 @@ export class IAPanel {
     } catch (e) {
       console.warn('[IAPanel] loadAllFolders failed:', e);
       this.allFoldersCache = [];
-      showToast(`Impossible de charger les dossiers : ${(e as Error).message?.slice(0, 80)}`, 'error');
+      this.foldersLoadError = e;
     }
   }
 }

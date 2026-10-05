@@ -1,13 +1,13 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
   "manifestVersion": "1.17",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "id": "9b7f9d18-3043-447b-b095-38fa3ac528a4",
   "developer": {
-    "name": "GOOD VIBES events & communications",
+    "name": "GOOD VIBES",
     "websiteUrl": "https://vibes.lu",
-    "privacyUrl": "https://vibes.lu/privacy",
-    "termsOfUseUrl": "https://vibes.lu/terms"
+    "privacyUrl": "https://vibes.lu/privacy-policy/",
+    "termsOfUseUrl": "https://vibes.lu/legal-mentions/"
   },
   "name": {
     "short": "ATLAS",
@@ -27,11 +27,15 @@
       "entityId": "atlas-tableau-de-bord",
       "name": "ATLAS",
       "contentUrl": "https://goodvibes-lu.github.io/atlas-outlook/tableau-de-bord.html",
-      "websiteUrl": "https://atlas.vibes.lu",
-      "scopes": ["personal"]
+      "websiteUrl": "https://goodvibes-lu.github.io/atlas-outlook/tableau-de-bord.html",
+      "scopes": [
+        "personal"
+      ]
     }
   ],
-  "permissions": ["identity"],
+  "permissions": [
+    "identity"
+  ],
   "validDomains": [
     "goodvibes-lu.github.io",
     "worker.vibes.lu"

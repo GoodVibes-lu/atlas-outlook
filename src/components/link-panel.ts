@@ -8,7 +8,10 @@ import { summarizeEmail } from '../api/argo';
 import { SearchPicker } from './search-picker';
 import type { SearchResult, MailMessageFull, Projet } from '../types';
 import { showToast } from '../taskpane';
-import { escapeHtml, escapeError } from '../utils/html';
+import { escapeHtml } from '../utils/html';
+import { loadingHtml, inlineLoadingHtml, emptyHtml, errorHtml, renderError } from '../ui/states';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
 
 interface EmailInfo {
   subject: string;
@@ -39,19 +42,16 @@ export class LinkPanel {
 
   private render(): void {
     this.container.innerHTML = `
-      <div class="panel-scroll">
-        <div class="section-heading">Email courant</div>
-        <div id="email-info-card" class="email-card">
-          <div class="spinner" style="margin: 12px auto;"></div>
-        </div>
+      <div class="panel-scroll stack">
+        <section class="section" aria-labelledby="lk-h-mail">
+          <h2 class="section-heading" id="lk-h-mail">Ce mail</h2>
+          <div id="email-info-card" class="email-card">${loadingHtml('Lecture du mail…', 2)}</div>
+        </section>
 
-        <div id="ai-summary" style="display:none;">
-          <div style="display:flex; align-items:center; gap:6px; margin-bottom:6px;">
-            <span style="font-size:12px;">✨</span>
-            <span class="section-heading" style="margin:0; font-size:10px;">RESUME IA</span>
-          </div>
-          <div id="ai-summary-content" style="font-size:12px; color:var(--atlas-text-secondary); line-height:1.5; padding:10px 12px; background:linear-gradient(135deg, rgba(99,102,241,0.05), rgba(139,92,246,0.05)); border:1px solid rgba(99,102,241,0.15); border-radius:var(--atlas-radius);"></div>
-        </div>
+        <section id="ai-summary" class="section" style="display:none;" aria-labelledby="lk-h-sum">
+          <h2 class="section-heading" id="lk-h-sum">Résumé ARGO</h2>
+          <p id="ai-summary-content" class="card card-note argo-summary"></p>
+        </section>
 
         <div id="link-status" style="display:none;"></div>
 
@@ -59,17 +59,18 @@ export class LinkPanel {
           <div id="auto-suggestion-content"></div>
         </div>
 
-        <div id="link-search-section">
-          <div class="toggle-row">
-            <div class="toggle-switch" id="prive-toggle"></div>
-            <span>🔒 Marquer comme privé</span>
-          </div>
+        <section id="link-search-section" class="section" aria-labelledby="lk-h-search">
+          <h2 class="section-heading" id="lk-h-search">Lier à un projet, un client ou un contact</h2>
+          <label class="toggle-row">
+            <span class="toggle-switch" id="prive-toggle" role="switch" aria-checked="false" tabindex="0" aria-label="Marquer comme privé"></span>
+            <span>${icon('lock', 14)} Privé : visible par toi seul dans ATLAS</span>
+          </label>
           <div id="search-toggle-section" style="display:none;">
-            <a href="#" id="search-toggle-link" style="font-size:12px; color:var(--atlas-primary); text-decoration:none; display:inline-block; margin-bottom:8px;">Rechercher un autre projet, tiers ou contact ▼</a>
+            <button type="button" class="agent-link" id="search-toggle-link" aria-expanded="false">${icon('search', 14)}<span>Chercher un autre projet, client ou contact</span></button>
             <div id="search-container" style="display:none;"></div>
           </div>
           <div id="search-direct-container"></div>
-        </div>
+        </section>
       </div>
     `;
 
@@ -78,6 +79,10 @@ export class LinkPanel {
       const el = e.currentTarget as HTMLElement;
       this.isPrive = !this.isPrive;
       el.classList.toggle('active', this.isPrive);
+      el.setAttribute('aria-checked', String(this.isPrive));
+    });
+    document.getElementById('prive-toggle')?.addEventListener('keydown', (e) => {
+      if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); (e.currentTarget as HTMLElement).click(); }
     });
 
     // Search toggle link
@@ -86,13 +91,8 @@ export class LinkPanel {
       this.searchExpanded = !this.searchExpanded;
       const link = e.currentTarget as HTMLElement;
       const searchContainer = document.getElementById('search-container')!;
-      if (this.searchExpanded) {
-        link.textContent = 'Rechercher un autre projet, tiers ou contact ▲';
-        searchContainer.style.display = 'block';
-      } else {
-        link.textContent = 'Rechercher un autre projet, tiers ou contact ▼';
-        searchContainer.style.display = 'none';
-      }
+      link.setAttribute('aria-expanded', String(this.searchExpanded));
+      searchContainer.style.display = this.searchExpanded ? 'block' : 'none';
     });
 
     // Init search picker in the collapsible container
@@ -110,7 +110,7 @@ export class LinkPanel {
     try {
       const item = Office.context.mailbox.item;
       if (!item) {
-        card.innerHTML = '<p class="empty-state">Aucun email sélectionné</p>';
+        card.outerHTML = emptyHtml({ icon: 'mail', title: 'Aucun mail sélectionné', text: 'Ouvre un mail pour le lier à un projet.' });
         return;
       }
 
@@ -144,11 +144,11 @@ export class LinkPanel {
       // Render email info
       card.innerHTML = `
         <div class="email-card-subject">${this.escapeHtml(this.emailInfo.subject)}</div>
-        <div class="email-card-meta">
-          De: ${this.escapeHtml(this.emailInfo.from)} &lt;${this.escapeHtml(this.emailInfo.fromEmail)}&gt;<br/>
-          À: ${this.escapeHtml(this.emailInfo.to)}
-        </div>
-        ${this.emailInfo.isAlreadyLinked ? '<div class="status-linked" style="margin-top:8px;">✓ Déjà lié dans ATLAS</div>' : ''}
+        <dl class="facts">
+          <dt>De</dt><dd>${this.escapeHtml(this.emailInfo.from || this.emailInfo.fromEmail)}${this.emailInfo.from ? `<br/><span class="meta">${this.escapeHtml(this.emailInfo.fromEmail)}</span>` : ''}</dd>
+          <dt>À</dt><dd>${this.escapeHtml(this.emailInfo.to)}</dd>
+        </dl>
+        ${this.emailInfo.isAlreadyLinked ? `<p class="status-linked" style="margin-top:10px;">${icon('check-circle', 14)}Déjà lié dans ATLAS</p>` : ''}
       `;
 
       // Auto-detect project from subject (#NNN)
@@ -158,7 +158,7 @@ export class LinkPanel {
       this.loadAiSummary();
 
     } catch (err) {
-      card.innerHTML = `<p class="empty-state">Erreur : ${escapeError(err)}</p>`;
+      renderError(card, err, () => { card.innerHTML = loadingHtml('Lecture du mail…', 2); this.loadEmailInfo(); }, { title: 'Mail illisible pour le moment', compact: true });
     }
   }
 
@@ -213,38 +213,20 @@ export class LinkPanel {
         const isLinked = this.emailInfo.isAlreadyLinked;
 
         autoContent.innerHTML = `
-          <div class="detected-project-card" style="
-            border-left: 4px solid var(--atlas-primary);
-            background: var(--atlas-bg-secondary);
-            border-radius: var(--atlas-radius);
-            padding: 14px 16px;
-            margin-bottom: 12px;
-          ">
-            <div style="font-size:11px; color:var(--atlas-text-secondary); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Projet détecté</div>
-            <div style="font-size:16px; font-weight:700; color:var(--atlas-text-primary); margin-bottom:2px;">
-              #${this.escapeHtml(found.noProjet)} ${this.escapeHtml(found.denomination)}
-            </div>
-            <div style="font-size:12px; color:var(--atlas-text-secondary); margin-bottom:4px;">
-              ${this.escapeHtml(found.client || '')}
-            </div>
-            ${found.enCharge ? `<div style="font-size:11px; color:var(--atlas-text-secondary);">En charge : ${this.escapeHtml(found.enCharge)}</div>` : ''}
-            <div style="margin-top:12px;">
-              ${isLinked
-                ? `<div style="
-                    display:inline-flex; align-items:center; gap:6px;
-                    background:var(--atlas-success-bg, rgba(40,167,69,0.1));
-                    color:var(--atlas-success, #28a745);
-                    border:1px solid var(--atlas-success, #28a745);
-                    border-radius:var(--atlas-radius);
-                    padding:6px 12px;
-                    font-size:13px; font-weight:600;
-                  ">✓ Email déjà lié à ce projet</div>`
-                : `<button class="btn btn-primary" id="auto-link-btn" style="width:100%; padding:10px; font-size:14px; font-weight:600;">
-                    Lier cet email au projet #${this.escapeHtml(noProjet)}
-                  </button>`
-              }
-            </div>
-          </div>
+          <section class="section" aria-labelledby="lk-h-det">
+            <h2 class="section-heading" id="lk-h-det">Projet repéré dans l'objet</h2>
+            <article class="card detected-project-card">
+              <span class="eyebrow">${icon('folder', 12)}Projet #${this.escapeHtml(found.noProjet)}</span>
+              <h3 class="card-title">${this.escapeHtml(found.denomination)}</h3>
+              ${found.client || found.enCharge ? `<dl class="facts">${found.client ? `<dt>Client</dt><dd>${this.escapeHtml(found.client)}</dd>` : ''}${found.enCharge ? `<dt>En charge</dt><dd>${this.escapeHtml(found.enCharge)}</dd>` : ''}</dl>` : ''}
+              <div class="card-foot">
+                ${isLinked
+                  ? `<p class="status-linked">${icon('check-circle', 14)}Ce mail est déjà lié à ce projet</p>`
+                  : `<button type="button" class="btn btn-primary btn-block" id="auto-link-btn">${icon('link', 14)}Lier ce mail au projet #${this.escapeHtml(noProjet)}</button>`
+                }
+              </div>
+            </article>
+          </section>
         `;
 
         if (!isLinked) {
@@ -267,24 +249,17 @@ export class LinkPanel {
         searchToggleSection.style.display = 'block';
 
         autoContent.innerHTML = `
-          <div class="detected-project-card" style="
-            border-left: 4px solid var(--atlas-primary);
-            background: var(--atlas-bg-secondary);
-            border-radius: var(--atlas-radius);
-            padding: 14px 16px;
-            margin-bottom: 12px;
-          ">
-            <div style="font-size:11px; color:var(--atlas-text-secondary); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px;">Conversation liée</div>
-            <div style="font-size:16px; font-weight:700; color:var(--atlas-text-primary); margin-bottom:2px;">
-              ${this.escapeHtml(match.projetName)}
-            </div>
-            <div style="font-size:12px; color:var(--atlas-text-secondary); margin-bottom:4px;">Même fil de conversation</div>
-            <div style="margin-top:12px;">
-              <button class="btn btn-primary" id="auto-conv-btn" style="width:100%; padding:10px; font-size:14px; font-weight:600;">
-                Lier cet email au projet
-              </button>
-            </div>
-          </div>
+          <section class="section" aria-labelledby="lk-h-conv">
+            <h2 class="section-heading" id="lk-h-conv">Fil déjà lié à un projet</h2>
+            <article class="card detected-project-card">
+              <span class="eyebrow">${icon('mail', 12)}Même conversation</span>
+              <h3 class="card-title">${this.escapeHtml(match.projetName)}</h3>
+              <p class="help">Un mail précédent de ce fil est déjà rattaché à ce projet.</p>
+              <div class="card-foot">
+                <button type="button" class="btn btn-primary btn-block" id="auto-conv-btn">${icon('link', 14)}Lier ce mail au projet</button>
+              </div>
+            </article>
+          </section>
         `;
         document.getElementById('auto-conv-btn')?.addEventListener('click', () => {
           this.handleLink({ type: 'projet', id: match.projetId, label: match.projetName, detail: '' });
@@ -303,7 +278,7 @@ export class LinkPanel {
 
     const statusEl = document.getElementById('link-status')!;
     statusEl.style.display = 'block';
-    statusEl.innerHTML = '<div class="spinner" style="margin:8px auto;"></div><p style="text-align:center;font-size:12px;">Liaison en cours...</p>';
+    statusEl.innerHTML = inlineLoadingHtml('Liaison en cours…');
 
     try {
       const token = await getGraphToken();
@@ -330,7 +305,7 @@ export class LinkPanel {
         await linkEmailToContact(fullMessage, result.label, this.userName + ' (Outlook)', direction, result.detail, priveOpts);
       }
 
-      statusEl.innerHTML = `<div class="status-linked">✓ Email lié à : ${this.escapeHtml(result.label)}</div>`;
+      statusEl.innerHTML = `<p class="status-linked">${icon('check-circle', 14)}Mail lié à ${this.escapeHtml(result.label)}</p>`;
       showToast(`Email lié à ${result.label}`, 'success');
 
       // Hide search section
@@ -341,7 +316,7 @@ export class LinkPanel {
       await this.offerFolderFiling(result, restId, token);
 
     } catch (err) {
-      statusEl.innerHTML = `<p style="color:var(--atlas-danger);font-size:12px;">Erreur : ${escapeError(err)}</p>`;
+      statusEl.innerHTML = errorHtml(err, { title: 'Liaison impossible', retry: false, compact: true });
       showToast('Erreur de liaison', 'error');
     }
   }
@@ -361,12 +336,13 @@ export class LinkPanel {
       if (mapping && mapping.folderId) {
         // User has an existing folder — offer to move
         statusEl.innerHTML += `
-          <div style="margin-top:12px; padding:10px; background:var(--atlas-bg-secondary); border:1px solid var(--atlas-border); border-radius:var(--atlas-radius);">
-            <p style="font-size:12px; margin-bottom:8px;">📂 Dossier Outlook trouvé : <strong>${this.escapeHtml(mapping.folderPath)}</strong></p>
-            <div style="display:flex; gap:6px;">
+          <div class="card folder-card is-known" style="margin-top:10px;">
+            <div class="folder-card-icon">${icon('folder', 18)}</div>
+            <div class="folder-card-body"><span class="eyebrow">Dossier habituel</span><p class="folder-card-title">${this.escapeHtml(mapping.folderPath)}</p>
+            <div class="btn-row">
               <button class="btn btn-primary btn-sm" id="move-to-folder-btn">Déplacer dans le dossier</button>
-              <button class="btn btn-secondary btn-sm" id="skip-folder-btn">Ignorer</button>
-            </div>
+              <button class="btn btn-ghost btn-sm" id="skip-folder-btn">Ignorer</button>
+            </div></div>
           </div>
         `;
 
@@ -386,9 +362,9 @@ export class LinkPanel {
             await moveMessageToFolder(token, messageId, folderId);
             showToast(`Email déplacé dans ${mapping.folderPath}`, 'success');
             document.getElementById('move-to-folder-btn')!.closest('div')!.parentElement!.innerHTML =
-              '<p style="font-size:12px;color:var(--atlas-success);">✓ Email déplacé dans le dossier</p>';
+              `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans le dossier</p>`;
           } catch (err) {
-            showToast(`Erreur déplacement : ${(err as Error).message}`, 'error');
+            showToast(`${humanError(err)}`, 'error');
           }
         });
 
@@ -402,14 +378,12 @@ export class LinkPanel {
           : `Clients/${result.label}`;
 
         statusEl.innerHTML += `
-          <div style="margin-top:12px; padding:10px; background:var(--atlas-bg-secondary); border:1px solid var(--atlas-border); border-radius:var(--atlas-radius);">
-            <p style="font-size:12px; margin-bottom:8px;">📂 Créer un dossier Outlook et y déplacer l'email ?</p>
-            <div class="form-group" style="margin-bottom:8px;">
-              <input type="text" class="form-input" id="folder-path-input" value="${this.escapeAttr(suggestedPath)}" style="font-size:12px;" />
-            </div>
-            <div style="display:flex; gap:6px;">
+          <div class="card stack-sm" style="margin-top:10px;">
+            <label class="form-label" for="folder-path-input">Ranger dans un nouveau dossier Outlook ?</label>
+            <input type="text" class="form-input" id="folder-path-input" value="${this.escapeAttr(suggestedPath)}" />
+            <div class="btn-row">
               <button class="btn btn-primary btn-sm" id="create-folder-btn">Créer et déplacer</button>
-              <button class="btn btn-secondary btn-sm" id="skip-create-btn">Ignorer</button>
+              <button class="btn btn-ghost btn-sm" id="skip-create-btn">Ignorer</button>
             </div>
           </div>
         `;
@@ -430,9 +404,9 @@ export class LinkPanel {
 
             showToast(`Dossier créé et email déplacé`, 'success');
             btn.closest('div')!.parentElement!.innerHTML =
-              `<p style="font-size:12px;color:var(--atlas-success);">✓ Email déplacé dans <strong>${this.escapeHtml(folderPath)}</strong></p>`;
+              `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans ${this.escapeHtml(folderPath)}</p>`;
           } catch (err) {
-            showToast(`Erreur : ${(err as Error).message}`, 'error');
+            showToast(`${humanError(err)}`, 'error');
           }
         });
 

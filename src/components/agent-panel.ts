@@ -53,6 +53,8 @@ import {
 import { renderEquipe } from './agent-equipe';
 import { convertToRestId } from '../api/graph';
 import { escapeHtml } from '../utils/html';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
 
 type EtatAvecBrouillon = InboxMessageState;
 
@@ -223,18 +225,18 @@ export class AgentPanel {
         <section id="agent-question" class="agent-section"></section>
 
         <section class="agent-section">
-          <button type="button" class="agent-link" id="agent-journal-toggle" aria-expanded="false">▸ Ce que l'agent a fait</button>
+          <button type="button" class="agent-link" id="agent-journal-toggle" aria-expanded="false">${icon('activity', 14)}Ce que l'agent a fait</button>
           <div id="agent-journal" hidden></div>
         </section>
 
         <div id="agent-why-wrap" class="agent-why-wrap" hidden>
-          <button type="button" class="agent-link" id="agent-why-toggle" aria-expanded="false">Pourquoi cette proposition ? ⓘ</button>
+          <button type="button" class="agent-link" id="agent-why-toggle" aria-expanded="false">${icon('question', 14)}Pourquoi cette proposition ?</button>
           <div id="agent-why" class="agent-why" hidden></div>
         </div>
 
         <div class="agent-footer">
           <button type="button" class="btn btn-secondary btn-block agent-btn" data-nav="ia"
-            title="Analyse détaillée, correction de catégorie et Re-analyser (action volontaire)">🔄 Analyse détaillée / Re-analyser</button>
+            title="Thème, urgence, dossier conseillé et correction du classement">${icon('tag', 14)}Classement détaillé</button>
         </div>
       </div>
     `;
@@ -394,7 +396,7 @@ export class AgentPanel {
           refreshJourneeBanner(document.getElementById('journee-host'), { onInfo: showToast }).catch(() => { /* bandeau facultatif */ });
         } catch (e) {
           box.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; });
-          showToast(`Erreur : ${(e as Error).message}`, 'error');
+          showToast(`${humanError(e)}`, 'error');
         }
       });
     });
@@ -439,16 +441,16 @@ export class AgentPanel {
       }
       if (this.destroyed) return;
     }
-    const local: Array<{ id: string; label: string }> = [
-      { id: 'nav:link', label: '🔗 Lier à un projet' },
-      { id: 'nav:info', label: '📁 Voir le projet' },
-      ...(this.mobile ? [] : [{ id: 'nav:create', label: '➕ Créer un projet' }]),
-      { id: 'atlas', label: '🚀 Ouvrir dans ATLAS' },
+    const local: Array<{ id: string; label: string; icon: string }> = [
+      { id: 'nav:link', label: 'Lier à un projet', icon: 'link' },
+      { id: 'nav:info', label: 'Voir le projet', icon: 'folder' },
+      ...(this.mobile ? [] : [{ id: 'nav:create', label: 'Créer un projet', icon: 'plus' }]),
+      { id: 'atlas', label: 'Ouvrir dans ATLAS', icon: 'external' },
     ];
     const sugg = (this.suggestions || []).sort((a, b) => a.priority - b.priority);
     menu.innerHTML = `
       ${sugg.map((s, i) => `<button type="button" class="agent-menu-item" data-sugg="${i}" title="${escapeHtml(s.tooltip || '')}">${escapeHtml(s.label)}</button>`).join('')}
-      ${local.map(l => `<button type="button" class="agent-menu-item" data-local="${l.id}">${escapeHtml(l.label)}</button>`).join('')}
+      ${local.map(l => `<button type="button" class="agent-menu-item" data-local="${l.id}">${icon(l.icon, 14)}${escapeHtml(l.label)}</button>`).join('')}
     `;
     menu.querySelectorAll<HTMLButtonElement>('button[data-sugg]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -705,7 +707,7 @@ export class AgentPanel {
       return;
     }
     try {
-      const [contacts, tiers] = await Promise.all([getAllContacts(), getAllTiers()]);
+      const [contacts, tiers] = await Promise.all([getAllContacts().catch(() => []), getAllTiers().catch(() => [])]);
       const contact = contacts.find(c => (c.email || '').toLowerCase() === email);
       let tier = contact?.relationSociete
         ? tiers.find(t => (t.relation || '').toLowerCase() === contact.relationSociete.toLowerCase())
@@ -715,8 +717,8 @@ export class AgentPanel {
       }
       const company = contact?.relationSociete || tier?.relation || '';
       const [projets, profile] = await Promise.all([
-        company ? getProjetsByClient(company) : Promise.resolve([]),
-        fetchContactArgoProfile(email),
+        company ? getProjetsByClient(company).catch(() => []) : Promise.resolve([]),
+        fetchContactArgoProfile(email).catch(() => null),
       ]);
       if (this.destroyed || !host()) return;
       const enCours = projets.filter(p => !CLOSED_STATUS.test(p.statut || ''));

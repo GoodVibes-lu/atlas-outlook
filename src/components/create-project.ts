@@ -17,6 +17,9 @@ import { analyzeEmailForProjet } from '../api/argo';
 import { showToast } from '../taskpane';
 import type { Tier } from '../types';
 import { escapeHtml } from '../utils/html';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
+import { loadingHtml, emptyHtml, errorHtml, renderError } from '../ui/states';
 
 // ── Constants ──
 
@@ -87,10 +90,11 @@ export class CreateProjectPanel {
   private render(): void {
     this.container.innerHTML = `
       <div class="panel-scroll">
-        <div class="section-heading">Creer un projet depuis cet email</div>
+        <h2 class="section-heading">Créer un projet à partir de ce mail</h2>
+        <div id="create-notice"></div>
         <div id="create-form">
-          <div class="spinner" style="margin:12px auto;"></div>
-          <p style="text-align:center;font-size:12px;color:var(--atlas-text-secondary);">Analyse ARGO en cours...</p>
+          <div class="argo-progress" role="status"><span class="argo-progress-bar" aria-hidden="true"></span><span>ARGO prépare la fiche d'après le mail…</span></div>
+          ${loadingHtml('Préparation de la fiche…', 4)}
         </div>
       </div>
     `;
@@ -104,7 +108,7 @@ export class CreateProjectPanel {
     try {
       const item = Office.context.mailbox.item;
       if (!item) {
-        formEl.innerHTML = '<p class="empty-state">Aucun email selectionne</p>';
+        formEl.innerHTML = emptyHtml({ icon: 'mail', title: 'Aucun mail sélectionné', text: 'Ouvre un mail pour créer un projet à partir de lui.' });
         return;
       }
 
@@ -114,15 +118,23 @@ export class CreateProjectPanel {
       const fromEmail = from?.emailAddress || '';
       const bodyPreview = (item as any).bodyPreview || '';
 
-      // Load everything in parallel
-      const [analysis, tiers, employes] = await Promise.all([
+      // Tout en parallèle ; un appel en échec n'empêche pas de remplir la fiche à la main.
+      const [rAnalysis, rTiers, rEmployes] = await Promise.allSettled([
         analyzeEmailForProjet(subject, fromName, fromEmail, bodyPreview),
         getAllTiers(),
         getAllEmployes(),
       ]);
-
-      this.tiers = tiers;
-      this.employes = employes;
+      const analysis: { denomination?: string; client?: string; descriptif?: string } =
+        rAnalysis.status === 'fulfilled' ? rAnalysis.value : {};
+      this.tiers = rTiers.status === 'fulfilled' ? rTiers.value : [];
+      this.employes = rEmployes.status === 'fulfilled' ? rEmployes.value : [];
+      const notice = document.getElementById('create-notice');
+      const listsFailed = rTiers.status === 'rejected' ? rTiers.reason : rEmployes.status === 'rejected' ? rEmployes.reason : null;
+      if (notice && listsFailed) {
+        renderError(notice, listsFailed, () => { notice.innerHTML = ''; this.init(); }, { title: 'Clients ou équipe indisponibles : la recherche sera vide', compact: true });
+      } else if (notice && rAnalysis.status === 'rejected') {
+        notice.innerHTML = `<p class="help" style="margin-bottom:10px;">${icon('info', 12)}ARGO n'a pas pu préremplir la fiche : complète-la à la main.</p>`;
+      }
 
       // Try to auto-match client from ARGO analysis
       if (analysis.client) {
@@ -135,12 +147,7 @@ export class CreateProjectPanel {
 
       this.renderForm(analysis, subject);
     } catch (err) {
-      formEl.innerHTML = `
-        <div class="empty-state">
-          <p>Impossible d'analyser l'email (IA indisponible pour le moment). Remplissez le formulaire manuellement.</p>
-          <p style="color:var(--atlas-danger);font-size:11px;margin-top:8px;">${this.escapeHtml((err as Error).message)}</p>
-        </div>
-      `;
+      renderError(formEl, err, () => { formEl.innerHTML = loadingHtml('Préparation de la fiche…', 4); this.init(); }, { title: 'Fiche impossible à préparer' });
     }
   }
 
@@ -155,37 +162,35 @@ export class CreateProjectPanel {
     formEl.innerHTML = `
       <!-- Denomination -->
       <div class="form-group">
-        <label class="form-label">Denomination <span style="color:var(--atlas-danger);">*</span></label>
-        <input type="text" class="form-input" id="proj-denomination"
+        <label class="form-label" for="proj-denomination">Dénomination <span aria-hidden="true">*</span></label>
+        <input type="text" class="form-input" id="proj-denomination" required
                value="${this.escapeAttr(analysis.denomination || fallbackDenomination)}"
                placeholder="Nom du projet" />
       </div>
 
       <!-- Client (searchable dropdown) -->
       <div class="form-group">
-        <label class="form-label">Client <span style="color:var(--atlas-danger);">*</span></label>
+        <label class="form-label" for="proj-client-input">Client <span aria-hidden="true">*</span></label>
         <div style="position:relative;">
           <input type="text" class="form-input" id="proj-client-input"
                  value="${this.escapeAttr(this.selectedClientName)}"
-                 placeholder="Rechercher un client..."
+                 placeholder="Rechercher un client"
                  autocomplete="off" />
           <div id="proj-client-dropdown" class="search-dropdown" style="display:none;"></div>
         </div>
-        <button class="btn btn-secondary btn-sm" id="new-tiers-toggle" style="margin-top:6px;font-size:11px;">
-          + Nouveau tiers
-        </button>
-        <div id="new-tiers-section" style="display:none;margin-top:8px;padding:10px;background:var(--atlas-bg-secondary);border:1px solid var(--atlas-border);border-radius:var(--atlas-radius);">
+        <button type="button" class="btn btn-ghost btn-sm" id="new-tiers-toggle" style="margin-top:6px;">${icon('plus', 14)}Client absent de la liste</button>
+        <div id="new-tiers-section" class="card stack-sm" style="display:none;margin-top:8px;">
           <div class="form-group" style="margin-bottom:8px;">
-            <label class="form-label" style="font-size:11px;">Nom de la societe <span style="color:var(--atlas-danger);">*</span></label>
-            <input type="text" class="form-input" id="new-tiers-nom" placeholder="Ex: Luxair S.A." />
+            <label class="form-label" for="new-tiers-nom">Nom de la société <span aria-hidden="true">*</span></label>
+            <input type="text" class="form-input" id="new-tiers-nom" placeholder="Luxair S.A." />
           </div>
           <div class="form-group" style="margin-bottom:8px;">
-            <label class="form-label" style="font-size:11px;">Email (optionnel)</label>
+            <label class="form-label" for="new-tiers-email">E-mail (facultatif)</label>
             <input type="email" class="form-input" id="new-tiers-email" placeholder="contact@societe.lu" />
           </div>
-          <div style="display:flex;gap:6px;">
-            <button class="btn btn-primary btn-sm" id="new-tiers-create">Creer le tiers</button>
-            <button class="btn btn-secondary btn-sm" id="new-tiers-cancel">Annuler</button>
+          <div class="btn-row">
+            <button type="button" class="btn btn-primary btn-sm" id="new-tiers-create">${icon('check', 14)}Créer le client</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="new-tiers-cancel">Annuler</button>
           </div>
           <div id="new-tiers-status" style="margin-top:6px;"></div>
         </div>
@@ -196,8 +201,8 @@ export class CreateProjectPanel {
         <label class="form-label">Type</label>
         <div id="proj-types" style="display:flex;flex-wrap:wrap;gap:6px;">
           ${PROJECT_TYPES.map(t => `
-            <label class="checkbox-pill" style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid var(--atlas-border);border-radius:12px;font-size:12px;cursor:pointer;user-select:none;">
-              <input type="checkbox" value="${escapeHtml(t)}" style="margin:0;width:14px;height:14px;" />
+            <label class="checkbox-pill" style="display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border:1px solid var(--border-mid);font-size:12px;cursor:pointer;user-select:none;">
+              <input type="checkbox" value="${escapeHtml(t)}" style="margin:0;width:14px;height:14px;accent-color:var(--accent-ink);" />
               ${escapeHtml(t)}
             </label>
           `).join('')}
@@ -208,21 +213,21 @@ export class CreateProjectPanel {
       <div class="form-group">
         <label class="form-label">Budget</label>
         <select class="dropdown-select" id="proj-budget">
-          <option value="">-- Selectionner --</option>
+          <option value="">Choisir</option>
           ${BUDGET_RANGES.map(b => `<option value="${b}">${b}</option>`).join('')}
         </select>
       </div>
 
       <!-- Mois / Annee (side by side) -->
       <div class="form-group">
-        <label class="form-label">Mois / Annee de realisation</label>
+        <label class="form-label">Mois et année de réalisation</label>
         <div style="display:flex;gap:8px;">
           <select class="dropdown-select" id="proj-mois" style="flex:1;">
-            <option value="">-- Mois --</option>
+            <option value="">Mois</option>
             ${MONTHS.map((m, i) => `<option value="${m}" ${i === currentMonth ? 'selected' : ''}>${m}</option>`).join('')}
           </select>
           <select class="dropdown-select" id="proj-annee" style="flex:1;">
-            <option value="">-- Annee --</option>
+            <option value="">Année</option>
             ${years.map(y => `<option value="${y}" ${y === currentYear ? 'selected' : ''}>${y}</option>`).join('')}
           </select>
         </div>
@@ -233,7 +238,7 @@ export class CreateProjectPanel {
         <label class="form-label">En charge</label>
         <div style="position:relative;">
           <input type="text" class="form-input" id="proj-encharge-input"
-                 placeholder="Rechercher un employe..."
+                 placeholder="Rechercher une personne de l'équipe"
                  autocomplete="off" />
           <div id="proj-encharge-dropdown" class="search-dropdown" style="display:none;"></div>
         </div>
@@ -241,25 +246,21 @@ export class CreateProjectPanel {
 
       <!-- Date souhaitee -->
       <div class="form-group">
-        <label class="form-label">Date souhaitee</label>
+        <label class="form-label" for="proj-date">Date souhaitée</label>
         <input type="date" class="form-input" id="proj-date" />
       </div>
 
       <!-- Descriptif -->
       <div class="form-group">
-        <label class="form-label">Descriptif</label>
+        <label class="form-label" for="proj-descriptif">Descriptif</label>
         <textarea class="form-input" id="proj-descriptif" rows="3"
                   style="resize:vertical;"
-                  placeholder="Notes, details, contexte...">${this.escapeHtml(analysis.descriptif || '')}</textarea>
+                  placeholder="Notes, détails, contexte">${this.escapeHtml(analysis.descriptif || '')}</textarea>
       </div>
 
       <!-- Submit -->
-      <button class="btn btn-primary btn-block" id="create-btn" style="margin-top:4px;">
-        Creer le projet
-      </button>
-      <p style="font-size:11px;color:var(--atlas-text-muted);margin-top:8px;text-align:center;">
-        Le projet sera cree dans ATLAS et l'email sera automatiquement lie.
-      </p>
+      <button type="button" class="btn btn-primary btn-block" id="create-btn" style="margin-top:4px;">${icon('plus', 14)}Créer le projet</button>
+      <p class="help" style="margin-top:8px;">Le projet est créé dans ATLAS et ce mail y est lié automatiquement.</p>
     `;
 
     // Cache DOM refs
@@ -313,9 +314,9 @@ export class CreateProjectPanel {
         const pill = input.closest('.checkbox-pill') as HTMLElement;
         if (input.checked) {
           this.selectedTypes.add(input.value);
-          pill.style.background = 'var(--atlas-primary)';
-          pill.style.color = '#fff';
-          pill.style.borderColor = 'var(--atlas-primary)';
+          pill.style.background = 'var(--accent)';
+          pill.style.color = 'var(--accent-ink)';
+          pill.style.borderColor = 'var(--accent)';
         } else {
           this.selectedTypes.delete(input.value);
           pill.style.background = '';
@@ -431,12 +432,12 @@ export class CreateProjectPanel {
 
     const nom = nomInput.value.trim();
     if (!nom) {
-      statusEl.innerHTML = '<p style="color:var(--atlas-danger);font-size:11px;">Le nom est obligatoire.</p>';
+      statusEl.innerHTML = '<p class="help" role="alert" style="color:var(--danger);">Le nom est obligatoire.</p>';
       return;
     }
 
     createBtn.disabled = true;
-    createBtn.textContent = 'Creation...';
+    createBtn.textContent = 'Création…';
     statusEl.innerHTML = '';
 
     try {
@@ -457,12 +458,12 @@ export class CreateProjectPanel {
       nomInput.value = '';
       emailInput.value = '';
 
-      showToast(`Tiers "${result.relation}" cree`, 'success');
+      showToast(`Client « ${result.relation} » créé`, 'success');
     } catch (err) {
-      statusEl.innerHTML = `<p style="color:var(--atlas-danger);font-size:11px;">Erreur : ${this.escapeHtml((err as Error).message)}</p>`;
+      statusEl.innerHTML = errorHtml(err, { title: 'Client non créé', retry: false, compact: true });
     } finally {
       createBtn.disabled = false;
-      createBtn.textContent = 'Creer le tiers';
+      createBtn.innerHTML = `${icon('check', 14)}Créer le client`;
     }
   }
 
@@ -479,19 +480,19 @@ export class CreateProjectPanel {
 
     // Validation
     if (!denomination) {
-      showToast('La denomination est obligatoire.', 'error');
+      showToast('La dénomination est obligatoire.', 'error');
       (document.getElementById('proj-denomination') as HTMLInputElement).focus();
       return;
     }
 
     if (!this.selectedClientId) {
-      showToast('Veuillez selectionner un client.', 'error');
+      showToast('Choisis un client dans la liste.', 'error');
       this.clientInput!.focus();
       return;
     }
 
     btn.disabled = true;
-    btn.textContent = 'Creation en cours...';
+    btn.textContent = 'Création en cours…';
 
     try {
       const input: CreateProjetInput = {
@@ -516,18 +517,17 @@ export class CreateProjectPanel {
       // Show success state
       const formEl = document.getElementById('create-form')!;
       formEl.innerHTML = `
-        <div style="text-align:center;padding:24px 12px;">
-          <div style="font-size:32px;margin-bottom:12px;">&#9989;</div>
-          <p style="font-size:14px;font-weight:600;margin-bottom:4px;">Projet #${escapeHtml(result.noProjet)} cree</p>
-          <p style="font-size:12px;color:var(--atlas-text-secondary);">${this.escapeHtml(denomination)}</p>
-          <p style="font-size:12px;color:var(--atlas-text-secondary);margin-top:4px;">Client : ${this.escapeHtml(this.selectedClientName)}</p>
-          <p style="font-size:11px;color:var(--atlas-text-muted);margin-top:12px;">L'email a ete lie au projet.</p>
-        </div>
+        <article class="card project-card">
+          <span class="eyebrow">${icon('check-circle', 12)}Projet créé</span>
+          <h3 class="card-title">#${escapeHtml(result.noProjet)} ${this.escapeHtml(denomination)}</h3>
+          <dl class="facts"><dt>Client</dt><dd>${this.escapeHtml(this.selectedClientName)}</dd></dl>
+          <p class="status-linked" style="margin-top:10px;">${icon('link', 14)}Ce mail est lié au projet</p>
+        </article>
       `;
     } catch (err) {
-      showToast(`Erreur : ${(err as Error).message}`, 'error');
+      showToast(`${humanError(err)}`, 'error');
       btn.disabled = false;
-      btn.textContent = 'Creer le projet';
+      btn.innerHTML = `${icon('plus', 14)}Créer le projet`;
     }
   }
 

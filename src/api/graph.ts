@@ -5,6 +5,7 @@
 
 import type { MailMessageFull, MailAttachment } from '../types';
 import { readGraphToken } from './roaming-storage';
+import { AtlasError, outlookFetch, outlookHttpError } from './net';
 
 const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 
@@ -103,7 +104,9 @@ export async function getApiContext(): Promise<ApiContext> {
   }
   errors.push('aucun jeton collé');
 
-  throw new Error(`Aucun token mailbox dispo. Tentatives : ${errors.join(' / ')}`);
+  throw new AtlasError('session', 'Outlook ne donne pas à ATLAS l\'accès à ta boîte sur ce poste : rouvre Outlook puis réessaie.', {
+    service: 'outlook', route: 'jeton boîte', detail: errors.join(' / '),
+  });
 }
 
 /**
@@ -127,12 +130,12 @@ export async function getApiBase(): Promise<string> {
 async function graphFetch<T>(path: string, token: string, baseOverride?: string): Promise<T> {
   // Si on a un token mais pas de base override → résout via getApiBase
   const base = baseOverride || await getApiBase();
-  const res = await fetch(`${base}${path}`, {
+  const res = await outlookFetch(`${base}${path}`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(`Mailbox API ${res.status}: ${JSON.stringify(err).slice(0, 200)}`);
+    throw outlookHttpError(res.status, path.split("?")[0], JSON.stringify(err));
   }
   return res.json();
 }
@@ -276,7 +279,7 @@ export async function createMailFolder(
     : '/me/mailFolders';
   const base = await getApiBase();
 
-  const res = await fetch(`${base}${sub}`, {
+  const res = await outlookFetch(`${base}${sub}`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -285,7 +288,7 @@ export async function createMailFolder(
     body: JSON.stringify({ displayName }),
   });
 
-  if (!res.ok) throw new Error(`Cannot create folder: ${res.status}`);
+  if (!res.ok) throw outlookHttpError(res.status, "création de dossier");
   return res.json();
 }
 
@@ -394,7 +397,7 @@ export async function createAtlasCategoriesVerbose(
   const url = `${base}/me/outlook/masterCategories`;
   let existing: Set<string>;
   try {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await outlookFetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       const err = `LIST HTTP ${res.status} : ${body.slice(0, 200)}`;
@@ -413,7 +416,7 @@ export async function createAtlasCategoriesVerbose(
   for (const def of allDefs) {
     if (existing.has(def.name)) { existed++; continue; }
     try {
-      const r = await fetch(url, {
+      const r = await outlookFetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ displayName: def.name, color: def.color }),
@@ -450,7 +453,7 @@ export async function setMessageCategories(
   // Récupère les catégories actuelles pour préserver les non-ATLAS
   let current: string[] = [];
   try {
-    const res = await fetch(`${base}/me/messages/${messageId}?$select=categories`, {
+    const res = await outlookFetch(`${base}/me/messages/${messageId}?$select=categories`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     if (res.ok) {
@@ -463,14 +466,14 @@ export async function setMessageCategories(
   const nonAtlas = current.filter((c) => !ALL_ATLAS_NAMES.includes(c));
   const merged = Array.from(new Set([...nonAtlas, ...categories]));
 
-  const patchRes = await fetch(`${base}/me/messages/${messageId}`, {
+  const patchRes = await outlookFetch(`${base}/me/messages/${messageId}`, {
     method: 'PATCH',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ categories: merged }),
   });
   if (!patchRes.ok) {
     const err = await patchRes.text().catch(() => '');
-    throw new Error(`setCategories ${patchRes.status}: ${err.slice(0, 200)}`);
+    throw outlookHttpError(patchRes.status, "catégories", err);
   }
 }
 
@@ -486,7 +489,7 @@ export async function moveMessageToFolder(
   token: string, messageId: string, folderId: string
 ): Promise<void> {
   const base = await getApiBase();
-  const res = await fetch(`${base}/me/messages/${messageId}/move`, {
+  const res = await outlookFetch(`${base}/me/messages/${messageId}/move`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -494,7 +497,7 @@ export async function moveMessageToFolder(
     },
     body: JSON.stringify({ destinationId: folderId }),
   });
-  if (!res.ok) throw new Error(`Cannot move message: ${res.status}`);
+  if (!res.ok) throw outlookHttpError(res.status, "déplacement");
 }
 
 /** Copy a message to a specific folder (keeps original in place) */
@@ -502,7 +505,7 @@ export async function copyMessageToFolder(
   token: string, messageId: string, folderId: string
 ): Promise<void> {
   const base = await getApiBase();
-  const res = await fetch(`${base}/me/messages/${messageId}/copy`, {
+  const res = await outlookFetch(`${base}/me/messages/${messageId}/copy`, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -510,5 +513,5 @@ export async function copyMessageToFolder(
     },
     body: JSON.stringify({ destinationId: folderId }),
   });
-  if (!res.ok) throw new Error(`Cannot copy message: ${res.status}`);
+  if (!res.ok) throw outlookHttpError(res.status, "copie");
 }

@@ -25,6 +25,7 @@ import {
 } from '../api/agent';
 import { isMobile, openExternal, supportsMailbox } from '../api/platform';
 import { escapeHtml } from '../utils/html';
+import { humanError } from '../api/net';
 
 export const PILE_LIBELLES: Record<AgentListePile, string> = {
   a_traiter: 'À traiter par toi',
@@ -94,7 +95,7 @@ export async function renderMailList(host: HTMLElement, pile: AgentListePile, op
   try {
     elements = await fetchListe(pile, opts.limite ?? 50);
   } catch (e) {
-    host.innerHTML = `<p class="agent-muted">Liste indisponible (${escapeHtml((e as Error).message)}).</p>`;
+    host.innerHTML = `<p class="agent-muted">Liste indisponible (${escapeHtml(humanError(e))}).</p>`;
     return;
   }
   if (!host.isConnected) return;
@@ -167,7 +168,7 @@ export async function renderMailList(host: HTMLElement, pile: AgentListePile, op
         opts.onChange?.();
       } catch (e) {
         btn.disabled = false;
-        opts.onInfo?.(`Erreur : ${(e as Error).message}`, 'error');
+        opts.onInfo?.(`${humanError(e)}`, 'error');
       }
     });
   });
@@ -189,7 +190,7 @@ export async function renderMailList(host: HTMLElement, pile: AgentListePile, op
         opts.onChange?.();
       } catch (e) {
         wrap.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; });
-        opts.onInfo?.(`Erreur : ${(e as Error).message}`, 'error');
+        opts.onInfo?.(`${humanError(e)}`, 'error');
       }
     });
   });
@@ -211,7 +212,7 @@ export async function renderJournal(host: HTMLElement, opts: { limite?: number; 
   try {
     actions = await fetchJournal(opts.limite ?? 30);
   } catch (e) {
-    host.innerHTML = `<p class="agent-muted">Journal indisponible (${escapeHtml((e as Error).message)}).</p>`;
+    host.innerHTML = `<p class="agent-muted">Journal indisponible (${escapeHtml(humanError(e))}).</p>`;
     return;
   }
   if (!host.isConnected) return;
@@ -246,7 +247,7 @@ export async function renderJournal(host: HTMLElement, opts: { limite?: number; 
       } catch (e) {
         btn.disabled = false;
         btn.textContent = 'Annuler';
-        opts.onInfo?.(`Erreur : ${(e as Error).message}`, 'error');
+        opts.onInfo?.(`${humanError(e)}`, 'error');
       }
     });
   });

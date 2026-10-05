@@ -22,6 +22,8 @@ import { checkAvantEnvoi, hasBlocking, GENERIC_DOMAINS, type SendCheckProblem, t
 import { getAllContacts, getAllTiers, getAllProjets, getLinkedConversationIds, fetchContactArgoProfile } from '../api/airtable';
 import { supportsMailbox } from '../api/platform';
 import { escapeHtml } from './agent-lists';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
 
 function getAsyncValue<T>(getter: ((cb: (r: Office.AsyncResult<T>) => void) => void) | undefined, fallback: T): Promise<T> {
   return new Promise((resolve) => {
@@ -150,7 +152,7 @@ export class SendCheckPanel {
       this.renderResult(host, problems, { atlas, pjConnue: input.piecesJointes !== null && input.piecesJointes !== undefined });
     } catch (e) {
       if (this.destroyed) return;
-      host.innerHTML = `<p class="agent-muted">Vérification impossible (${escapeHtml((e as Error).message)}).</p>`;
+      host.innerHTML = `<p class="agent-muted">Vérification impossible (${escapeHtml(humanError(e))}).</p>`;
     } finally {
       this.busy = false;
       if (btn) { btn.disabled = false; btn.textContent = 'Revérifier'; }
@@ -163,14 +165,14 @@ export class SendCheckPanel {
     if (!ctx.pjConnue) notes.push('Pièces jointes illisibles dans cette version d\'Outlook : contrôle sauté.');
     const notesHtml = notes.map(n => `<p class="agent-muted">${escapeHtml(n)}</p>`).join('');
     if (!problems.length) {
-      host.innerHTML = `<div class="send-check-ok">✓ Rien à signaler.</div>${notesHtml}`;
+      host.innerHTML = `<div class="send-check-ok">${icon('check-circle', 16)}Rien à signaler : tu peux envoyer.</div>${notesHtml}`;
       return;
     }
     const bloquant = hasBlocking(problems);
     host.innerHTML = `
       <div class="send-check-head ${bloquant ? 'is-blocking' : ''}">${bloquant ? 'À corriger avant d\'envoyer' : 'À vérifier'} (${problems.length})</div>
       <ul class="send-check-list">
-        ${problems.map(p => `<li class="send-check-item ${p.gravite === 'bloquant' ? 'is-blocking' : ''}">${p.gravite === 'bloquant' ? '⛔' : '⚠️'} ${escapeHtml(p.message)}</li>`).join('')}
+        ${problems.map(p => `<li class="send-check-item ${p.gravite === 'bloquant' ? 'is-blocking' : ''}">${icon(p.gravite === 'bloquant' ? 'x' : 'alert', 14)}<span>${escapeHtml(p.message)}</span></li>`).join('')}
       </ul>
       ${notesHtml}
     `;

@@ -45,6 +45,7 @@ import { initRoamingStorage } from './api/roaming-storage';
 import { supportsMailbox } from './api/platform';
 import { checkAvantEnvoi, smartAlertMessage } from './utils/send-check';
 import { readComposeItem } from './components/send-check-panel';
+import { humanError } from './api/net';
 
 /**
  * Construit la liste des catégories à appliquer pour un état donné.
@@ -143,13 +144,13 @@ export async function atlasDoneCommand(event: Office.AddinCommands.Event): Promi
 
     const tag = await findTagForCurrentMail(ctx.restId, ctx.conversationId);
     if (!tag) {
-      showInfoBar('Mail pas encore taggé — ouvre ATLAS pour analyser', true);
+      showInfoBar('Mail pas encore classé : ouvre ATLAS, onglet Classer', true);
       event.completed();
       return;
     }
 
     const ok = await markTagDone(tag.id);
-    if (!ok) { showInfoBar('Échec marquage Traité', true); event.completed(); return; }
+    if (!ok) { showInfoBar('Impossible de marquer comme traité : réessaie', true); event.completed(); return; }
 
     // Catégorie ✓ verte
     try {
@@ -158,9 +159,9 @@ export async function atlasDoneCommand(event: Office.AddinCommands.Event): Promi
       console.warn('[ATLAS commands] setCategories done failed:', e);
     }
 
-    showInfoBar('✓ Traité — tag vert appliqué');
+    showInfoBar('Traité');
   } catch (e) {
-    showInfoBar(`Erreur : ${(e as Error).message?.slice(0, 80)}`, true);
+    showInfoBar(`${humanError(e)}`, true);
   } finally {
     event.completed();
   }
@@ -177,13 +178,13 @@ export async function atlasSnoozeCommand(event: Office.AddinCommands.Event): Pro
 
     const tag = await findTagForCurrentMail(ctx.restId, ctx.conversationId);
     if (!tag) {
-      showInfoBar('Mail pas encore taggé — ouvre ATLAS pour analyser', true);
+      showInfoBar('Mail pas encore classé : ouvre ATLAS, onglet Classer', true);
       event.completed();
       return;
     }
 
     const ok = await snoozeTag(tag.id);
-    if (!ok) { showInfoBar('Échec snooze', true); event.completed(); return; }
+    if (!ok) { showInfoBar('Impossible de reporter : réessaie', true); event.completed(); return; }
 
     try {
       await setMessageCategories(ctx.restId, buildCategoriesFor(tag, 'snoozed'));
@@ -191,9 +192,9 @@ export async function atlasSnoozeCommand(event: Office.AddinCommands.Event): Pro
       console.warn('[ATLAS commands] setCategories snooze failed:', e);
     }
 
-    showInfoBar('⏰ Reporté à demain 8h — tag bleu visible dans l\'inbox');
+    showInfoBar('Reporté à demain 8 h');
   } catch (e) {
-    showInfoBar(`Erreur : ${(e as Error).message?.slice(0, 80)}`, true);
+    showInfoBar(`${humanError(e)}`, true);
   } finally {
     event.completed();
   }
@@ -229,7 +230,7 @@ export async function atlasReanalyzeCommand(event: Office.AddinCommands.Event): 
       } catch { resolve(''); }
     });
 
-    showInfoBar('Analyse Claude en cours…');
+    showInfoBar('ARGO classe ce mail…');
 
     const analysis = await analyzeEmailWithClaude({
       subject, from, toRecipients, ccRecipients, body, receivedAt, userEmail,
@@ -263,9 +264,9 @@ export async function atlasReanalyzeCommand(event: Office.AddinCommands.Event): 
     }
 
     const iaCat = ATLAS_IA_CATEGORIES[analysis.category]?.name || analysis.category;
-    showInfoBar(`✓ Analysé : ${iaCat} (urgence ${analysis.urgencyScore}/5)`);
+    showInfoBar(`Classé : ${iaCat} (urgence ${analysis.urgencyScore}/5)`);
   } catch (e) {
-    showInfoBar(`Erreur re-analyse : ${(e as Error).message?.slice(0, 80)}`, true);
+    showInfoBar(`${humanError(e)}`, true);
   } finally {
     event.completed();
   }
@@ -282,13 +283,13 @@ export async function atlasArchiveCommand(event: Office.AddinCommands.Event): Pr
 
     const tag = await findTagForCurrentMail(ctx.restId, ctx.conversationId);
     if (!tag) {
-      showInfoBar('Mail pas encore taggé — ouvre ATLAS pour analyser', true);
+      showInfoBar('Mail pas encore classé : ouvre ATLAS, onglet Classer', true);
       event.completed();
       return;
     }
 
     const ok = await archiveTag(tag.id);
-    if (!ok) { showInfoBar('Échec archive', true); event.completed(); return; }
+    if (!ok) { showInfoBar('Impossible d\'archiver : réessaie', true); event.completed(); return; }
 
     try {
       await setMessageCategories(ctx.restId, buildCategoriesFor(tag, 'archived'));
@@ -313,9 +314,9 @@ export async function atlasArchiveCommand(event: Office.AddinCommands.Event): Pr
       }
     }
 
-    showInfoBar(movedTo ? `📦 Archivé + rangé dans ${movedTo}` : '📦 Archivé (pas de dossier habituel)');
+    showInfoBar(movedTo ? `Archivé dans ${movedTo}` : 'Archivé (aucun dossier habituel)');
   } catch (e) {
-    showInfoBar(`Erreur : ${(e as Error).message?.slice(0, 80)}`, true);
+    showInfoBar(`${humanError(e)}`, true);
   } finally {
     event.completed();
   }

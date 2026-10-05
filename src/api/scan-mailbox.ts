@@ -12,6 +12,7 @@
  */
 
 import { getApiContext, listMailFolders } from './graph';
+import { outlookFetch } from './net';
 import { bulkRecord } from './sender-folder-index';
 
 const SKIP_FOLDERS = new Set([
@@ -70,7 +71,7 @@ export async function scanMailboxBuildIndex(
     });
     try {
       const url = `${base}/me/mailFolders/${folder.id}/messages?$top=200&$select=id,from`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await outlookFetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) {
         foldersScanned++;
         continue;

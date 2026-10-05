@@ -16,7 +16,8 @@
  * lui-même, il le demande à worker.ts (`getWorkerToken`).
  */
 
-import { WORKER_BASE, getWorkerToken } from './worker';
+import { workerRequest } from './worker';
+import { AtlasError, humanError } from './net';
 import type {
   InboxMessageState, InboxJournee, InboxPile, InboxRappelReponse, InboxEquipe, InboxEquipeVue, InboxEquipeCommentaire,
 } from './inbox-agent.types';
@@ -24,30 +25,16 @@ import type {
   ActionProposee, ActionFaite, ReponseActions, ResultatExecution, ReponseQuestion, ResumeFil, Rattrapage,
 } from './inbox-actions.types';
 
-class PluginHttpError extends Error {
-  constructor(public status: number, message: string, public data: any) { super(message); }
-}
+/** Erreur d'appel au worker : message lisible, `status` HTTP (0 sans réponse) et corps `data`. */
+const PluginHttpError = AtlasError;
 
-/** Appelle `/api/plugin/<path>` du worker (GET, POST ou DELETE JSON), avec une nouvelle tentative sur 401. */
+/**
+ * Appelle `/api/plugin/<path>` du worker (GET, POST ou DELETE JSON) : jeton, délai, erreurs
+ * lisibles et nouvelles tentatives des lectures (GET) sont gérés par workerRequest (worker.ts).
+ * Les routes qui font travailler l'IA côté worker (brouillon, question, traduction…) ont 90 s.
+ */
 async function pluginFetch<T>(method: 'GET' | 'POST' | 'DELETE', path: string, payload?: unknown): Promise<T> {
-  const getToken = getWorkerToken;
-  const withBody = method !== 'GET';
-  const send = async (token: string) => fetch(`${WORKER_BASE}/api/plugin/${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(withBody ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: withBody ? JSON.stringify(payload ?? {}) : undefined,
-    cache: 'no-store',
-  });
-  let res = await send(await getToken());
-  if (res.status === 401) res = await send(await getToken(true));
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok || data?.ok === false) {
-    throw new PluginHttpError(res.status, `ATLAS ${res.status}: ${String(data?.error || 'erreur').slice(0, 120)}`, data);
-  }
-  return data as T;
+  return workerRequest<T>(method, path, payload, { retry: method === 'GET', timeoutMs: 90_000 });
 }
 
 // ── État d'un message ──
@@ -76,7 +63,7 @@ export async function fetchAgentState(messageId: string, mailbox: string): Promi
     if (e instanceof PluginHttpError && e.status === 404) {
       return e.data?.status === 'pending' ? { kind: 'pending' } : { kind: 'absent' };
     }
-    return { kind: 'error', message: (e as Error).message || 'erreur' };
+    return { kind: 'error', message: humanError(e) };
   }
 }
 

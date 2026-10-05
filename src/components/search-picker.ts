@@ -5,12 +5,16 @@
 import { getAllProjets, getAllTiers, getAllContacts } from '../api/airtable';
 import type { SearchResult } from '../types';
 import { escapeHtml } from '../utils/html';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
+import { renderError } from '../ui/states';
 
 function normalize(str: string): string {
   return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 }
 
 export class SearchPicker {
+  private partialFailure: unknown = null;
   private container: HTMLElement;
   private onSelect: (result: SearchResult) => void;
   private searchInput!: HTMLInputElement;
@@ -30,11 +34,10 @@ export class SearchPicker {
   private render(): void {
     this.container.innerHTML = `
       <div class="search-wrapper">
-        <span class="search-icon">&#128269;</span>
-        <input type="text" class="search-input" placeholder="Chargement des donn\u00e9es..." disabled />
+        <span class="search-icon">${icon('search', 14)}</span>
+        <input type="search" class="search-input" placeholder="Chargement des projets et contacts…" aria-label="Rechercher un projet, un client ou un contact" disabled />
       </div>
       <div class="search-skeleton">
-        <p class="empty-state" style="margin-bottom:8px;opacity:0.6;">Chargement des donn\u00e9es...</p>
         <div class="skeleton-line skeleton-lg"></div>
         <div class="skeleton-line"></div>
         <div class="skeleton-line skeleton-sm"></div>
@@ -51,11 +54,15 @@ export class SearchPicker {
 
   private async loadData(): Promise<void> {
     try {
-      const [projets, tiers, contacts] = await Promise.all([
-        getAllProjets(),
-        getAllTiers(),
-        getAllContacts(),
-      ]);
+      // Chaque liste est indépendante : une liste en échec n'empêche pas de chercher dans les autres.
+      const settled = await Promise.allSettled([getAllProjets(), getAllTiers(), getAllContacts()]);
+      const failed = settled.find(r => r.status === 'rejected') as PromiseRejectedResult | undefined;
+      if (settled.every(r => r.status === 'rejected')) throw failed!.reason;
+      const val = <T,>(r: PromiseSettledResult<T[]>): T[] => (r.status === 'fulfilled' ? r.value : []);
+      const projets = val(settled[0] as PromiseSettledResult<Awaited<ReturnType<typeof getAllProjets>>[number][]>);
+      const tiers = val(settled[1] as PromiseSettledResult<Awaited<ReturnType<typeof getAllTiers>>[number][]>);
+      const contacts = val(settled[2] as PromiseSettledResult<Awaited<ReturnType<typeof getAllContacts>>[number][]>);
+      this.partialFailure = failed ? failed.reason : null;
 
       this.allResults = [
         ...projets.map(p => ({
@@ -84,15 +91,22 @@ export class SearchPicker {
       this.skeletonContainer.style.display = 'none';
       this.resultsList.style.display = '';
       this.searchInput.disabled = false;
-      this.searchInput.placeholder = `Rechercher parmi ${this.allResults.length} \u00e9l\u00e9ments...`;
+      this.searchInput.placeholder = `Projet, client ou contact (${this.allResults.length})`;
+      if (this.partialFailure) {
+        const note = document.createElement('p');
+        note.className = 'help';
+        note.textContent = 'Une partie de la liste est indisponible pour le moment : certains résultats peuvent manquer.';
+        this.container.querySelector('.search-wrapper')?.after(note);
+      }
       this.searchInput.focus();
     } catch (err: any) {
       console.error('[SearchPicker] loadData failed:', err);
-      const msg = err?.message || String(err);
+      const msg = humanError(err);
       // Replace skeleton with error
       this.skeletonContainer.style.display = 'none';
       this.resultsList.style.display = '';
-      this.resultsList.innerHTML = `<p class="empty-state">Erreur de chargement.<br/><small style="opacity:0.7">${escapeHtml(msg.length > 120 ? msg.slice(0, 120) + '...' : msg)}</small></p>`;
+      void msg;
+      renderError(this.resultsList, err, () => { this.render(); this.loadData(); }, { title: 'Recherche indisponible', compact: true });
     }
   }
 
@@ -126,13 +140,13 @@ export class SearchPicker {
       .slice(0, 15);
 
     if (matches.length === 0) {
-      this.resultsList.innerHTML = '<p class="empty-state">Aucun r\u00e9sultat</p>';
+      this.resultsList.innerHTML = '<p class="empty-state">Rien ne correspond : essaie un autre mot (nom du client, numéro de projet).</p>';
       return;
     }
 
     this.resultsList.innerHTML = matches.map(r => `
-      <div class="suggestion-item" data-id="${escapeHtml(r.id)}" data-type="${escapeHtml(r.type)}" data-label="${this.escapeAttr(r.label)}" data-detail="${this.escapeAttr(r.detail)}">
-        <span class="suggestion-badge badge-${escapeHtml(r.type)}">${r.type === 'projet' ? '&#128193;' : r.type === 'tiers' ? '&#127970;' : '&#128100;'}</span>
+      <div class="suggestion-item" role="button" tabindex="0" data-id="${escapeHtml(r.id)}" data-type="${escapeHtml(r.type)}" data-label="${this.escapeAttr(r.label)}" data-detail="${this.escapeAttr(r.detail)}">
+        <span class="suggestion-badge badge-${escapeHtml(r.type)}">${r.type === 'projet' ? 'Projet' : r.type === 'tiers' ? 'Client' : 'Contact'}</span>
         <span class="suggestion-name">${this.highlight(r.label, query)}</span>
         <span class="suggestion-detail">${escapeHtml(r.detail)}</span>
       </div>
@@ -140,13 +154,16 @@ export class SearchPicker {
 
     // Click handlers
     this.resultsList.querySelectorAll('.suggestion-item').forEach(el => {
-      el.addEventListener('click', () => {
-        this.onSelect({
-          type: el.getAttribute('data-type') as SearchResult['type'],
-          id: el.getAttribute('data-id')!,
-          label: el.getAttribute('data-label')!,
-          detail: el.getAttribute('data-detail')!,
-        });
+      const choose = () => this.onSelect({
+        type: el.getAttribute('data-type') as SearchResult['type'],
+        id: el.getAttribute('data-id')!,
+        label: el.getAttribute('data-label')!,
+        detail: el.getAttribute('data-detail')!,
+      });
+      el.addEventListener('click', choose);
+      el.addEventListener('keydown', (ev) => {
+        const k = (ev as KeyboardEvent).key;
+        if (k === 'Enter' || k === ' ') { ev.preventDefault(); choose(); }
       });
     });
   }

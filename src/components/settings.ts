@@ -1,8 +1,10 @@
 /**
- * Settings Panel — Nom, email, jeton Graph de repli, outils (catégories, index).
+ * Settings Panel · Réglages : profil, outils de la boîte (catégories, index des dossiers),
+ * Diagnostic (origine, serveur ATLAS, jeton, dernières erreurs) et à propos.
  *
- * Plus de clé Anthropic ni de jeton Airtable (03/10/2026) : données ATLAS et IA passent par le
+ * Plus de clé Anthropic ni de jeton Airtable (03/10/2026) : données ATLAS et ARGO passent par le
  * worker avec le compte Microsoft de l'utilisateur (cf. api/worker.ts).
+ * Refonte 05/10/2026 : DS ATLAS, icônes SVG, Diagnostic discret (cf. api/net.ts).
  */
 
 import { showToast } from '../taskpane';
@@ -11,6 +13,13 @@ import { indexStats, clearIndex } from '../api/sender-folder-index';
 import { createAtlasCategoriesVerbose } from '../api/graph';
 import { persistKey, readGraphToken, saveGraphToken } from '../api/roaming-storage';
 import { escapeHtml } from '../utils/html';
+import { getDiag, humanError, noteDiag } from '../api/net';
+import { callAtlasWorker, resetWorkerToken } from '../api/worker';
+import { icon } from '../ui/icons';
+import { inlineLoadingHtml } from '../ui/states';
+
+/** Version affichée (le manifeste reste en 1.3.0 : seul le contenu web change). */
+const ADDIN_VERSION = '1.3.0 · panneau du 05/10/2026';
 
 export class SettingsPanel {
   private container: HTMLElement;
@@ -30,84 +39,80 @@ export class SettingsPanel {
     const userEmail = localStorage.getItem('atlas_addin_user_email') || profile?.emailAddress || '';
 
     this.container.innerHTML = `
-      <div class="panel-scroll">
-        <div class="section-heading">Configuration ATLAS</div>
-
-        <div class="form-group">
-          <label class="form-label">Nom d'utilisateur</label>
-          <input type="text" class="form-input" id="setting-name" value="${this.escapeAttr(userName)}" placeholder="Charles Maes" />
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Email</label>
-          <input type="email" class="form-input" id="setting-email" value="${this.escapeAttr(userEmail)}" placeholder="charles@vibes.lu" />
-        </div>
-
-        <p style="font-size:11px;color:var(--atlas-text-secondary);margin:0 0 12px;line-height:1.4;">
-          Projets, liaisons et IA passent par le serveur ATLAS avec ton compte Microsoft :
-          aucune clé à saisir ici.
-        </p>
-
-        <div class="form-group">
-          <label class="form-label">Token Microsoft Graph (recommandé sur Mac)</label>
-          <textarea class="form-input" id="setting-graph" rows="3"
-            placeholder="eyJ0eXAiOiJKV1Qi..."
-            style="font-family: monospace; font-size: 11px;">${escapeHtml(graphToken)}</textarea>
-          <p style="font-size:10px;color:var(--atlas-text-muted);margin-top:4px;line-height:1.4;">
-            <strong>Pourquoi :</strong> Outlook Mac n'autorise pas l'addin à scanner ta
-            boîte mail (lister tes dossiers, voir où tu ranges habituellement les
-            mails). Sans ce token, l'apprentissage des dossiers ne marche pas.<br/>
-            <strong>Comment l'obtenir :</strong> Dans l'app ATLAS Desktop, ouvre la
-            console DevTools (Cmd+Opt+I) et tape :
-            <code style="background:#f1f5f9;padding:2px 4px;border-radius:3px;">copy(localStorage.getItem('atlas_ms_access_token'))</code>
-            puis colle ici. Le token expire après ~1h et n'est gardé que le temps de
-            la session (jamais enregistré). À refaire toutes les ~50 min ou dès
-            qu'une action échoue.
-          </p>
-        </div>
-
-        <button class="btn btn-primary btn-block" id="save-settings-btn">
-          Enregistrer
-        </button>
-
-        <div style="margin-top:24px;padding:12px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;">
-          <div style="font-weight:700;color:#9a3412;font-size:13px;margin-bottom:6px;">🏷️ Catégories Outlook ATLAS</div>
-          <p style="font-size:11px;color:#9a3412;line-height:1.4;margin:0 0 8px;">
-            Crée dans Outlook les 20 catégories colorées (14 IA + 6 états) pour
-            que les tags soient visibles dans ta liste inbox. À faire 1 fois.
-            Si ça échoue : ton token Graph manque la permission MailboxSettings.ReadWrite.
-          </p>
-          <button class="btn btn-primary btn-sm" id="create-cats-btn">🏷️ Créer les catégories ATLAS</button>
-          <div id="cats-result" style="font-size:11px;color:#9a3412;margin-top:8px;line-height:1.4;font-family:monospace;"></div>
-        </div>
-
-        <div style="margin-top:24px;padding:12px;background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;">
-          <div style="font-weight:700;color:#047857;font-size:13px;margin-bottom:6px;">📚 Index sender → dossier</div>
-          <div id="index-stats" style="font-size:11px;color:#065f46;margin-bottom:8px;">${this.renderIndexStats()}</div>
-          <p style="font-size:11px;color:#047857;line-height:1.4;margin:0 0 8px;">
-            Scan complet de ta boîte mail pour apprendre où tu ranges chaque
-            expéditeur. À faire 1 fois au début (~30 sec à 2 min), puis
-            l'index s'enrichit automatiquement à chaque action.
-          </p>
-          <div style="display:flex;gap:6px;">
-            <button class="btn btn-primary btn-sm" id="scan-mailbox-btn" style="flex:1;">🔍 Scanner ma boîte</button>
-            <button class="btn btn-secondary btn-sm" id="clear-index-btn">Vider</button>
+      <div class="panel-scroll settings">
+        <section class="section" aria-labelledby="set-profil">
+          <h2 class="section-heading" id="set-profil">Ton profil</h2>
+          <div class="form-group">
+            <label class="form-label" for="setting-name">Nom affiché</label>
+            <input type="text" class="form-input" id="setting-name" value="${escapeHtml(userName)}" placeholder="Prénom Nom" autocomplete="name" />
           </div>
-          <div id="scan-progress" style="font-size:11px;color:#047857;margin-top:6px;display:none;"></div>
-        </div>
+          <div class="form-group">
+            <label class="form-label" for="setting-email">Adresse e-mail</label>
+            <input type="email" class="form-input" id="setting-email" value="${escapeHtml(userEmail)}" placeholder="prenom@vibes.lu" autocomplete="email" />
+          </div>
+          <p class="help">Projets, liaisons et ARGO passent par le serveur ATLAS avec ton compte Microsoft : aucune clé à saisir ici.</p>
 
-        <div style="margin-top:24px;">
-          <div class="section-heading">À propos</div>
-          <p style="font-size:11px;color:var(--atlas-text-secondary);">
-            ATLAS Outlook Add-in v1.0.0<br/>
-            GOOD VIBES events &amp; communications<br/>
-            <a href="https://vibes.lu" target="_blank" style="color:var(--atlas-primary);">vibes.lu</a>
-          </p>
-        </div>
+          <details class="disclosure">
+            <summary>${icon('chevron-right', 14)}Accès avancé à la boîte (Outlook Mac)</summary>
+            <div class="disclosure-body">
+              <label class="form-label" for="setting-graph">Jeton Microsoft Graph</label>
+              <textarea class="form-input mono" id="setting-graph" rows="3" placeholder="Coller le jeton ici">${escapeHtml(graphToken)}</textarea>
+              <p class="help">Outlook Mac ne laisse pas toujours ATLAS lire la liste de tes dossiers : sans ce jeton, l'apprentissage des dossiers ne marche pas sur ce poste.
+              Dans ATLAS desktop, ouvre la console (Cmd+Opt+I), tape <code>copy(localStorage.getItem('atlas_ms_access_token'))</code> puis colle ici.
+              Le jeton dure environ une heure et n'est gardé que pour cette session.</p>
+            </div>
+          </details>
 
-        <div style="margin-top:16px;">
-          <button class="btn btn-secondary btn-sm" id="clear-cache-btn">Vider le cache</button>
-        </div>
+          <button class="btn btn-primary btn-block" id="save-settings-btn">${icon('check', 14)}Enregistrer</button>
+        </section>
+
+        <section class="section" aria-labelledby="set-outils">
+          <h2 class="section-heading" id="set-outils">Outils de la boîte</h2>
+
+          <div class="tool-row">
+            <div class="tool-row-icon">${icon('tag', 18)}</div>
+            <div class="tool-row-body">
+              <p class="tool-row-title">Catégories ATLAS dans Outlook</p>
+              <p class="help">Crée les 20 catégories (14 thèmes ARGO et 6 états) pour voir les étiquettes dans ta liste de mails. À faire une fois.</p>
+              <button class="btn btn-secondary btn-sm" id="create-cats-btn">${icon('tag', 14)}Créer les catégories</button>
+              <div id="cats-result" class="tool-row-result" aria-live="polite"></div>
+            </div>
+          </div>
+
+          <div class="tool-row">
+            <div class="tool-row-icon">${icon('folder', 18)}</div>
+            <div class="tool-row-body">
+              <p class="tool-row-title">Où tu ranges chaque expéditeur</p>
+              <div id="index-stats" class="help">${this.renderIndexStats()}</div>
+              <p class="help">Parcourt ta boîte pour apprendre tes dossiers habituels (30 secondes à 2 minutes). L'index s'enrichit ensuite à chaque rangement.</p>
+              <div class="btn-row">
+                <button class="btn btn-secondary btn-sm" id="scan-mailbox-btn">${icon('search', 14)}Analyser ma boîte</button>
+                <button class="btn btn-ghost btn-sm" id="clear-index-btn">Vider l'index</button>
+              </div>
+              <div id="scan-progress" class="tool-row-result" aria-live="polite" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <details class="disclosure" id="diag-details">
+            <summary>${icon('activity', 14)}Diagnostic</summary>
+            <div class="disclosure-body">
+              <p class="help">À transmettre à Charles en cas de souci. Aucun contenu de mail n'y figure.</p>
+              <dl class="diag-list" id="diag-list"></dl>
+              <div class="btn-row">
+                <button class="btn btn-secondary btn-sm" id="diag-test">${icon('refresh', 14)}Tester la connexion</button>
+                <button class="btn btn-ghost btn-sm" id="diag-copy">${icon('copy', 14)}Copier</button>
+              </div>
+              <div id="diag-test-res" class="tool-row-result" aria-live="polite"></div>
+            </div>
+          </details>
+        </section>
+
+        <footer class="settings-about">
+          ATLAS pour Outlook · ${ADDIN_VERSION}<br/>
+          GOOD VIBES events &amp; communications · <a href="https://vibes.lu" target="_blank" rel="noopener">vibes.lu</a>
+        </footer>
       </div>
     `;
 
@@ -117,29 +122,24 @@ export class SettingsPanel {
       const btn = document.getElementById('create-cats-btn') as HTMLButtonElement;
       const out = document.getElementById('cats-result');
       btn.disabled = true;
-      btn.textContent = '⏳ Création en cours…';
-      if (out) out.innerHTML = '';
+      btn.innerHTML = inlineLoadingHtml('Création en cours…');
+      if (out) out.textContent = '';
       try {
         const r = await createAtlasCategoriesVerbose();
-        const lines: string[] = [];
-        lines.push(`✓ Créées : ${r.created}`);
-        lines.push(`= Déjà présentes : ${r.existed}`);
-        if (r.failed > 0) lines.push(`✗ Échecs : ${r.failed}`);
-        if (r.errors.length > 0) {
-          lines.push('');
-          lines.push('Erreurs (top 3) :');
-          for (const e of r.errors.slice(0, 3)) lines.push(`  • ${e}`);
-        }
-        if (out) out.innerText = lines.join('\n');
-        if (r.created > 0) showToast(`✓ ${r.created} catégories créées dans Outlook`, 'success');
-        else if (r.existed > 0 && r.failed === 0) showToast('Toutes les catégories existent déjà ✓', 'info');
-        else showToast(`Création échouée (${r.failed} fails) — voir détails`, 'error');
+        const parts = [`${r.created} créée${r.created > 1 ? 's' : ''}`, `${r.existed} déjà présente${r.existed > 1 ? 's' : ''}`];
+        if (r.failed > 0) parts.push(`${r.failed} en échec`);
+        if (out) out.textContent = parts.join(' · ');
+        if (r.created > 0) showToast(`${r.created} catégories créées dans Outlook`, 'success');
+        else if (r.existed > 0 && r.failed === 0) showToast('Toutes les catégories existent déjà', 'info');
+        else showToast('Outlook n\'a pas accepté la création des catégories : voir Diagnostic.', 'error');
+        if (r.errors.length) noteDiag({ at: Date.now(), service: 'outlook', label: 'catégories', status: 0, ms: 0, kind: 'requete', detail: r.errors.slice(0, 3).join(' | ') });
       } catch (e) {
-        if (out) out.innerText = `Erreur : ${(e as Error).message}`;
-        showToast(`Erreur : ${(e as Error).message?.slice(0, 80)}`, 'error');
+        if (out) out.textContent = humanError(e);
+        showToast(humanError(e), 'error');
       } finally {
         btn.disabled = false;
-        btn.textContent = '🔄 Re-créer les catégories ATLAS';
+        btn.innerHTML = `${icon('refresh', 14)}Recréer les catégories`;
+        this.renderDiag();
       }
     });
 
@@ -147,38 +147,99 @@ export class SettingsPanel {
       const btn = document.getElementById('scan-mailbox-btn') as HTMLButtonElement;
       const progDiv = document.getElementById('scan-progress');
       btn.disabled = true;
-      btn.textContent = '⏳ Scan en cours…';
-      if (progDiv) { progDiv.style.display = 'block'; progDiv.textContent = 'Initialisation…'; }
+      btn.innerHTML = inlineLoadingHtml('Analyse en cours…');
+      if (progDiv) { progDiv.hidden = false; progDiv.textContent = 'Préparation…'; }
       try {
         const r = await scanMailboxBuildIndex((p) => {
           if (progDiv) {
-            progDiv.textContent = `📁 ${p.foldersScanned}/${p.foldersTotal} dossiers · ${p.mailsIndexed} mails indexés · ${p.currentFolder.slice(0, 30)}`;
+            progDiv.textContent = `${p.foldersScanned} / ${p.foldersTotal} dossiers · ${p.mailsIndexed} mails · ${p.currentFolder.slice(0, 30)}`;
           }
         });
-        showToast(`✓ Scan terminé : ${r.foldersScanned} dossiers, ${r.mailsIndexed} mails indexés`, 'success');
-        // Refresh stats
+        showToast(`Analyse terminée : ${r.foldersScanned} dossiers, ${r.mailsIndexed} mails`, 'success');
         const stats = document.getElementById('index-stats');
         if (stats) stats.innerHTML = this.renderIndexStats();
+        if (progDiv) progDiv.hidden = true;
       } catch (e) {
-        showToast(`Erreur scan : ${(e as Error).message?.slice(0, 100)}`, 'error');
+        if (progDiv) progDiv.textContent = humanError(e);
+        showToast(humanError(e), 'error');
       } finally {
         btn.disabled = false;
-        btn.textContent = '🔍 Re-scanner';
+        btn.innerHTML = `${icon('refresh', 14)}Relancer l'analyse`;
       }
     });
 
     document.getElementById('clear-index-btn')?.addEventListener('click', () => {
-      if (confirm('Vider tout l\'index sender → dossier ?')) {
+      if (confirm('Vider tout l\'index des expéditeurs et de leurs dossiers ?')) {
         clearIndex();
         showToast('Index vidé', 'info');
         const stats = document.getElementById('index-stats');
         if (stats) stats.innerHTML = this.renderIndexStats();
       }
     });
-    document.getElementById('clear-cache-btn')?.addEventListener('click', () => {
-      // Le cache des données est en mémoire (rechargé à l'ouverture suivante du volet).
-      showToast('Cache vidé', 'info');
+
+    // Diagnostic : lu à l'ouverture du bloc (et après un test).
+    document.getElementById('diag-details')?.addEventListener('toggle', () => this.renderDiag());
+    document.getElementById('diag-copy')?.addEventListener('click', () => {
+      const text = JSON.stringify(getDiag(), null, 2);
+      const done = () => showToast('Diagnostic copié', 'success');
+      try {
+        navigator.clipboard.writeText(text).then(done, () => { this.copyFallback(text); done(); });
+      } catch { this.copyFallback(text); done(); }
     });
+    document.getElementById('diag-test')?.addEventListener('click', async () => {
+      const btn = document.getElementById('diag-test') as HTMLButtonElement;
+      const out = document.getElementById('diag-test-res');
+      btn.disabled = true;
+      if (out) out.innerHTML = inlineLoadingHtml('Test en cours…');
+      try {
+        resetWorkerToken();
+        await callAtlasWorker('templates/list', {});
+        if (out) out.innerHTML = `<span class="ok-text">${icon('check-circle', 14)}ATLAS répond, ton compte est reconnu.</span>`;
+      } catch (e) {
+        if (out) out.textContent = humanError(e);
+      } finally {
+        btn.disabled = false;
+        this.renderDiag();
+      }
+    });
+  }
+
+  /** Bloc Diagnostic : origine, URL du worker, jeton, dernière erreur, derniers appels. */
+  private renderDiag(): void {
+    const dl = document.getElementById('diag-list');
+    if (!dl) return;
+    const d = getDiag();
+    const fmt = (t: number) => (t ? new Date(t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '');
+    const tokenState = d.token.until > Date.now()
+      ? `valide jusqu'à ${fmt(d.token.until)} (${d.token.source === 'naa' ? 'connexion automatique' : 'SSO Office'})`
+      : d.token.lastError ? `échec à ${fmt(d.token.lastErrorAt)}` : 'pas encore demandé';
+    const rows: Array<[string, string]> = [
+      ['Origine', d.origin || '?'],
+      ['Serveur ATLAS', d.workerUrl],
+      ['Réseau', d.online ? 'en ligne' : 'hors ligne'],
+      ['Outlook', [d.host, d.platform, d.version].filter(Boolean).join(' · ') || '?'],
+      ['Connexion automatique', d.token.naaSupported === null ? '?' : d.token.naaSupported ? 'proposée' : 'non proposée'],
+      ['Jeton', tokenState],
+    ];
+    if (d.token.lastError) rows.push(['Détail jeton', d.token.lastError.slice(0, 220)]);
+    if (d.lastError) {
+      rows.push(['Dernière erreur', `${fmt(d.lastError.at)} · ${d.lastError.label} · ${d.lastError.status ? `HTTP ${d.lastError.status}` : 'sans réponse'} · ${d.lastError.kind}`]);
+      if (d.lastError.detail) rows.push(['Détail', d.lastError.detail.slice(0, 220)]);
+    } else rows.push(['Dernière erreur', 'aucune']);
+    const recents = d.recent.slice(0, 6).map(r => `${fmt(r.at)} ${r.label} ${r.status || 'sans réponse'} ${r.ms} ms`).join('\n');
+    if (recents) rows.push(['Derniers appels', recents]);
+    dl.innerHTML = rows.map(([k, v]) => `<dt>${escapeHtml(k)}</dt><dd>${escapeHtml(v)}</dd>`).join('');
+  }
+
+  private copyFallback(text: string): void {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch { /* sans presse-papiers */ }
+    ta.remove();
   }
 
   private saveSettings(): void {
@@ -187,7 +248,7 @@ export class SettingsPanel {
     const graph = (document.getElementById('setting-graph') as HTMLTextAreaElement).value.trim();
 
     if (!name || !email) {
-      showToast('Nom et email requis', 'error');
+      showToast('Indique ton nom et ton adresse e-mail.', 'error');
       return;
     }
 
@@ -199,21 +260,17 @@ export class SettingsPanel {
     ]).catch((e) => console.warn('[Settings] persistKey failed:', e));
     saveGraphToken(graph); // session seulement
 
-    showToast('Configuration enregistrée ✓', 'success');
+    showToast('Réglages enregistrés', 'success');
     this.onSave();
   }
 
   private renderIndexStats(): string {
     const s = indexStats();
     if (s.senders === 0 && s.domains === 0) {
-      return '<em>Index vide — lance un scan pour commencer.</em>';
+      return 'Index vide : lance une analyse pour commencer.';
     }
     const lastUpdate = s.lastUpdate ? new Date(s.lastUpdate).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : 'jamais';
-    return `<strong>${s.senders}</strong> expéditeurs · <strong>${s.domains}</strong> domaines · <strong>${s.totalMails}</strong> mails<br/>Dernière maj : ${lastUpdate}`;
-  }
-
-  private escapeAttr(str: string): string {
-    return escapeHtml(str);
+    return `<strong>${s.senders}</strong> expéditeurs · <strong>${s.domains}</strong> domaines · <strong>${s.totalMails}</strong> mails · mis à jour le ${escapeHtml(lastUpdate)}`;
   }
 
   destroy(): void {

@@ -9,6 +9,12 @@
 
 import type { Projet, Tier, Contact, MailMessageFull, EmailTemplate, ArgoProfile } from '../types';
 import { callAtlasWorker } from './worker';
+import { AtlasError } from './net';
+
+/** ATLAS injoignable (réseau, délai, session, serveur) : à montrer, pas à confondre avec « rien trouvé ». */
+function isUnreachable(e: unknown): boolean {
+  return e instanceof AtlasError && ['hors-ligne', 'reseau', 'delai', 'session', 'serveur', 'debit'].includes(e.kind);
+}
 
 // ── Cache ──
 
@@ -277,7 +283,7 @@ export async function getEmailTagByEmailId(emailId: string): Promise<EmailTag | 
   try {
     const r = await callAtlasWorker<{ tag?: EmailTag | null }>('tags/by-email', { emailId });
     return r.tag || null;
-  } catch { return null; }
+  } catch (e) { if (isUnreachable(e)) throw e; return null; }
 }
 
 /**
@@ -289,7 +295,7 @@ export async function getEmailTagByConversationId(conversationId: string): Promi
   try {
     const r = await callAtlasWorker<{ tag?: EmailTag | null }>('tags/by-conversation', { conversationId });
     return r.tag || null;
-  } catch { return null; }
+  } catch (e) { if (isUnreachable(e)) throw e; return null; }
 }
 
 async function setTagStatus(tagRecordId: string, status: 'done' | 'snoozed' | 'archived', until?: Date): Promise<boolean> {

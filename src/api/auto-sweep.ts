@@ -21,6 +21,7 @@
  */
 
 import { getApiContext, moveMessageToFolder } from './graph';
+import { outlookFetch } from './net';
 import { lookupSenderFolder, recordSenderFolder } from './sender-folder-index';
 
 const STORAGE_PREFIX = 'atlas.inbox.firstSeenRead.';
@@ -101,7 +102,7 @@ async function runSweep(forced: boolean): Promise<SweepResult> {
 
     // Récupère les 100 derniers mails de l'Inbox (lus + non lus)
     const url = `${base}/me/mailFolders/inbox/messages?$top=100&$select=id,isRead,from,toRecipients,ccRecipients,subject,receivedDateTime&$orderby=receivedDateTime desc`;
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await outlookFetch(url, { headers: { Authorization: `Bearer ${token}` } });
     if (!res.ok) {
       result.errors++;
       return result;

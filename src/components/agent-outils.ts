@@ -34,13 +34,15 @@ import type { ActionProposee, ActionFaite, CandidatChoix, SourceMail } from '../
 import { escapeHtml, dateCourte, openAgentMail } from './agent-lists';
 import { openExternal, ATLAS_BASE } from '../api/platform';
 import { WORKER_BASE } from '../api/worker';
+import { humanError } from '../api/net';
+import { icon } from '../ui/icons';
 
 export type InfoFn = (message: string, type?: 'success' | 'error' | 'info') => void;
 
 const MAX_CARTES = 3;
 
 function messageErreur(e: unknown): string {
-  return (e as Error)?.message || 'erreur inconnue';
+  return humanError(e);
 }
 
 function erreurHtml(quoi: string, e: unknown): string {
@@ -131,7 +133,7 @@ function faitesHtml(faites: ActionFaite[]): string {
     const etat = f.annuleLe
       ? ' <span class="agent-muted">· annulé</span>'
       : f.annulable && f.actionId ? ` <button type="button" class="agent-link" data-annuler-faite="${escapeHtml(f.actionId)}">Annuler</button>` : '';
-    return `<li>✓ ${escapeHtml(f.resume || f.type)}${f.at ? ` <span class="agent-muted">· ${escapeHtml(dateCourte(f.at))}</span>` : ''}${lien ? ` <a href="#" class="agent-faite-lien" data-href="${escapeHtml(lien)}">Voir</a>` : ''}${etat}</li>`;
+    return `<li>${icon('check', 12)} ${escapeHtml(f.resume || f.type)}${f.at ? ` <span class="agent-muted">· ${escapeHtml(dateCourte(f.at))}</span>` : ''}${lien ? ` <a href="#" class="agent-faite-lien" data-href="${escapeHtml(lien)}">Voir</a>` : ''}${etat}</li>`;
   }).join('')}</ul>`;
 }
 

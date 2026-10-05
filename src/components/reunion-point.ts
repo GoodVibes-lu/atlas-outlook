@@ -9,6 +9,7 @@
  */
 import { lireElementReunion, resoudreReunion, proposerPoint, retirerPoint, deleguerPoint, deposerAudio, chargerReunion, type ReunionVue, type ReunionPoint } from '../api/reunion';
 import { getAllEmployes } from '../api/airtable';
+import { humanError } from '../api/net';
 
 const STATUT: Record<string, string> = { proposee: 'En attente', acceptee: 'Accepté', refusee: 'Refusé', reportee: 'Reporté à la prochaine réunion' };
 const fmt = (iso: string) => new Date(iso).toLocaleString('fr-FR', { timeZone: 'Europe/Luxembourg', weekday: 'long', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -60,7 +61,7 @@ export class ReunionPointPanel {
       if (!v) { this.message('Cette réunion n\'est pas suivie par ATLAS : l\'ordre du jour collaboratif n\'est pas ouvert ici.'); return; }
       this.vue = v;
       this.dessiner();
-    } catch (e) { this.message(`ATLAS est injoignable pour le moment (${(e as Error).message}).`); }
+    } catch (e) { this.message(`ATLAS est injoignable pour le moment : ${humanError(e)}.`); }
   }
 
   private async recharger(): Promise<void> {
@@ -100,7 +101,7 @@ export class ReunionPointPanel {
       try {
         this.vue = await proposerPoint(v.key, { titre: titre.value, dureeMin: Number(duree.value), projetNo: projet.value.replace(/\D/g, ''), pieceNom: pieceNom.value, pieceUrl: pieceUrl.value.trim() });
         this.dessiner();
-      } catch (e) { err.textContent = (e as Error).message.replace(/^ATLAS \d+: /, ''); go.disabled = false; }
+      } catch (e) { err.textContent = humanError(e); go.disabled = false; }
     });
     f.append(champ('Titre', titre), champ('Durée (minutes)', duree), champ('Projet lié', projet), champ('Pièce à projeter', pieceNom), champ('Lien de la pièce', pieceUrl), go, err);
     return f;
@@ -124,7 +125,7 @@ export class ReunionPointPanel {
       bouton('Laisser une note', () => this.choixNote(p, zone));
       bouton('Laisser un audio', () => this.choixAudio(p, zone));
     }
-    if (p.statut === 'proposee' && v.ouverte) bouton('Retirer', async () => { try { await retirerPoint(p.id); await this.recharger(); } catch (e) { zone.textContent = (e as Error).message; } });
+    if (p.statut === 'proposee' && v.ouverte) bouton('Retirer', async () => { try { await retirerPoint(p.id); await this.recharger(); } catch (e) { zone.textContent = humanError(e); } });
     c.append(actions, zone);
     return c;
   }
@@ -140,7 +141,7 @@ export class ReunionPointPanel {
     }).catch(() => { msg.textContent = 'Liste des collègues indisponible.'; });
     sel.addEventListener('change', async () => {
       if (!sel.value) return;
-      try { await deleguerPoint(p.id, { mode: 'collegue', email: sel.value, nom: sel.selectedOptions[0]?.textContent || '' }); await this.recharger(); } catch (e) { msg.textContent = (e as Error).message.replace(/^ATLAS \d+: /, ''); }
+      try { await deleguerPoint(p.id, { mode: 'collegue', email: sel.value, nom: sel.selectedOptions[0]?.textContent || '' }); await this.recharger(); } catch (e) { msg.textContent = humanError(e); }
     });
   }
 
@@ -151,7 +152,7 @@ export class ReunionPointPanel {
     const msg = el('div', 'agent-muted');
     go.addEventListener('click', async () => {
       go.disabled = true;
-      try { await deleguerPoint(p.id, { mode: 'note', texte: ta.value }); await this.recharger(); } catch (e) { msg.textContent = (e as Error).message.replace(/^ATLAS \d+: /, ''); go.disabled = false; }
+      try { await deleguerPoint(p.id, { mode: 'note', texte: ta.value }); await this.recharger(); } catch (e) { msg.textContent = humanError(e); go.disabled = false; }
     });
     zone.append(ta, go, msg);
   }
@@ -175,7 +176,7 @@ export class ReunionPointPanel {
           const blob = new Blob(morceaux, { type: rec?.mimeType || 'audio/webm' });
           if (blob.size > 2_400_000) { msg.textContent = 'Audio trop long : 3 minutes au plus.'; go.textContent = 'Enregistrer'; return; }
           const b64: string = await new Promise(res => { const fr = new FileReader(); fr.onloadend = () => { const r = String(fr.result || ''); res(r.slice(r.indexOf(',') + 1)); }; fr.readAsDataURL(blob); });
-          try { msg.textContent = 'Envoi…'; await deposerAudio(p.id, b64, Math.max(1, Math.round((Date.now() - t0) / 1000))); await this.recharger(); } catch (e) { msg.textContent = (e as Error).message.replace(/^ATLAS \d+: /, ''); go.textContent = 'Enregistrer'; }
+          try { msg.textContent = 'Envoi…'; await deposerAudio(p.id, b64, Math.max(1, Math.round((Date.now() - t0) / 1000))); await this.recharger(); } catch (e) { msg.textContent = humanError(e); go.textContent = 'Enregistrer'; }
         };
         t0 = Date.now(); rec.start(); go.textContent = 'Arrêter et envoyer (0 s)';
         timer = window.setInterval(() => { const s = Math.round((Date.now() - t0) / 1000); go.textContent = `Arrêter et envoyer (${s} s)`; if (s >= 180) fin(); }, 500);
