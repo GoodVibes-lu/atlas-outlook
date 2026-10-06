@@ -171,3 +171,34 @@ export function prenomDe(email: string): string {
   const p = String(email || '').split('@')[0].split(/[._-]/)[0] || '';
   return p ? p.charAt(0).toUpperCase() + p.slice(1) : email;
 }
+
+// ── Sélection multiple (07/10/2026, parité « liaison en lot » de l'Inbox ATLAS) ──
+
+/** Coche / décoche un mail (ordre de sélection conservé). */
+export function basculerSelection(sel: readonly string[], cle: string): string[] {
+  return sel.includes(cle) ? sel.filter(c => c !== cle) : [...sel, cle];
+}
+
+/**
+ * Maj-clic : coche tous les mails entre l'ancre et `cle` (bornes comprises, dans l'ordre de la liste),
+ * en plus de la sélection existante. Ancre absente ou hors de la liste : seul `cle` est ajouté.
+ */
+export function selectionPlage(lignes: readonly string[], ancre: string | null, cle: string, sel: readonly string[]): string[] {
+  const j = lignes.indexOf(cle);
+  if (j < 0) return [...sel];
+  const i = ancre ? lignes.indexOf(ancre) : -1;
+  const plage = i < 0 ? [cle] : lignes.slice(Math.min(i, j), Math.max(i, j) + 1);
+  return [...sel, ...plage.filter(c => !sel.includes(c))];
+}
+
+/** Sélection après rechargement : seuls les mails encore présents restent cochés. */
+export function selectionValide(sel: readonly string[], presents: readonly string[]): string[] {
+  const p = new Set(presents);
+  return sel.filter(c => p.has(c));
+}
+
+/** Phrase de fin d'un lot (« 3 mails rattachés à X · 1 erreur »). */
+export function resumeLot(ok: number, erreurs: number, cible: string): string {
+  const base = `${ok} mail${ok > 1 ? 's' : ''} rattaché${ok > 1 ? 's' : ''} à ${cible}`;
+  return erreurs ? `${base} · ${erreurs} erreur${erreurs > 1 ? 's' : ''}` : base;
+}

@@ -14,6 +14,7 @@ import {
 } from '../api/agent';
 import { copierTexte, renderActionsMetier } from '../components/agent-outils';
 import { renderDossierProjet, renderOffreRecue, renderClasserOutlook } from '../components/agent-dossiers';
+import { renderPlusActions } from '../components/agent-parite';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
 import { filtrerCommandes, ilYA, prenomDe, quandLisible } from './logique';
@@ -48,6 +49,7 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
     <div class="tb-panel" id="tb-dossier-projet" hidden></div>
     ${envoye ? '' : `<div class="tb-panel" id="tb-offre"></div>`}
     <div class="tb-panel" id="tb-classer"></div>
+    <div class="tb-panel" id="tb-parite"></div>
     <div class="tb-panel" id="tb-composer" hidden></div>
     <div class="tb-panel" id="tb-equipe" hidden></div>`;
 
@@ -79,6 +81,21 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
   else if (offre) offre.hidden = true;
   const classer = host.querySelector<HTMLElement>('#tb-classer');
   if (classer) renderClasserOutlook(classer, { messageId: m.messageId, mailbox: m.mailbox, onInfo: toast });
+  // 07/10/2026 (fin de la parité Inbox ATLAS) : reclasser, pièces → projet, RDV (déposé en brouillon), tiers, prospection.
+  const parite = host.querySelector<HTMLElement>('#tb-parite');
+  if (parite) {
+    const [prenomExp, ...nomExp] = String(m.from?.name || '').trim().split(/\s+/);
+    renderPlusActions(parite, {
+      messageId: m.messageId, mailbox: m.mailbox, onInfo: toast,
+      deposer: async (texte: string) => {
+        const d = await deposerBrouillon(m.messageId, m.mailbox, texte);
+        if (!d.depose) { const ok = await copierTexte(texte); toast(ok ? 'Dépôt indisponible (double verrou) : texte copié' : 'Dépôt indisponible (double verrou)', 'info'); return; }
+        toast('Proposition de RDV déposée dans le brouillon de réponse', 'success');
+        if (d.webLink) ctx.openLink(d.webLink);
+      },
+      prefillTiers: { contactPrenom: prenomExp || '', contactNom: nomExp.join(' '), contactEmail: m.from?.email || '' },
+    });
+  }
   if (!perso) void equipe(host.querySelector('#tb-equipe')!, m, ctx);
 }
 

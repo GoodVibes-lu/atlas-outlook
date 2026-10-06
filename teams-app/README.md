@@ -63,8 +63,21 @@ Validation : schéma Microsoft 1.17 (`$schema` du manifeste), vérifié avec ajv
 |---|---|
 | Nouvel Outlook Windows | oui |
 | Outlook sur le web | oui |
-| Outlook Mac (nouvel Outlook) | à confirmer |
+| Outlook Mac (nouvel Outlook) | **non** (Microsoft : pas d'applications Teams dans la barre de gauche sur Mac) → grande fenêtre du complément, ci-dessous |
 | Outlook classique Windows | a priori non → bandeau « Ma journée » du panneau |
 | Outlook iPhone / Android | non → bandeau « Ma journée » du panneau |
 
 La liste de contrôle complète est dans `docs/agent-inbox-essai-complement.md` (sections 3 et 5).
+
+## Outlook Mac : le tableau de bord en grande fenêtre (07/10/2026)
+
+Le nouvel Outlook pour Mac n'affiche pas les applications Teams / Microsoft 365 dans la barre de gauche. Sur Mac (et partout ailleurs aussi), le **complément** ouvre la même page dans une grande fenêtre Office (`displayDialogAsync`, 95 % × 90 % de l'écran) :
+
+- **Ruban** : menu **ATLAS** d'un mail › **Tableau de bord** (commande `atlasTableauCommand`, manifeste du complément 1.4.0) ;
+- **Panneau ATLAS** : bouton **Tableau de bord** en tête.
+
+Même page (`tableau-de-bord.html?hote=office`), même design, mêmes raccourcis, même mise à jour en temps réel. Différences propres à la fenêtre (`../src/api/dialogue-tableau.ts`) :
+
+- **Connexion** : le jeton est fourni par la page qui a ouvert la fenêtre (panneau ou commande du ruban, sa connexion habituelle), par `messageParent` / `messageChild` (DialogApi 1.2). Si elle ne répond pas, la fenêtre se connecte elle-même par **redirection** Microsoft : il faut alors que `https://goodvibes-lu.github.io/atlas-outlook/tableau-de-bord.html` soit déclarée comme URI de redirection **SPA** de l'application Entra « ATLAS Outlook (complément) ».
+- **Ouvrir un mail** : la fenêtre demande à la page parente de l'ouvrir dans Outlook (`displayMessageForm`) ; sinon le lien Outlook sur le web.
+- **Durée de vie** : la fenêtre vit tant que sa page parente vit. Ouverte depuis le panneau, elle se ferme si le panneau se ferme ou se recharge (changer de mail sans panneau épinglé) ; ouverte depuis le ruban, elle reste ouverte (la commande se termine à sa fermeture).

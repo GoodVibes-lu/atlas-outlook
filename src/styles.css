@@ -168,6 +168,13 @@ strong { font-weight: 650; }
   color: var(--text-3); padding-left: 10px; border-left: 1px solid var(--border);
 }
 .header > .icon-btn { margin-left: auto; }
+/* Bouton « Tableau de bord » (grande fenêtre, 07/10/2026) : pousse les réglages à droite. */
+.header-tdb {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 10px; border: 1px solid var(--border-mid); border-radius: var(--r-ctl);
+  background: var(--surface-high); color: var(--text); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.header-tdb + .icon-btn { margin-left: 0; }
 .header-logo { font-weight: 800; letter-spacing: 0.18em; }
 .header-subtitle { margin-left: auto; font-size: 11px; color: var(--text-3); }
 
@@ -349,6 +356,7 @@ select.form-input, .dropdown-select, .agent-select, .equipe-select {
 
 @media (hover: hover) {
   .icon-btn:hover { background: var(--surface-high); color: var(--text); }
+  .header-tdb:hover { border-color: var(--text-3); }
   .nav-tab:hover { color: var(--text); background: var(--surface-high); }
   .btn-primary:hover:not(:disabled) { filter: brightness(0.95); }
   .btn-secondary:hover:not(:disabled) { background: var(--surface-high); border-color: var(--text-3); }
@@ -754,6 +762,7 @@ body.is-mobile .action-grid { grid-template-columns: 1fr; }
   .nav-tab { font-size: 10px; min-height: 48px; }
   .nav-tab .ico { width: 16px; height: 16px; }
   .header-context { display: none; }
+  .header-tdb span { display: none; }
   .action-grid { grid-template-columns: 1fr; }
 }
 

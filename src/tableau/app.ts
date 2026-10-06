@@ -6,6 +6,8 @@
  *  - boîte triée, toutes les boîtes permises (personnes et clients d'abord, notifications,
  *    newsletters en digest, factures), priorités ARGO expliquées, en attente, mis de côté ;
  *  - clavier d'abord : j/k, Entrée (ouvrir dans Outlook), r (réponse ARGO), t (modèle), e / s
+ *    (07/10/2026 : x coche le mail, Maj-clic une plage, cases à cocher : rattacher le LOT à un projet
+ *    ou à un contact, comme la liaison en lot de l'Inbox ATLAS),
  *    (mettre de côté), p (je prends), l (rattacher à un projet), c (commentaire), 1 à 8 (sections),
  *    ⌘K / Ctrl+K ou / (palette), ? (aide), Échap ;
  *  - glisser-déposer d'un mail vers « Je prends », une date ou un projet ; aperçu au survol ;
@@ -18,11 +20,11 @@
 import { fetchTableau, fetchVersion, type Tableau, type TableauMail, type DigestNewsletter } from '../api/tableau';
 import { mettrePlusTard, retirerPlusTard, prendreMail, relacherMail } from '../api/agent';
 import { callAtlasWorker } from '../api/worker';
-import { getAllProjets } from '../api/airtable';
+import { getAllProjets, getAllContacts } from '../api/airtable';
 import { openAgentMail } from '../components/agent-lists';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
-import { deplacer, ilYA, initiales, nouveautes, quandLisible, presetsMoments, prenomDe } from './logique';
+import { deplacer, ilYA, initiales, nouveautes, quandLisible, presetsMoments, prenomDe, basculerSelection, selectionPlage, selectionValide, resumeLot } from './logique';
 import { h, toast, animerChiffre, choisirMoment, ouvrirCouche, mouvementReduit } from './ui';
 import { renderDetail, renderDigest } from './detail';
 import { renderAujourdhui } from './aujourdhui';
@@ -51,6 +53,9 @@ export interface Etat {
   vus: string[];
   derniereSync: number;
   enLigne: boolean;
+  /** Mails cochés pour une action en lot (clés `${mailbox}|${messageId}`) et ancre du Maj-clic. */
+  lot: string[];
+  ancre: string | null;
 }
 
 export interface Ctx {
@@ -119,6 +124,28 @@ function creerActions(ctx: () => Ctx) {
         await c().rafraichir(true);
       } catch (e) { toast(humanError(e), 'error'); }
     },
+    /**
+     * Liaison EN LOT (parité handleBulkLinkToProject / handleBulkLinkToContact de l'Inbox ATLAS) : même
+     * route que le rattachement d'un mail (relecture Graph, sans doublon), un mail après l'autre avec la
+     * progression ; un échec n'arrête pas le lot. Renvoie true si au moins un mail a été rattaché.
+     */
+    async lierLot(mails: TableauMail[], quoi: 'projet' | 'contact', progres: (texte: string) => void): Promise<boolean> {
+      const cible = quoi === 'projet' ? await choisirProjetLibelle() : await choisirContact();
+      if (!cible) return false;
+      let ok = 0, ko = 0;
+      for (let i = 0; i < mails.length; i++) {
+        const m = mails[i];
+        progres(`${i + 1}/${mails.length}…`);
+        try {
+          const email = { id: m.graphId, internetMessageId: m.messageId, subject: m.subject, from: m.from, receivedAt: m.receivedAt };
+          if (quoi === 'projet') await callAtlasWorker('emails/link-projet', { email, projetId: cible.id, linkedByName: prenomDe(c().etat.t?.moi || ''), direction: 'reçu' });
+          else await callAtlasWorker('emails/link-contact', { email, contactName: cible.id, tiersName: cible.tiers || undefined, linkedByName: prenomDe(c().etat.t?.moi || ''), direction: 'reçu' });
+          ok++;
+        } catch { ko++; }
+      }
+      toast(resumeLot(ok, ko, cible.libelle), ko ? (ok ? 'info' : 'error') : 'success');
+      return ok > 0;
+    },
     /** Rattache le mail à un projet ; renvoie le projet (null si rien n'est fait) pour proposer son dossier Outlook. */
     async lierProjet(m: TableauMail): Promise<string | null> {
       if (m.famille === 'mandats') { toast('Mandat / association : ni projet ni client', 'info'); return null; }
@@ -170,12 +197,54 @@ async function choisirProjet(): Promise<string | null> {
   });
 }
 
+/** Projet choisi avec son libellé (liaison en lot). */
+async function choisirProjetLibelle(): Promise<{ id: string; libelle: string; tiers?: string } | null> {
+  const id = await choisirProjet();
+  if (!id) return null;
+  const p = (await getAllProjets().catch(() => [])).find(x => x.id === id);
+  return { id, libelle: p ? `#${p.noProjet || p.refProjet} ${p.denomination}` : 'ce projet' };
+}
+
+/** Contact choisi (liste ATLAS, recherche) : `id` = nom de la fiche (« Personne de contact »), comme la liaison de l'Inbox. */
+async function choisirContact(): Promise<{ id: string; libelle: string; tiers?: string } | null> {
+  let contacts: Awaited<ReturnType<typeof getAllContacts>> = [];
+  try { contacts = (await getAllContacts()).filter(x => x.personneDeContact); } catch (e) { toast(humanError(e), 'error'); return null; }
+  return new Promise(resolve => {
+    let choisi: { id: string; libelle: string; tiers?: string } | null = null;
+    const el = document.createElement('div');
+    el.className = 'tb-palette';
+    el.innerHTML = `<input type="text" placeholder="Rattacher à un contact : nom, société, e-mail…" aria-label="Contact"><ul role="listbox"></ul>`;
+    const input = el.querySelector('input')!, ul = el.querySelector('ul')!;
+    let idx = 0, vis = contacts.slice(0, 12);
+    const tiersDe = (x: typeof contacts[number]) => Array.isArray(x.relationSociete) ? String(x.relationSociete[0] || '') : String(x.relationSociete || '');
+    const dessiner = () => {
+      const q = input.value.trim().toLowerCase();
+      vis = (q ? contacts.filter(x => `${x.personneDeContact} ${tiersDe(x)} ${x.email}`.toLowerCase().includes(q)) : contacts).slice(0, 12);
+      idx = Math.min(idx, Math.max(0, vis.length - 1));
+      ul.innerHTML = vis.length
+        ? vis.map((x, i) => `<li role="option" data-i="${i}" aria-selected="${i === idx}">${icon('user', 14)}<span>${h(x.personneDeContact)}</span><small>${h(tiersDe(x) || x.email || '')}</small></li>`).join('')
+        : '<li class="tb-grp">Aucun contact ne correspond</li>';
+    };
+    const fermer = ouvrirCouche(el, () => resolve(choisi));
+    const valider = (i: number) => { const x = vis[i]; if (!x) return; choisi = { id: x.personneDeContact, libelle: x.personneDeContact, tiers: tiersDe(x) || undefined }; fermer(); };
+    input.addEventListener('input', () => { idx = 0; dessiner(); });
+    input.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); idx = Math.min(vis.length - 1, idx + 1); dessiner(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); idx = Math.max(0, idx - 1); dessiner(); }
+      else if (e.key === 'Enter') { e.preventDefault(); valider(idx); }
+    });
+    ul.addEventListener('click', e => { const li = (e.target as HTMLElement).closest<HTMLElement>('[data-i]'); if (li) valider(Number(li.dataset.i)); });
+    dessiner();
+    input.focus();
+  });
+}
+
 // ── Application ────────────────────────────────────────────────────────────────────
 
 export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: string) => void }): void {
   let boiteMemo = 'toutes';
   try { boiteMemo = localStorage.getItem('atlas.tdb.boite') || 'toutes'; } catch { /* stockage indisponible */ }
-  const etat: Etat = { boite: boiteMemo, section: 'priorites', t: null, sel: null, vus: [], derniereSync: 0, enLigne: true };
+  const etat: Etat = { boite: boiteMemo, section: 'priorites', t: null, sel: null, vus: [], derniereSync: 0, enLigne: true, lot: [], ancre: null };
   let ctx: Ctx;
   const actions = creerActions(() => ctx);
   ctx = { etat, openLink: opts.openLink, rafraichir, choisir, actions };
@@ -197,6 +266,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
         <aside class="tb-col is-left tb-scroll" id="tb-left"></aside>
         <section class="tb-list-wrap tb-scroll" id="tb-center" aria-label="Mails">
           <div class="tb-list-head"><h2 id="tb-titre"></h2><p id="tb-sous"></p></div>
+          <div class="tb-lot" id="tb-lot" role="toolbar" aria-label="Mails cochés" hidden></div>
           <div class="tb-list" id="tb-list" role="listbox" aria-label="Mails"></div>
         </section>
         <aside class="tb-col is-right tb-scroll" id="tb-right"></aside>
@@ -276,6 +346,47 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     list.innerHTML = lignes.length ? lignes.map(m => ligneHtml(m, nouv.includes(cleDe(m)))).join('') : videHtml(sec.vide);
     list.querySelectorAll<HTMLElement>('.tb-row').forEach(el => brancherLigne(el));
     marquerSelection();
+    renderLot();
+  }
+
+  // ── Lot (mails cochés) ──
+  function mailsDuLot(): TableauMail[] { return etat.lot.map(k => trouver(k)).filter((m): m is TableauMail => !!m); }
+  function cocher(cle: string, plage = false): void {
+    const lignes = lignesDe(etat.t, etat.section).map(cleDe);
+    etat.lot = plage ? selectionPlage(lignes, etat.ancre, cle, etat.lot) : basculerSelection(etat.lot, cle);
+    etat.ancre = cle;
+    $('tb-list').querySelectorAll<HTMLElement>('.tb-row').forEach(el => {
+      const on = etat.lot.includes(el.dataset.cle || '');
+      el.classList.toggle('is-coche', on);
+      const cb = el.querySelector<HTMLInputElement>('[data-cocher]');
+      if (cb) cb.checked = on;
+    });
+    renderLot();
+  }
+  function viderLot(): void { etat.lot = []; etat.ancre = null; renderListe(); }
+  function renderLot(): void {
+    const bar = $('tb-lot');
+    const n = etat.lot.length;
+    bar.hidden = !n;
+    if (!n) { bar.innerHTML = ''; return; }
+    bar.innerHTML = `<strong>${n} mail${n > 1 ? 's' : ''} coché${n > 1 ? 's' : ''}</strong>
+      <button type="button" class="tb-btn is-primary" data-lot="projet">${icon('folder', 14)}Rattacher à un projet</button>
+      <button type="button" class="tb-btn" data-lot="contact">${icon('user', 14)}Rattacher à un contact</button>
+      <button type="button" class="tb-btn is-ghost" data-lot="vider">Tout décocher</button>
+      <span class="tb-note" data-lot-progres aria-live="polite"></span>`;
+    bar.querySelectorAll<HTMLButtonElement>('[data-lot]').forEach(b => b.addEventListener('click', () => void agirLot(b.dataset.lot as 'projet' | 'contact' | 'vider')));
+  }
+  async function agirLot(quoi: 'projet' | 'contact' | 'vider'): Promise<void> {
+    if (quoi === 'vider') { viderLot(); return; }
+    const bar = $('tb-lot');
+    const progres = bar.querySelector<HTMLElement>('[data-lot-progres]');
+    const mails = mailsDuLot().filter(m => m.famille !== 'mandats');
+    if (!mails.length) { toast('Mandats et associations : ni projet ni contact', 'info'); return; }
+    bar.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = true; });
+    try {
+      const fait = await actions.lierLot(mails, quoi, t => { if (progres) progres.textContent = t; });
+      if (fait) { etat.lot = []; etat.ancre = null; await rafraichir(true); }
+    } finally { renderLot(); }
   }
 
   const videHtml = (texte: string) => `<div class="tb-empty"><span class="tb-empty-mark">${icon('check', 20)}</span><strong>C'est vide, et c'est bien</strong><span>${h(texte)}</span><span class="tb-note">Appuie sur <span class="tb-kbd">⌘K</span> pour poser une question à ta boîte ou rattraper ce que tu as manqué.</span></div>`;
@@ -291,7 +402,9 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     if (m.relanceLe) chips.push(`<span class="tb-chip">Relance ${h(m.relanceLe.slice(8, 10))}/${h(m.relanceLe.slice(5, 7))}</span>`);
     if (m.urgence >= 3) chips.push('<span class="tb-chip is-hot">Urgent</span>');
     const boite = etat.boite === 'toutes' && (etat.t?.boites.length || 0) > 1 && m.mailbox && m.mailbox !== etat.t?.moi ? ` · ${h(m.mailbox.split('@')[0])}@` : '';
-    return `<div class="tb-row${nouveau ? ' is-new' : ''}" role="option" tabindex="-1" draggable="true" data-cle="${h(cle)}" aria-selected="false">
+    const coche = etat.lot.includes(cle);
+    return `<div class="tb-row${nouveau ? ' is-new' : ''}${coche ? ' is-coche' : ''}" role="option" tabindex="-1" draggable="true" data-cle="${h(cle)}" aria-selected="false">
+      <input type="checkbox" class="tb-sel" data-cocher ${coche ? 'checked' : ''} aria-label="Cocher ce mail (x)" title="Cocher (x, Maj-clic pour une plage)">
       ${m.urgence >= 2 ? `<span class="tb-prio p${Math.min(3, m.urgence)}"></span>` : ''}
       <span class="tb-av${m.correspondant === 'client' ? ' is-client' : ''}" aria-hidden="true">${h(initiales(m.from?.name || '', m.from?.email || ''))}</span>
       <span class="tb-row-main">
@@ -350,7 +463,16 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   // ── Glisser-déposer, aperçu au survol ──
   let glisse: TableauMail | null = null;
   function brancherLigne(el: HTMLElement): void {
-    el.addEventListener('click', () => choisir(el.dataset.cle!));
+    el.querySelector<HTMLInputElement>('[data-cocher]')?.addEventListener('click', e => {
+      e.stopPropagation();
+      cocher(el.dataset.cle!, (e as MouseEvent).shiftKey);
+    });
+    el.addEventListener('click', e => {
+      // Maj-clic : plage ; ⌘ / Ctrl-clic : coche ce mail (sans changer le mail affiché).
+      if (e.shiftKey) { e.preventDefault(); cocher(el.dataset.cle!, true); return; }
+      if (e.metaKey || e.ctrlKey) { e.preventDefault(); cocher(el.dataset.cle!); return; }
+      choisir(el.dataset.cle!);
+    });
     el.addEventListener('dblclick', () => { const m = trouver(el.dataset.cle!); if (m) actions.ouvrir(m); });
     el.addEventListener('dragstart', e => {
       glisse = trouver(el.dataset.cle!);
@@ -432,7 +554,10 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     if (k === 'j' || k === 'ArrowDown') { e.preventDefault(); const n = deplacer(i, 1, lignes.length); if (n >= 0) choisir(lignes[n]); }
     else if (k === 'k' || k === 'ArrowUp') { e.preventDefault(); const n = deplacer(i, -1, lignes.length); if (n >= 0) choisir(lignes[n]); }
     else if (k === 'Enter' && m) { e.preventDefault(); actions.ouvrir(m); }
-    else if (k === 'Escape') { if (etat.sel) { e.preventDefault(); choisir(null); } }
+    else if (k === 'Escape') { if (etat.lot.length) { e.preventDefault(); viderLot(); } else if (etat.sel) { e.preventDefault(); choisir(null); } }
+    else if (k === 'x' && etat.sel && !etat.sel.startsWith('nl|')) { e.preventDefault(); cocher(etat.sel); }
+    else if (k === 'X' && etat.sel && !etat.sel.startsWith('nl|')) { e.preventDefault(); cocher(etat.sel, true); }
+    else if (k === 'l' && etat.lot.length) { e.preventDefault(); void agirLot('projet'); }
     else if (k === '/' ) { e.preventDefault(); palette(); }
     else if (k === '?') { e.preventDefault(); aide(); }
     else if (/^[1-9]$/.test(k) && sectionsVisibles(etat.t)[Number(k) - 1]) { e.preventDefault(); allerSection(sectionsVisibles(etat.t)[Number(k) - 1].id); }
@@ -492,7 +617,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     const lignes: Array<[string, string]> = [
       ['j / k', 'Mail suivant / précédent'], ['Entrée', 'Ouvrir dans Outlook'], ['r', 'Répondre avec ARGO'], ['t', 'Répondre avec un modèle'],
       ['e', 'De côté jusqu\'à demain 8 h'], ['s', 'De côté jusqu\'à…'], ['p', 'Je prends (boîte partagée)'], ['l', 'Rattacher à un projet'],
-      ['c', 'Commentaire interne'], ['1 à 9', 'Sections'], ['⌘K ou /', 'Palette : chercher, agir'], ['g', 'Actualiser'], ['Échap', 'Fermer, revenir à Aujourd\'hui'],
+      ['c', 'Commentaire interne'], ['x', 'Cocher le mail (Maj-x / Maj-clic : plage)'], ['l (mails cochés)', 'Rattacher le lot à un projet'], ['1 à 9', 'Sections'], ['⌘K ou /', 'Palette : chercher, agir'], ['g', 'Actualiser'], ['Échap', 'Fermer, revenir à Aujourd\'hui'],
     ];
     el.innerHTML = `<h3>Raccourcis clavier</h3><div class="tb-help">${lignes.map(([k, v]) => `<span class="tb-kbd">${h(k)}</span><span>${h(v)}</span>`).join('')}</div><p class="tb-note">Glisser un mail : « Je prends », une date ou un projet.</p>`;
     ouvrirCouche(el);
@@ -524,6 +649,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       const nouv = avant.length ? nouveautes(avant, tous) : [];
       etat.t = t;
       etat.vus = tous;
+      etat.lot = selectionValide(etat.lot, tous);
       if (etat.boite !== 'toutes' && !t.boites.includes(etat.boite)) etat.boite = 'toutes';
       etat.derniereSync = Date.now();
       etat.enLigne = true;

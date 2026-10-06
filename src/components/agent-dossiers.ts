@@ -20,6 +20,7 @@ import {
   annulerAction, estVerrouFerme, type DossierOutlook, type OffreFournisseurContexte,
 } from '../api/agent';
 import { getAllProjets } from '../api/airtable';
+import { renderImportDossier, renderContactDevis } from './agent-parite';
 import { ensureFolderPath, moveMessageToFolder } from '../api/graph';
 import { escapeHtml } from '../utils/html';
 import { humanError } from '../api/net';
@@ -41,14 +42,14 @@ const erreur = (quoi: string, e: unknown) => `<p class="agent-error" role="alert
  * Range le mail (dossier existant ou chemin à créer) : worker d'abord ; verrou fermé → repli avec le
  * jeton de la personne si permis. Renvoie le chemin final et l'action à annuler (worker seulement).
  */
-export async function rangerMail(ctx: CtxDossiers, cible: { dossier?: DossierOutlook; creer?: { chemin: string; projetId?: string; mandatId?: string }; projetId?: string }): Promise<{ chemin: string; cree: boolean; actionId?: string; parOutlook?: boolean }> {
+export async function rangerMail(ctx: CtxDossiers, cible: { dossier?: DossierOutlook; creer?: { chemin: string; projetId?: string; mandatId?: string }; projetId?: string }): Promise<{ chemin: string; cree: boolean; actionId?: string; parOutlook?: boolean; dossierId?: string }> {
   try {
     const r = await rangerDansDossier({
       messageId: ctx.messageId, ...(ctx.mailbox ? { mailbox: ctx.mailbox } : {}),
       ...(cible.dossier ? { dossierId: cible.dossier.id } : {}), ...(cible.creer ? { creer: cible.creer } : {}),
       ...(cible.projetId ? { projetId: cible.projetId } : {}),
     });
-    return { chemin: r.dossier.chemin, cree: r.cree, ...(r.actionId ? { actionId: r.actionId } : {}) };
+    return { chemin: r.dossier.chemin, cree: r.cree, ...(r.dossier.id ? { dossierId: r.dossier.id } : {}), ...(r.actionId ? { actionId: r.actionId } : {}) };
   } catch (e) {
     if (!estVerrouFerme(e) || !ctx.delegue) throw e;
     const d = await ctx.delegue();
@@ -56,7 +57,7 @@ export async function rangerMail(ctx: CtxDossiers, cible: { dossier?: DossierOut
     const chemin = cible.creer?.chemin || cible.dossier?.chemin || '';
     const id = cible.creer ? await ensureFolderPath(d.token, cible.creer.chemin) : cible.dossier!.id;
     await moveMessageToFolder(d.token, d.restId, id);
-    return { chemin, cree: !!cible.creer, parOutlook: true };
+    return { chemin, cree: !!cible.creer, parOutlook: true, dossierId: id };
   }
 }
 
@@ -95,6 +96,7 @@ export async function renderDossierProjet(host: HTMLElement, ctx: CtxDossiers & 
     ? `<div class="agent-carte"><div class="agent-carte-titre">${icon('folder', 14)} Dossier du projet${ctx.libelle ? ` ${escapeHtml(ctx.libelle)}` : ''}</div>
         <div class="agent-carte-apercu">« ${escapeHtml(existant.chemin)} »</div>
         <button type="button" class="btn btn-primary btn-block agent-btn" data-ranger>Ranger ce mail dans ce dossier</button>
+        <div data-import hidden></div>
         <div data-res hidden></div></div>`
     : `<div class="agent-carte"><div class="agent-carte-titre">${icon('folder', 14)} Aucun dossier Outlook pour ce ${ctx.mandatId ? 'mandat' : 'projet'}</div>
         <label class="agent-muted" for="dp-chemin">Dossier à créer (même place et même nom que dans ATLAS)</label>
@@ -102,15 +104,20 @@ export async function renderDossierProjet(host: HTMLElement, ctx: CtxDossiers & 
         <button type="button" class="btn btn-primary btn-block agent-btn" data-creer>Créer le dossier et ranger</button>
         <div data-res hidden></div></div>`;
   const res = host.querySelector<HTMLElement>('[data-res]')!;
+  // 07/10/2026 (parité FileEmailModal › handleBulkImport) : mails déjà dans le dossier du projet → importés dans le projet.
+  const zoneImport = host.querySelector<HTMLElement>('[data-import]');
+  if (existant && zoneImport && ctx.projetId) renderImportDossier(zoneImport, { ...ctx, projetId: ctx.projetId, dossier: existant });
   const go = async (btn: HTMLButtonElement, cible: Parameters<typeof rangerMail>[1]) => {
     btn.disabled = true;
     const lib = btn.textContent || '';
     btn.textContent = 'En cours…';
     try {
       const r = await rangerMail(ctx, cible);
-      host.innerHTML = faitHtml(r);
+      host.innerHTML = `${faitHtml(r)}<div data-import hidden></div>`;
       brancherAnnuler(host, r.actionId, ctx.onInfo);
       ctx.onInfo?.(`Rangé dans ${r.chemin}`, 'success');
+      const zi = host.querySelector<HTMLElement>('[data-import]');
+      if (zi && ctx.projetId && r.dossierId) renderImportDossier(zi, { ...ctx, projetId: ctx.projetId, dossier: { id: r.dossierId, chemin: r.chemin } });
     } catch (e) {
       btn.disabled = false; btn.textContent = lib;
       res.hidden = false;
@@ -234,11 +241,8 @@ export function renderOffreRecue(host: HTMLElement, ctx: CtxDossiers & { repondr
         <select class="agent-select" id="of-devis" ${c.demandes.length ? '' : 'disabled'}>
           ${c.demandes.length ? `<option value="">Choisir la demande…</option>${c.demandes.map(d => opt(d.id, `${d.libelle}${d.statut ? ` (${d.statut})` : ''}`, d.id === c!.devisId)).join('')}` : `<option value="">${c.projetId ? 'Aucune demande de devis sur ce projet' : 'Choisir d\'abord le projet'}</option>`}
         </select>
-        <label class="agent-muted" for="of-pj">Pièce jointe (offre)</label>
-        <select class="agent-select" id="of-pj">
-          <option value="">Aucune (offre dans le texte du mail)</option>
-          ${c.pieces.map(p => opt(p.id, `${p.nom}${p.devis ? ' (devis)' : ''}`, p.id === c!.pieceJointeId)).join('')}
-        </select>
+        <div class="agent-muted">Pièces jointes de l'offre (aucune cochée : offre dans le texte du mail)</div>
+        ${c.pieces.length ? c.pieces.map((p, i) => `<label class="agent-check"><input type="checkbox" data-of-pj="${i}" ${p.id === c!.pieceJointeId ? 'checked' : ''}/> ${escapeHtml(p.nom)}${p.devis ? ' <span class="agent-muted">(devis)</span>' : ''}</label>`).join('') : '<div class="agent-muted">Aucune pièce jointe.</div>'}
         <button type="button" class="btn btn-primary btn-block agent-btn" data-deposer>Déposer l'offre</button>
         <div data-res hidden></div>
       </div>`;
@@ -274,17 +278,23 @@ export function renderOffreRecue(host: HTMLElement, ctx: CtxDossiers & { repondr
   const deposer = async (btn: HTMLButtonElement) => {
     const res = zone.querySelector<HTMLElement>('[data-res]')!;
     const devisId = zone.querySelector<HTMLSelectElement>('#of-devis')?.value || '';
-    const pieceJointeId = zone.querySelector<HTMLSelectElement>('#of-pj')?.value || '';
+    // 07/10/2026 : plusieurs pièces jointes, chacune ajoutée à l'offre (comme l'Inbox ATLAS).
+    const ids = [...zone.querySelectorAll<HTMLInputElement>('[data-of-pj]')].filter(x => x.checked).map(x => c?.pieces[Number(x.dataset.ofPj)]?.id).filter(Boolean) as string[];
     if (!devisId) { res.hidden = false; res.innerHTML = '<p class="agent-error" role="alert">Choisis d\'abord la demande de devis.</p>'; return; }
     btn.disabled = true;
     btn.textContent = 'Dépôt…';
     try {
-      const r = await executerAction({ messageId: ctx.messageId, mailbox: ctx.mailbox || undefined, type: 'devis-fournisseur', choix: { devisId, ...(pieceJointeId ? { pieceJointeId } : {}) } });
+      const choixPj = ids.length > 1 ? { pieceJointeIds: ids.join(',') } : ids.length ? { pieceJointeId: ids[0] } : {};
+      const r = await executerAction({ messageId: ctx.messageId, mailbox: ctx.mailbox || undefined, type: 'devis-fournisseur', choix: { devisId, ...choixPj } });
       if (!r.ok) throw new Error(r.resume || 'Dépôt impossible');
       zone.innerHTML = `<div class="agent-carte is-fait"><div class="agent-fait" role="status"><span>${r.simule ? 'Simulé (agent en observation)' : 'Fait'} : ${escapeHtml(r.resume)}</span></div>
+        <div data-contact hidden></div>
         ${r.simule ? '' : `<button type="button" class="btn btn-secondary btn-block agent-btn" data-merci>${icon('bolt', 14)}Préparer le remerciement (ARGO)</button>`}
         <div data-res hidden></div></div>`;
       ctx.onInfo?.('Offre déposée', 'success');
+      // 07/10/2026 (parité handleRelinkContact) : le répondant n'est pas le contact de la demande ? à trancher avant le remerciement.
+      const zc = zone.querySelector<HTMLElement>('[data-contact]');
+      if (zc && !r.simule) void renderContactDevis(zc, { ...ctx, devisId });
       zone.querySelector<HTMLButtonElement>('[data-merci]')?.addEventListener('click', async ev => {
         const b = ev.currentTarget as HTMLButtonElement;
         const out = zone.querySelector<HTMLElement>('[data-res]')!;

@@ -194,6 +194,80 @@ async function getSsoToken(errors: string[]): Promise<string> {
   }
 }
 
+// Voie 0 (07/10/2026) : tableau de bord ouvert dans une FENÊTRE de dialogue Office (Outlook Mac,
+// qui n'affiche pas les applications de la barre de gauche). Ni la connexion automatique ni le SSO
+// Office n'existent dans un dialogue : le jeton est fourni par la page qui l'a ouvert (panneau ou
+// commande du ruban, src/tableau-dialogue.ts), par messageParent / messageChild (DialogApi 1.2).
+let externalTokenProvider: ((forceRefresh: boolean) => Promise<string>) | null = null;
+export function setExternalTokenProvider(fn: ((forceRefresh: boolean) => Promise<string>) | null): void {
+  externalTokenProvider = fn;
+}
+
+// Voie 3 (dialogue seulement, repli) : connexion MSAL classique par redirection DANS la fenêtre
+// de dialogue (application Entra du complément, URI de redirection SPA = la page du tableau de bord,
+// à déclarer dans Entra). Utilisée seulement si la page parente ne répond pas.
+let redirectLogin = false;
+let redirectClient: Promise<any | null> | null = null;
+export function enableDialogRedirectLogin(): void {
+  redirectLogin = true;
+}
+
+/** Adresse de retour de la connexion par redirection : la page elle-même, sans paramètres. */
+function redirectUri(): string {
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
+async function getRedirectClient(): Promise<any | null> {
+  if (!redirectClient) {
+    redirectClient = (async () => {
+      try {
+        const msal: any = await import('@azure/msal-browser');
+        const pca = new msal.PublicClientApplication({
+          auth: { clientId: ADDIN_CLIENT_ID, authority: `https://login.microsoftonline.com/${GV_TENANT_ID}`, redirectUri: redirectUri() },
+          cache: { cacheLocation: 'localStorage' },
+        });
+        await pca.initialize();
+        const r = await pca.handleRedirectPromise().catch(() => null);
+        if (r?.account) pca.setActiveAccount(r.account);
+        return pca;
+      } catch (e) {
+        console.warn('[worker] MSAL (redirection) indisponible :', (e as Error)?.message || e);
+        redirectClient = null;
+        return null;
+      }
+    })();
+  }
+  return redirectClient;
+}
+
+/** Retour de la connexion Microsoft (réponse dans l'adresse) : MSAL la traite et revient à la page de départ. */
+export async function finishDialogRedirect(): Promise<void> {
+  if (redirectLogin) await getRedirectClient();
+}
+
+/** Sans jeton silencieux, lance la redirection vers la connexion Microsoft (la page est quittée). */
+async function getRedirectToken(forceRefresh: boolean, errors: string[]): Promise<string> {
+  if (!redirectLogin || !ADDIN_SCOPE) return '';
+  const pca = await getRedirectClient();
+  if (!pca) { errors.push('MSAL redirection indisponible'); return ''; }
+  const account = (pca.getActiveAccount?.() || pca.getAllAccounts?.()?.[0]) ?? undefined;
+  if (account) {
+    try {
+      const r = await withTimeout<any>(pca.acquireTokenSilent({ scopes: [ADDIN_SCOPE], account, ...(forceRefresh ? { forceRefresh: true } : {}) }), TOKEN_STEP_TIMEOUT, 'redirection silencieuse');
+      if (r?.accessToken) return String(r.accessToken);
+    } catch (e) {
+      errors.push(`redirection silencieuse : ${(e as any)?.errorCode || (e as Error)?.message || e}`);
+    }
+  }
+  try {
+    await pca.acquireTokenRedirect({ scopes: [ADDIN_SCOPE], redirectStartPage: window.location.href });
+    errors.push('connexion Microsoft en cours (redirection)');
+  } catch (e) {
+    errors.push(`redirection : ${(e as any)?.errorCode || (e as Error)?.message || e}`);
+  }
+  return '';
+}
+
 let tokenInFlight: Promise<string> | null = null;
 /** Dernier échec (évite d'ouvrir une fenêtre de connexion par appel en échec). */
 let lastTokenFailure: { at: number; err: AtlasError } | null = null;
@@ -210,12 +284,24 @@ export async function getWorkerToken(forceRefresh = false): Promise<string> {
   if (!forceRefresh && lastTokenFailure && Date.now() - lastTokenFailure.at < TOKEN_FAILURE_COOLDOWN) throw lastTokenFailure.err;
   tokenInFlight = (async () => {
     const errors: string[] = [];
-    let source: 'naa' | 'sso' | '' = '';
-    let token = await getNaaToken(forceRefresh, errors);
-    if (token) source = 'naa';
-    else {
+    let source: 'naa' | 'sso' | 'parent' | 'redirection' | '' = '';
+    let token = '';
+    if (externalTokenProvider) {
+      try { token = await externalTokenProvider(forceRefresh); } catch (e) { errors.push(`page parente : ${(e as Error)?.message || e}`); }
+      if (token) source = 'parent';
+    }
+    // Dans un dialogue Office (redirectLogin), ni NAA ni SSO Office : on passe à la redirection.
+    if (!token && !redirectLogin) {
+      token = await getNaaToken(forceRefresh, errors);
+      if (token) source = 'naa';
+    }
+    if (!token && !redirectLogin) {
       token = await getSsoToken(errors);
       if (token) source = 'sso';
+    }
+    if (!token) {
+      token = await getRedirectToken(forceRefresh, errors);
+      if (token) source = 'redirection';
     }
     if (!token) {
       const detail = errors.join(' | ') || 'aucune voie de connexion';

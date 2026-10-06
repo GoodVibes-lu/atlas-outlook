@@ -6,7 +6,7 @@
 import type { MailMessageFull, MailAttachment } from '../types';
 import { readGraphToken } from './roaming-storage';
 import { AtlasError, outlookFetch, outlookHttpError } from './net';
-import { parcourirArborescence, type DossierArbre, type PageDossiers } from '../shared/mail-folder-tree';
+import { parcourirArborescence, estBoiteDeReception, normNom, type DossierArbre, type PageDossiers } from '../shared/mail-folder-tree';
 
 const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 
@@ -336,9 +336,13 @@ export async function ensureFolderPath(
   const parts = folderPath.split('/').filter(Boolean);
   let parentId: string | undefined;
 
-  for (const part of parts) {
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
     const children = await listMailFolders(token, parentId);
-    const existing = children.find(f => f.displayName.toLowerCase() === part.toLowerCase());
+    // 07/10/2026 : casse et accents ignorés ; 1er niveau « Inbox » = boîte de réception dans toutes les
+    // langues (jamais un dossier « Inbox » créé à côté de « Boîte de réception »).
+    const existing = children.find(f => normNom(f.displayName) === normNom(part))
+      || (i === 0 && estBoiteDeReception(part) ? children.find(f => estBoiteDeReception(f.displayName)) : undefined);
     if (existing) {
       parentId = existing.id;
     } else {

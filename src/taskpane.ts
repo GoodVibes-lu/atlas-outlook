@@ -35,6 +35,7 @@ import { purgeLegacySecrets } from './api/worker';
 import { maybeAutoSweep } from './api/auto-sweep';
 import { icon } from './ui/icons';
 import { humanError } from './api/net';
+import { ouvrirTableauDialogue } from './api/dialogue-tableau';
 import type { AddinMode } from './types';
 
 // ── State ──
@@ -148,6 +149,7 @@ function renderApp(): void {
     <header class="header">
       <span class="brand" aria-label="ATLAS, GOOD VIBES"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">ATLAS</span></span>
       <span class="header-context">${isCompose ? 'Rédaction' : 'Lecture'}</span>
+      ${mobile ? '' : `<button type="button" class="header-tdb" id="btn-tableau" title="Ouvrir le tableau de bord ATLAS dans une grande fenêtre">${icon('inbox', 16)}<span>Tableau de bord</span></button>`}
       <button type="button" class="icon-btn" id="btn-settings" data-tab="settings" aria-label="Réglages" title="Réglages">${icon('settings', 18)}</button>
     </header>
     ${isCompose ? '' : '<div id="journee-host" hidden></div>'}
@@ -161,6 +163,12 @@ function renderApp(): void {
     </nav>
     <main id="panel-content" class="content" role="tabpanel" tabindex="-1"></main>
   `;
+
+  // Tableau de bord en grande fenêtre (07/10/2026) : seule voie sur Outlook Mac (pas d'application
+  // dans la barre de gauche). La fenêtre vit tant que ce panneau reste ouvert.
+  app.querySelector('#btn-tableau')?.addEventListener('click', () => {
+    ouvrirTableauDialogue({ onErreur: (message) => showToast(message, 'error') });
+  });
 
   app.querySelector('#btn-settings')?.addEventListener('click', () => {
     switchTab(currentTab === 'settings' ? (previousTab || defaultTab) : 'settings');

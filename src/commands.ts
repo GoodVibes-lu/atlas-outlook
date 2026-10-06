@@ -17,6 +17,11 @@
  * AVANTAGE : actions accessibles en permanence depuis le bandeau Outlook,
  * sans dépendre du pin de task-pane (non supporté sur Outlook Mac sideload).
  *
+ *   • atlasTableauCommand    : ouvre le TABLEAU DE BORD dans une grande fenêtre (07/10/2026 ; Outlook
+ *                              Mac n'affiche pas l'application de la barre de gauche). L'événement
+ *                              reste ouvert tant que la fenêtre l'est : ce fichier fournit le jeton
+ *                              et ouvre les mails demandés (src/api/dialogue-tableau.ts).
+ *
  * Phase 2 de l'agent d'inbox : `atlasOnMessageSend`, gestionnaire de l'événement d'envoi
  * (Smart Alerts, `OnMessageSend`, mode « soft block », Mailbox 1.12) : contrôles avant l'envoi
  * LOCAUX (pièce jointe annoncée, « répondre à tous », tutoiement), sans appel réseau. Prêt mais
@@ -46,6 +51,7 @@ import { supportsMailbox } from './api/platform';
 import { checkAvantEnvoi, smartAlertMessage } from './utils/send-check';
 import { readComposeItem } from './components/send-check-panel';
 import { humanError } from './api/net';
+import { ouvrirTableauDialogue } from './api/dialogue-tableau';
 
 /**
  * Construit la liste des catégories à appliquer pour un état donné.
@@ -79,12 +85,14 @@ Office.onReady(async () => {
   (window as any).atlasArchiveCommand = atlasArchiveCommand;
   (window as any).atlasReanalyzeCommand = atlasReanalyzeCommand;
   (window as any).atlasOnMessageSend = atlasOnMessageSend;
+  (window as any).atlasTableauCommand = atlasTableauCommand;
   try {
     Office.actions.associate('atlasDoneCommand', atlasDoneCommand);
     Office.actions.associate('atlasSnoozeCommand', atlasSnoozeCommand);
     Office.actions.associate('atlasArchiveCommand', atlasArchiveCommand);
     Office.actions.associate('atlasReanalyzeCommand', atlasReanalyzeCommand);
     Office.actions.associate('atlasOnMessageSend', atlasOnMessageSend);
+    Office.actions.associate('atlasTableauCommand', atlasTableauCommand);
   } catch (e) {
     console.warn('[ATLAS commands] Office.actions.associate not available:', e);
   }
@@ -319,6 +327,29 @@ export async function atlasArchiveCommand(event: Office.AddinCommands.Event): Pr
     showInfoBar(`${humanError(e)}`, true);
   } finally {
     event.completed();
+  }
+}
+
+/**
+ * Tableau de bord : grande fenêtre de dialogue (95 % × 90 %). Office ne garde la fenêtre que tant
+ * que la commande n'est pas terminée : `event.completed()` est appelé à sa fermeture.
+ */
+export function atlasTableauCommand(event: Office.AddinCommands.Event): void {
+  let termine = false;
+  const terminer = () => {
+    if (termine) return;
+    termine = true;
+    try { event.completed(); } catch { /* déjà terminé */ }
+  };
+  try {
+    ouvrirTableauDialogue({
+      // Erreur (dont « déjà ouverte ») : cette commande-ci se termine, la fenêtre ouverte reste.
+      onErreur: (message) => { showInfoBar(message, true); terminer(); },
+      onFerme: terminer,
+    });
+  } catch (e) {
+    showInfoBar(humanError(e), true);
+    terminer();
   }
 }
 

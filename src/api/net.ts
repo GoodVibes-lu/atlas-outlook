@@ -142,7 +142,7 @@ export interface DiagEvent {
 }
 
 export interface TokenDiag {
-  source: 'naa' | 'sso' | '';
+  source: 'naa' | 'sso' | 'parent' | 'redirection' | '';
   /** Fin de validité du jeton en cache (ms epoch), 0 si aucun. */
   until: number;
   /** Dernière erreur d'obtention (texte technique). */

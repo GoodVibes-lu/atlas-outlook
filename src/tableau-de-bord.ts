@@ -14,9 +14,18 @@
  * authentication » activée hors Office.js par `enableHostedNaa()` après l'initialisation de
  * TeamsJS. Si l'hôte ne fournit pas la connexion automatique, MSAL tente une fenêtre ; sinon la
  * page affiche l'erreur et renvoie vers ATLAS (docs/agent-inbox-essai-complement.md §5).
+ *
+ * DEUXIÈME HÔTE (07/10/2026) : fenêtre de dialogue Office ouverte par le complément
+ * (`?hote=office`, src/api/dialogue-tableau.ts), parce que le nouvel Outlook pour Mac n'affiche pas
+ * les applications de la barre de gauche. Là : Office.js chargé à la demande (pas TeamsJS), jeton
+ * fourni par la page parente (panneau ou commande du ruban), sinon connexion par redirection MSAL
+ * dans la fenêtre ; les mails s'ouvrent dans Outlook par la page parente (`displayMessageForm`).
  */
 
-import { enableHostedNaa, getWorkerToken } from './api/worker';
+import {
+  enableDialogRedirectLogin, enableHostedNaa, finishDialogRedirect, getWorkerToken, setExternalTokenProvider,
+} from './api/worker';
+import { brancherSurParent } from './api/dialogue-tableau';
 import { ATLAS_BASE } from './api/platform';
 import { humanError } from './api/net';
 import { demarrerTableau } from './tableau/app';
@@ -52,8 +61,63 @@ function applyTheme(theme: string | null): void {
   document.documentElement.dataset.theme = t;
 }
 
+// ── Hôte « dialogue Office » (Outlook Mac) ──
+
+const CLE_HOTE = 'atlas_tdb_hote';
+const OFFICE_JS = 'https://appsforoffice.microsoft.com/lib/1/hosted/office.js';
+
+/**
+ * Vrai si la page est ouverte dans la fenêtre de dialogue du complément : paramètre `hote=office`,
+ * ou retour de la connexion Microsoft (réponse dans l'adresse) commencée dans ce mode.
+ */
+function enDialogueOffice(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('hote') === 'office') {
+    try { sessionStorage.setItem(CLE_HOTE, 'office'); } catch { /* stockage indisponible */ }
+    return true;
+  }
+  try {
+    return /[#&](code|error)=/.test(window.location.hash) && sessionStorage.getItem(CLE_HOTE) === 'office';
+  } catch { return false; }
+}
+
+/**
+ * Charge Office.js à la demande (seulement dans le dialogue : dans l'onglet Teams il est inutile).
+ * Office.js efface history.pushState / replaceState, dont MSAL a besoin : on les remet ensuite.
+ */
+async function chargerOfficeJs(): Promise<boolean> {
+  const push = window.history.pushState;
+  const replace = window.history.replaceState;
+  try {
+    if (typeof Office === 'undefined') {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = OFFICE_JS;
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error('Office.js introuvable'));
+        document.head.appendChild(s);
+      });
+    }
+    await Promise.race([
+      Office.onReady(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('délai dépassé')), 8000)),
+    ]);
+    return true;
+  } catch (e) {
+    console.warn('[tableau-de-bord] Office.js indisponible :', (e as Error)?.message || e);
+    return false;
+  } finally {
+    if (!window.history.pushState) window.history.pushState = push;
+    if (!window.history.replaceState) window.history.replaceState = replace;
+  }
+}
+
+/** Ouverture des liens propre à l'hôte (remplacée dans le dialogue Office). */
+let openLinkHote: ((url: string) => void) | null = null;
+
 /** Ouvre une adresse depuis l'onglet (Outlook sur le web pour un mail, ATLAS pour une fiche). */
 function openLink(url: string): void {
+  if (openLinkHote) { openLinkHote(url); return; }
   try {
     if (teams?.app?.openLink) { teams.app.openLink(url); return; }
   } catch { /* repli ci-dessous */ }
@@ -87,10 +151,28 @@ async function start(): Promise<void> {
   demarrerTableau(document.getElementById('app')!, { openLink });
 }
 
+async function initDialogueOffice(): Promise<void> {
+  const params = new URLSearchParams(window.location.search);
+  const theme = params.get('theme');
+  if (theme === 'dark' || theme === 'light') applyTheme(theme);
+  enableDialogRedirectLogin();
+  if (await chargerOfficeJs()) {
+    const lien = brancherSurParent(params.get('parent') === '1');
+    setExternalTokenProvider(lien.jeton);
+    openLinkHote = lien.openLink;
+  }
+  // Retour de la connexion par redirection : MSAL termine et revient à la page de départ.
+  if (/[#&](code|error)=/.test(window.location.hash)) await finishDialogRedirect();
+}
+
 (async () => {
   document.body.classList.add('tb');
   applyTheme(null);
-  await initHost();
-  enableHostedNaa();
+  if (enDialogueOffice()) {
+    await initDialogueOffice();
+  } else {
+    await initHost();
+    enableHostedNaa();
+  }
   await start();
 })();

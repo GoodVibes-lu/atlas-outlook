@@ -53,6 +53,7 @@ import {
 import { renderEquipe } from './agent-equipe';
 import { convertToRestId, getGraphToken } from '../api/graph';
 import { renderOffreRecue, renderClasserOutlook } from './agent-dossiers';
+import { renderPlusActions } from './agent-parite';
 import { escapeHtml } from '../utils/html';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
@@ -207,6 +208,8 @@ export class AgentPanel {
         <section id="agent-offre" class="agent-section" hidden></section>
 
         <section id="agent-classer" class="agent-section" hidden></section>
+
+        <section id="agent-parite" class="agent-section" hidden></section>
 
         <section class="agent-section">
           <div class="agent-section-title">Correspondant</div>
@@ -564,6 +567,16 @@ export class AgentPanel {
     if (offre && !this.mobile) renderOffreRecue(offre, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue, repondre: (html: string) => this.repondreHtml(html) });
     const classer = this.$('agent-classer');
     if (classer) renderClasserOutlook(classer, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue });
+    // 07/10/2026 (fin de la parité Inbox ATLAS) : reclasser, pièces → projet, RDV, tiers, prospection.
+    const parite = this.$('agent-parite');
+    if (parite) {
+      const [prenomExp, ...nomExp] = String(it.fromName || '').trim().split(/\s+/);
+      renderPlusActions(parite, {
+        messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue,
+        ...(this.mobile ? {} : { repondre: (html: string) => this.repondreHtml(html) }),
+        prefillTiers: { email: '', contactPrenom: prenomExp || '', contactNom: nomExp.join(' '), contactEmail: it.fromEmail || '' },
+      });
+    }
     const rappels = this.$('agent-rappels');
     // Mail envoyé par la personne (Éléments envoyés, ou lu dans un fil) : relance ; sinon plus tard.
     const envoye = !!it.fromEmail && !!it.mailbox && it.fromEmail.toLowerCase() === it.mailbox.toLowerCase();

@@ -18,8 +18,8 @@ import { callAtlasWorker, resetWorkerToken } from '../api/worker';
 import { icon } from '../ui/icons';
 import { inlineLoadingHtml } from '../ui/states';
 
-/** Version affichée (le manifeste reste en 1.3.0 : seul le contenu web change). */
-const ADDIN_VERSION = '1.3.0 · panneau du 05/10/2026';
+/** Version affichée (manifeste 1.4.0 : menu « Tableau de bord », 07/10/2026). */
+const ADDIN_VERSION = '1.4.0 · tableau de bord en fenêtre, 07/10/2026';
 
 export class SettingsPanel {
   private container: HTMLElement;
