@@ -1,7 +1,7 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.17/MicrosoftTeams.schema.json",
   "manifestVersion": "1.17",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "id": "9b7f9d18-3043-447b-b095-38fa3ac528a4",
   "developer": {
     "name": "GOOD VIBES",
@@ -11,11 +11,11 @@
   },
   "name": {
     "short": "ATLAS",
-    "full": "ATLAS : tableau de bord de l'agent d'inbox"
+    "full": "ATLAS : tableau de bord de la boîte mail"
   },
   "description": {
-    "short": "Le travail préparé par l'agent ATLAS : piles, relances, clients qui attendent.",
-    "full": "Tableau de bord de l'agent d'inbox ATLAS dans la barre de gauche d'Outlook (nouvel Outlook Windows, web, Mac) : mails à traiter, en attente, à filtrer (nouveaux expéditeurs), relances dues, clients qui attendent depuis plus de 48 h, et ce que l'agent a fait (avec Annuler). Chaque ligne ouvre le mail. Aucun envoi automatique."
+    "short": "Boîte triée, priorités ARGO, réponses, envois programmés, équipe.",
+    "full": "Tableau de bord pleine largeur de l'agent d'inbox ATLAS dans la barre de gauche d'Outlook (nouvel Outlook Windows, web, Mac) : boîte triée sur toutes les boîtes autorisées (personnes et clients d'abord, mandats, notifications, newsletters en digest, factures), priorités ARGO, en attente, mis de côté, réponses ARGO et modèles déposés dans le brouillon Outlook, envoi programmé, relances, fil d'équipe (Je prends, attribution, commentaires internes), engagements, prochains rendez-vous préparés et réactivité aux clients. Clavier d'abord, palette de commandes, glisser-déposer. Aucun envoi sans clic."
   },
   "icons": {
     "color": "color.png",

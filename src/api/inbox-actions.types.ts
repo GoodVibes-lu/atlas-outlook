@@ -36,7 +36,14 @@ export type TypeAction =
   | 'hotesse'
   | 'impaye-fournisseur'
   | 'mention-presse'
-  | 'chrono';
+  | 'chrono'
+  // Cadrage Outlook du 06/10/2026 (section A).
+  | 'ranger-projet'
+  | 'facture-hors-projet'
+  | 'newsletter-interessante'
+  | 'newsletter-sans-interet'
+  | 'mandat-associatif'
+  | 'modele-appris';
 
 export interface ActionProposee {
   type: TypeAction;

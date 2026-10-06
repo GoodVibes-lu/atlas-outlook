@@ -13,12 +13,16 @@ Ce n'est **pas** le complément : le panneau ATLAS (lecture et rédaction) reste
 | `outline.png` | Icône contour 32 × 32, blanche sur fond transparent (copie de `../assets/icon-outline.png`) |
 | `../tableau-de-bord.html` + `../src/tableau-de-bord.ts` | La page affichée (publiée avec le complément, même build Vite) |
 
-## Ce que montre le tableau de bord
+## Ce que montre le tableau de bord (0.3.0, 06/10/2026)
 
-- **Ma journée** : compteurs à traiter, en attente, à filtrer (nouveaux expéditeurs), clients qui attendent depuis plus de 48 h, relances dues, pour info, bruit (`GET /api/plugin/agent/journee`).
-- **Listes cliquables** : clic sur un compteur de pile → mails de la pile (`GET /api/plugin/agent/liste`) ; clic sur un mail → ouverture dans Outlook sur le web (`webLink`, par `app.openLink` de TeamsJS). Pile « À filtrer » : **Accepter** / **Refuser** l'expéditeur (`POST /api/plugin/agent/expediteur`).
-- **Ce que l'agent a fait** : journal récent avec **Annuler** (`GET /api/plugin/agent/journal`, `POST /api/plugin/agent/annuler`).
-- Rafraîchissement discret toutes les 5 minutes quand l'onglet est visible, bouton « Actualiser ». Aucun appel IA, aucune notification. Thème sombre d'Outlook suivi.
+Page pleine largeur (`../src/tableau/`), langage visuel ATLAS, clavier d'abord. Détail du cadrage : `.claude/CADRAGE-OUTLOOK-DASHBOARD.md` (B, C, D).
+
+- **Boîte triée, toutes les boîtes autorisées** (la sienne ; good@ pour ses membres) : priorités ARGO (score expliqué), personnes et clients, mandats / associations (section masquée si vide, aucune action commerciale), en attente, mis de côté, factures, newsletters en digest (désinscription), notifications. `GET /api/plugin/agent/tableau`, empreinte relue toutes les 20 s (`tableau/version`) : mise à jour sans rechargement, nouveautés signalées.
+- **Un mail** : résumé et raisons, ouverture dans Outlook (Entrée), actions proposées par l'agent (`agent/actions`), **réponse ARGO** dans le style de la personne ou **modèle Communications** (`tableau/reponse`), **déposée dans le brouillon Outlook** (`tableau/brouillon`), **envoi programmé** par remise différée d'Exchange avec relance facultative (`tableau/envois`), « mettre de côté » (`agent/plus-tard`), « relancer si pas de réponse » (`agent/relancer`), rattacher à un projet (`atlas/emails/link-projet`).
+- **Équipe** (good@) : « Je prends », « Attribuer à… » (cloche à la personne), commentaires internes, qui traite quoi ; la prise est propagée aux cloches (`data.priseInbox`).
+- **Aujourd'hui** : prochains rendez-vous externes avec la préparation de meeting-prep (`tableau/rdv`), engagements promis / attendus vérifiés (`tableau/engagements`), réactivité aux clients en heures ouvrées (`tableau/reactivite`), question à sa boîte et rattrapage.
+- **Clavier** : j/k, Entrée, r (ARGO), t (modèle), e / s (de côté), p (je prends), l (projet), c (commentaire), 1 à 9 (sections), ⌘K ou / (palette), ? (aide). **Glisser-déposer** d'un mail vers « Je prends », une date ou un projet ; aperçu au survol ; thème d'Outlook suivi ; mouvement réduit respecté.
+- **Écritures dans une boîte** (brouillon, envoi programmé) : seulement sur clic, sous le verrou `INBOX_AGENT_TABLEAU_ECRITURES=actif` du worker ; fermé, la page propose « Copier ».
 
 ## Connexion
 
@@ -30,7 +34,7 @@ Même jeton que le panneau : `getWorkerToken` (`../src/api/worker.ts`), voie **n
 
 1. **Publier le complément** (build Vite) : `tableau-de-bord.html` est une entrée du build (`vite.config.ts`) et doit répondre sur `https://goodvibes-lu.github.io/atlas-outlook/tableau-de-bord.html` (HTTPS, affichable dans un cadre : pas d'en-tête `X-Frame-Options: DENY`).
 2. **`webApplicationInfo`** : renseigné avec l'ID d'application (client) de « ATLAS Outlook (complément) » (`fc36080c-…`, public) et son URI d'ID d'application (`docs/agent-inbox-entra-id.md`, étape 5) : même application que le complément, le worker accepte donc le même jeton. Pour un essai d'**affichage** seul, on peut retirer le bloc.
-3. **`version`** : à augmenter à chaque nouvel envoi du paquet (le Centre d'administration refuse un paquet de même version). Actuelle : 0.2.0 (tableau de bord phase 2).
+3. **`version`** : à augmenter à chaque nouvel envoi du paquet (le Centre d'administration refuse un paquet de même version). Actuelle : 0.3.0 (tableau de bord pleine largeur, 06/10/2026).
 4. Le champ `id` (GUID) est propre à cette application : ne pas le changer entre deux versions, ne pas réutiliser celui du complément.
 
 ## Construire le paquet
@@ -39,8 +43,10 @@ Le paquet est un **zip** contenant les trois fichiers à la racine (pas de dossi
 
 ```bash
 cd outlook-addin/teams-app
-zip ../atlas-app.zip manifest.json color.png outline.png
+zip -X ../ATLAS-barre-gauche-0.3.0.zip manifest.json color.png outline.png
 ```
+
+Validation : schéma Microsoft 1.17 (`$schema` du manifeste), vérifié avec ajv avant chaque envoi.
 
 (Le zip n'est pas versionné ; aucune étape de build ni de déploiement n'est lancée par le dépôt.)
 

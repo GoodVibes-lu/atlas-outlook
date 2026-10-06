@@ -536,3 +536,34 @@ export async function fetchAutoDraft(args: {
   const r = await pluginFetch<{ draft?: { subject?: string; body?: string } }>('POST', 'email/auto-draft', args);
   return r.draft || null;
 }
+
+// ── Cadrage Outlook du 06/10/2026 (section A) ──
+
+/** Dossier du NAS (factures hors projet) : sous-dossiers existants d'un chemin (racine par défaut). */
+export interface DossiersNas { racine: string; chemin: string; dossiers: Array<{ nom: string; chemin: string }> }
+
+/** GET /api/plugin/agent/nas/dossiers?chemin= : sélecteur du dossier de rangement d'une facture hors projet. */
+export async function fetchDossiersNas(chemin?: string): Promise<DossiersNas> {
+  const r = await pluginFetch<Partial<DossiersNas>>('GET', `agent/nas/dossiers${chemin ? `?chemin=${encodeURIComponent(chemin)}` : ''}`);
+  return {
+    racine: String(r.racine || ''),
+    chemin: String(r.chemin || ''),
+    dossiers: Array.isArray(r.dossiers) ? r.dossiers.filter(d => d && typeof d.chemin === 'string').map(d => ({ nom: String(d.nom || d.chemin), chemin: String(d.chemin) })) : [],
+  };
+}
+
+/** Newsletter jetée par l'agent (récapitulatif « supprimées aujourd'hui »). */
+export interface NewsletterSupprimee { actionId: string; messageId: string; expediteur: string; objet: string; at: string; raison: string; restauree: boolean; executee: boolean }
+
+/** GET /api/plugin/agent/newsletters/supprimees?jour= */
+export async function fetchNewslettersSupprimees(jour?: string, mailbox?: string): Promise<{ mode: string; total: number; liste: NewsletterSupprimee[] }> {
+  const qs = [jour ? `jour=${encodeURIComponent(jour)}` : '', mailbox ? `mailbox=${encodeURIComponent(mailbox)}` : ''].filter(Boolean).join('&');
+  const r = await pluginFetch<any>('GET', `agent/newsletters/supprimees${qs ? `?${qs}` : ''}`);
+  return { mode: String(r?.mode || ''), total: Number(r?.total) || 0, liste: Array.isArray(r?.liste) ? r.liste : [] };
+}
+
+/** POST /api/plugin/agent/newsletters/restaurer : remet la newsletter dans la boîte (et « c'était intéressant »). */
+export async function restaurerNewsletter(actionId: string, interessant = true): Promise<void> {
+  await pluginFetch('POST', 'agent/newsletters/restaurer', { actionId, interessant });
+  invalidateJournee();
+}

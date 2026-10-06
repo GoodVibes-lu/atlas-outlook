@@ -26,7 +26,7 @@
 import {
   fetchActions, executerAction, annulerAction, mettrePlusTard, retirerPlusTard, demanderRelance,
   annulerRelance, poserQuestion, fetchResumeFil, fetchRattrapage,
-  traduire, fetchModeles, remplirModele, fetchFicheContact, verifierPiecesLourdes, creerLienCourt, deposerPiecesLourdes,
+  traduire, fetchModeles, remplirModele, fetchFicheContact, verifierPiecesLourdes, creerLienCourt, deposerPiecesLourdes, fetchDossiersNas,
   type DepotPiecesLourdes,
   type LangueTraduction, type ModeleReponse, type ModeleRempli, type DetectionsMail,
 } from '../api/agent';
@@ -126,6 +126,47 @@ function selectProjetHtml(i: number, candidats: CandidatChoix[], courant = ''): 
     </select>`;
 }
 
+/** Facture hors projet sans règle apprise : le dossier du NAS est à choisir (cadrage du 06/10/2026). */
+function choixDossierRequis(a: ActionProposee): boolean {
+  return a.type === 'facture-hors-projet' && (a.donnees as any)?.choixDossier === true;
+}
+
+/**
+ * Sélecteur de dossier du NAS (GET /api/plugin/agent/nas/dossiers) : navigation dans les
+ * sous-dossiers existants de la racine des factures, « Ranger ici » fixe le choix. Jamais de création.
+ */
+function brancherSelecteurDossier(host: HTMLElement, i: number, choisis: Map<number, string>): void {
+  const ouvrir = host.querySelector<HTMLButtonElement>(`[data-dossier-ouvrir="${i}"]`);
+  const liste = host.querySelector<HTMLElement>(`[data-dossier-liste="${i}"]`);
+  const choisi = host.querySelector<HTMLElement>(`[data-dossier-choisi="${i}"]`);
+  if (!ouvrir || !liste || !choisi) return;
+  const afficher = async (chemin?: string) => {
+    liste.hidden = false;
+    liste.innerHTML = '<div class="agent-loading"><div class="spinner"></div><span>Dossiers du NAS…</span></div>';
+    try {
+      const d = await fetchDossiersNas(chemin);
+      const parent = d.chemin && d.chemin !== d.racine ? d.chemin.slice(0, d.chemin.lastIndexOf('/')) : '';
+      liste.innerHTML = `
+        <div class="agent-muted">${escapeHtml(d.chemin)}</div>
+        <ul class="agent-faites">
+          ${parent ? `<li><button type="button" class="agent-link" data-nas-aller="${escapeHtml(parent)}">Dossier parent</button></li>` : ''}
+          ${d.dossiers.map(x => `<li><button type="button" class="agent-link" data-nas-aller="${escapeHtml(x.chemin)}">${escapeHtml(x.nom)}</button></li>`).join('')}
+        </ul>
+        <button type="button" class="btn btn-secondary agent-btn" data-nas-ici="${escapeHtml(d.chemin)}">Ranger ici</button>`;
+      liste.querySelectorAll<HTMLButtonElement>('[data-nas-aller]').forEach(b => b.addEventListener('click', () => { void afficher(b.dataset.nasAller); }));
+      liste.querySelector<HTMLButtonElement>('[data-nas-ici]')?.addEventListener('click', (e) => {
+        const c = (e.currentTarget as HTMLButtonElement).dataset.nasIci || '';
+        choisis.set(i, c);
+        choisi.textContent = c;
+        liste.hidden = true;
+      });
+    } catch (e) {
+      liste.innerHTML = erreurHtml('Dossiers indisponibles', e);
+    }
+  };
+  ouvrir.addEventListener('click', () => { void afficher(choisis.get(i) || undefined); });
+}
+
 function faitesHtml(faites: ActionFaite[]): string {
   if (!faites.length) return '';
   return `<ul class="agent-faites">${faites.map(f => {
@@ -173,6 +214,11 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
         ${a.apercu ? `<div class="agent-carte-apercu">${escapeHtml(a.apercu)}</div>` : ''}
         ${a.avertissements?.length ? `<ul class="agent-avertissements">${a.avertissements.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>` : ''}
         <div class="agent-carte-choix" data-choix-wrap="${i}" ${choix ? '' : 'hidden'}>${choix ? selectProjetHtml(i, candidats, courant) : ''}</div>
+        ${choixDossierRequis(a) ? `<div class="agent-carte-choix" data-dossier-wrap="${i}">
+          <div class="agent-muted">Dossier du NAS : <span data-dossier-choisi="${i}">à choisir</span></div>
+          <button type="button" class="btn btn-secondary agent-btn" data-dossier-ouvrir="${i}">Choisir le dossier…</button>
+          <div data-dossier-liste="${i}" hidden></div>
+        </div>` : ''}
         <button type="button" class="btn btn-primary btn-block agent-btn" data-exec="${i}">${escapeHtml(a.libelle)}</button>
         <div class="agent-carte-resultat" data-res="${i}" hidden></div>
       </div>`;
@@ -198,6 +244,9 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
     });
   });
 
+  const dossiersChoisis = new Map<number, string>();
+  cartes.forEach((a, i) => { if (choixDossierRequis(a)) brancherSelecteurDossier(host, i, dossiersChoisis); });
+
   host.querySelectorAll<HTMLButtonElement>('button[data-exec]').forEach(btn => {
     btn.addEventListener('click', async () => {
       const i = Number(btn.dataset.exec);
@@ -214,6 +263,12 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
         select.focus();
         return;
       }
+      const dossierNas = dossiersChoisis.get(i) || '';
+      if (choixDossierRequis(a) && !dossierNas) {
+        res.hidden = false;
+        res.innerHTML = '<p class="agent-error" role="alert">Choisis d\'abord le dossier du NAS.</p>';
+        return;
+      }
       btn.disabled = true;
       const libelle = btn.textContent || '';
       btn.textContent = 'En cours…';
@@ -224,7 +279,7 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
           mailbox: ctx.mailbox || undefined,
           type: a.type,
           donnees: projetId ? { ...a.donnees, projetId } : a.donnees,
-          ...(projetId ? { choix: { projetId } } : {}),
+          ...(projetId || dossierNas ? { choix: { ...(projetId ? { projetId } : {}), ...(dossierNas ? { dossierNas } : {}) } } : {}),
         });
         if (!host.isConnected) return;
         if (r.ok) {
