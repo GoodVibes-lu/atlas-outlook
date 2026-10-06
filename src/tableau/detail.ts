@@ -26,7 +26,8 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
   const t = ctx.etat.t;
   const moi = t?.moi || '';
   const perso = (m.mailbox || '').toLowerCase() === moi;
-  const envoye = ctx.etat.section === 'enAttente';
+  // « En attente » : un ENVOI sans réponse (relance) ; un mail reçu garde les actions de réponse.
+  const envoye = ctx.etat.section === 'enAttente' && (m.envoye === true || m.categorie === 'envoi');
   const deCote = !!m.plusTardJusqua;
   host.innerHTML = `
     <div class="tb-panel is-raised">

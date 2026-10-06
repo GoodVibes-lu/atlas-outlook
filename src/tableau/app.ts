@@ -24,7 +24,7 @@ import { getAllProjets, getAllContacts } from '../api/airtable';
 import { openAgentMail } from '../components/agent-lists';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
-import { deplacer, ilYA, initiales, nouveautes, quandLisible, presetsMoments, prenomDe, basculerSelection, selectionPlage, selectionValide, resumeLot } from './logique';
+import { deplacer, ilYA, initiales, nouveautes, quandLisible, presetsMoments, prenomDe, basculerSelection, selectionPlage, selectionValide, resumeLot, sousTitreEnAttente } from './logique';
 import { h, toast, animerChiffre, choisirMoment, ouvrirCouche, mouvementReduit } from './ui';
 import { renderDetail, renderDigest } from './detail';
 import { renderAujourdhui } from './aujourdhui';
@@ -39,7 +39,7 @@ export const SECTIONS: Array<{ id: Section; libelle: string; titre: string; vide
   { id: 'mandats', libelle: 'Mandats', titre: 'Mandats et associations', vide: 'Aucun mail de mandat ou d\'association.' },
   { id: 'enAttente', libelle: 'En attente', titre: 'En attente d\'une réponse', vide: 'Aucun fil n\'attend de réponse de l\'autre côté.' },
   { id: 'deCote', libelle: 'De côté', titre: 'Mis de côté', vide: 'Rien de mis de côté. Glisse un mail vers une date pour le faire revenir plus tard.' },
-  { id: 'factures', libelle: 'Factures', titre: 'Factures', vide: 'Aucune facture reçue ces 14 derniers jours.' },
+  { id: 'factures', libelle: 'Factures', titre: 'Factures', vide: 'Aucune facture dans la boîte de réception (14 derniers jours).' },
   { id: 'newsletters', libelle: 'Newsletters', titre: 'Newsletters (digest)', vide: 'Aucune newsletter : la boîte est calme.' },
   { id: 'notifications', libelle: 'Notifications', titre: 'Notifications', vide: 'Aucune notification de service.' },
 ];
@@ -77,7 +77,7 @@ export function lignesDe(t: Tableau | null, s: Section): TableauMail[] {
     case 'personnes': return t.personnes;
     case 'clients': return t.personnes.filter(m => m.correspondant === 'client');
     case 'mandats': return t.mandats || [];
-    case 'enAttente': return t.enAttente.map(e => ({ ...e, mailbox: e.mailbox || t.moi, conversationId: '', famille: 'personnes', priorite: 0, raisons: [] }) as TableauMail);
+    case 'enAttente': return t.enAttente.map(e => ({ ...e, mailbox: e.mailbox || t.moi, conversationId: e.conversationId || '', famille: 'personnes', priorite: 0, raisons: e.envoye ? ['Envoyé, sans réponse'] : [] }) as TableauMail);
     case 'deCote': return t.deCote;
     case 'factures': return t.factures;
     case 'notifications': return t.notifications;
@@ -341,8 +341,11 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       return;
     }
     const lignes = lignesDe(t, etat.section);
-    const sous = etat.section === 'priorites' ? 'Classés par ARGO : urgence, client, ton, attente' : etat.section === 'deCote' ? 'Reviennent d\'eux-mêmes à la date choisie' : `${lignes.length} mail${lignes.length > 1 ? 's' : ''}`;
-    $('tb-sous').textContent = sous;
+    const sous = etat.section === 'priorites' ? 'Classés par ARGO : urgence, client, ton, attente'
+      : etat.section === 'deCote' ? 'Hors de la boîte de réception : reviennent d\'eux-mêmes à la date choisie'
+      : etat.section === 'enAttente' ? sousTitreEnAttente(t.enAttente)
+      : `${lignes.length} mail${lignes.length > 1 ? 's' : ''} dans la boîte de réception`;
+    $('tb-sous').textContent = sous + (t.inboxNonVerifiee?.length ? ' · boîte de réception non relue, rien n\'est masqué' : '');
     list.innerHTML = lignes.length ? lignes.map(m => ligneHtml(m, nouv.includes(cleDe(m)))).join('') : videHtml(sec.vide);
     list.querySelectorAll<HTMLElement>('.tb-row').forEach(el => brancherLigne(el));
     marquerSelection();
@@ -642,7 +645,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
         const v = await fetchVersion(etat.boite);
         if (v.version === etat.t.version) { etat.derniereSync = Date.now(); etat.enLigne = true; majLive('ok'); return; }
       }
-      const t = await fetchTableau(etat.boite);
+      const t = await fetchTableau(etat.boite, force);
       const avant = etat.vus;
       const tous = [...t.personnes, ...(t.mandats || []), ...t.factures, ...t.notifications].map(cleDe);
       if (etat.section === 'mandats' && !(t.mandats || []).length) etat.section = 'priorites';

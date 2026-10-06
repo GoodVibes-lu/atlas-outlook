@@ -12,13 +12,13 @@
  */
 import type { Ctx } from './app';
 import type { Engagement, TableauMail } from '../api/tableau';
-import { fetchEngagements, fetchRdv, fetchReactivite, marquerTenu, redigerEngagement } from '../api/tableau';
+import { abandonnerEngagements, fetchEngagements, fetchRdv, fetchReactivite, marquerTenu, redigerEngagement } from '../api/tableau';
 import { renderQuestion, renderRattrapage } from '../components/agent-outils';
 import { renderMailList, renderJournal } from '../components/agent-lists';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
-import { dureeHeures, prenomDe, quandLisible } from './logique';
-import { h, toast } from './ui';
+import { dureeHeures, prenomDe, quandLisible, retardEngagement } from './logique';
+import { confirmer, h, toast } from './ui';
 import { renderDetail, composer } from './detail';
 
 const heure = (iso: string) => new Date(iso).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Luxembourg', hour: '2-digit', minute: '2-digit' });
@@ -73,16 +73,41 @@ async function rdv(host: HTMLElement): Promise<void> {
 async function engagements(host: HTMLElement, ctx: Ctx): Promise<void> {
   try {
     const r = await fetchEngagements();
-    const ligne = (e: Engagement) => `<div class="tb-eng">
-      <p>${h(e.promiseText)}<br><small>${e.direction === 'made' ? 'à' : 'de'} ${h(e.counterpartName || e.counterpart)} · ${e.enRetard ? `<span class="tb-chip is-hot">en retard de ${Math.max(1, e.jours)} j</span>` : `échéance ${h(quandLisible(e.dueDate, Date.now()) || e.dueDate.slice(0, 10))}`}</small></p>
+    const ligne = (e: Engagement) => {
+      const retard = retardEngagement(e);
+      return `<div class="tb-eng">
+      <p>${h(e.promiseText)}<br><small>${e.direction === 'made' ? 'à' : 'de'} ${h(e.counterpartName || e.counterpart)} · ${retard ? `<span class="tb-chip is-hot">${h(retard)}</span>` : `échéance ${h(quandLisible(e.dueDate, Date.now()) || (e.dueDate || '').slice(0, 10))}`}</small></p>
       <span class="tb-actions"><button type="button" class="tb-btn${e.enRetard ? ' is-argo' : ''}" data-r="${h(e.recordId)}">${e.direction === 'received' ? 'Relancer' : 'Rédiger'}</button><button type="button" class="tb-btn is-ghost" data-k="${h(e.recordId)}" title="Marquer tenu">${icon('check', 14)}</button></span>
     </div>`;
+    };
+    // Retour du 07/10/2026 : par défaut, échus depuis 30 jours au plus ou à venir (le chiffre = cette liste) ;
+    // les plus anciens repliés dans « Anciens », avec « Marquer abandonné » en lot.
+    const anciens = r.anciens || [];
     const total = r.promis.length + r.attendus.length;
+    const ligneAncienne = (e: Engagement) => `<div class="tb-eng"><p>${h(e.promiseText)}<br><small>${e.direction === 'made' ? 'à' : 'de'} ${h(e.counterpartName || e.counterpart)} · ${h(retardEngagement(e) || (e.dueDate || '').slice(0, 10))}</small></p></div>`;
     host.innerHTML = `<div class="tb-h">Engagements<span class="tb-h-n">${total}</span></div>
-      ${!total ? '<p class="tb-note">Aucun engagement en suspens : tout ce qui a été promis est tenu.</p>' : ''}
-      ${r.promis.length ? `<p class="tb-note">Ce que j'ai promis</p>${r.promis.slice(0, 6).map(ligne).join('')}` : ''}
-      ${r.attendus.length ? `<p class="tb-note">Ce qu'on me doit</p>${r.attendus.slice(0, 6).map(ligne).join('')}` : ''}
-      ${r.verificationEnCours ? '<p class="tb-note">Vérification des engagements échus en cours : ceux qui sont tenus disparaîtront.</p>' : ''}`;
+      ${!total ? '<p class="tb-note">Aucun engagement en suspens sur les 30 derniers jours ni à venir.</p>' : ''}
+      ${r.promis.length ? `<p class="tb-note">Ce que j'ai promis</p>${r.promis.map(ligne).join('')}` : ''}
+      ${r.attendus.length ? `<p class="tb-note">Ce qu'on me doit</p>${r.attendus.map(ligne).join('')}` : ''}
+      ${r.verificationEnCours ? '<p class="tb-note">Vérification des engagements échus en cours : ceux qui sont tenus disparaîtront.</p>' : ''}
+      ${anciens.length ? `<details class="tb-anciens"><summary>Anciens (${anciens.length}) : échus depuis plus de 30 jours</summary>
+        <p class="tb-actions"><button type="button" class="tb-btn" data-abandon>Tout marquer abandonné</button></p>
+        ${anciens.slice(0, 50).map(ligneAncienne).join('')}${anciens.length > 50 ? `<p class="tb-note">… et ${anciens.length - 50} autres (compris dans « Tout marquer abandonné »).</p>` : ''}
+      </details>` : ''}`;
+    host.querySelector<HTMLButtonElement>('[data-abandon]')?.addEventListener('click', async ev => {
+      const b = ev.currentTarget as HTMLButtonElement;
+      if (!(await confirmer('Marquer abandonné', `Les ${anciens.length} engagements échus depuis plus de 30 jours ne seront plus suivis (statut « abandonné »).`, 'Marquer abandonné'))) return;
+      b.disabled = true;
+      try {
+        let faits = 0, echecs = 0;
+        for (let i = 0; i < anciens.length; i += 200) {
+          const x = await abandonnerEngagements(anciens.slice(i, i + 200).map(e => e.recordId));
+          faits += x.faits; echecs += x.echecs;
+        }
+        toast(echecs ? `${faits} abandonnés, ${echecs} en échec` : `${faits} engagements marqués abandonnés`, echecs ? 'info' : 'success');
+        void engagements(host, ctx);
+      } catch (e) { toast(humanError(e), 'error'); b.disabled = false; }
+    });
     host.querySelectorAll<HTMLButtonElement>('[data-k]').forEach(b => b.addEventListener('click', async () => {
       b.disabled = true;
       try { await marquerTenu(b.dataset.k!); toast('Engagement tenu', 'success'); void engagements(host, ctx); } catch (e) { toast(humanError(e), 'error'); b.disabled = false; }

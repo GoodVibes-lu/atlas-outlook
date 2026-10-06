@@ -212,6 +212,9 @@ body.tb { background: var(--bg); min-width: 0; font-size: 13.5px; }
 .tb-eng { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; padding: 7px 0; border-top: 1px solid var(--border); align-items: center; }
 .tb-eng:first-of-type { border-top: 0; }
 .tb-eng p { font-size: 12.5px; }
+.tb-anciens { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+.tb-anciens > summary { cursor: pointer; font-size: 12px; color: var(--text-2); }
+.tb-anciens .tb-eng { opacity: .75; }
 .tb-eng small { color: var(--text-3); font-size: 11.5px; }
 .tb-react { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .tb-react th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-3); font-weight: 600; padding: 4px 6px; }

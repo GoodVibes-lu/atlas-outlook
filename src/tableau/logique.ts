@@ -202,3 +202,21 @@ export function resumeLot(ok: number, erreurs: number, cible: string): string {
   const base = `${ok} mail${ok > 1 ? 's' : ''} rattaché${ok > 1 ? 's' : ''} à ${cible}`;
   return erreurs ? `${base} · ${erreurs} erreur${erreurs > 1 ? 's' : ''}` : base;
 }
+
+/**
+ * « En attente » lisible (pur) : mails reçus encore dans la boîte de réception d'un côté, envois
+ * sans réponse (14 jours) de l'autre ; le total est exactement ce qui est listé.
+ */
+export function sousTitreEnAttente(elements: ReadonlyArray<{ envoye?: boolean }>): string {
+  const envoyes = elements.filter(e => e.envoye).length;
+  const recus = elements.length - envoyes;
+  const p = (n: number, s: string, pl: string) => `${n} ${n > 1 ? pl : s}`;
+  if (!elements.length) return '0 fil';
+  return [recus ? p(recus, 'reçu dans la boîte', 'reçus dans la boîte') : '', envoyes ? p(envoyes, 'envoi sans réponse (14 j)', 'envois sans réponse (14 j)') : ''].filter(Boolean).join(' · ');
+}
+
+/** Libellé d'échéance d'un engagement (pur) : « en retard de N j », « aujourd'hui », sinon null (date lisible). */
+export function retardEngagement(e: { enRetard: boolean; jours: number }): string | null {
+  if (!e.enRetard) return null;
+  return e.jours < 1 ? 'échu aujourd\'hui' : `en retard de ${e.jours} j`;
+}

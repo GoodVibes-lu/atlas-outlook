@@ -21,6 +21,8 @@ export type TableauMail = AgentListeElement & {
   actions?: Array<{ type: string; libelle: string }>;
   langue?: string;
   tonalite?: string;
+  /** « En attente » : envoi de la personne sans réponse (et non mail reçu). */
+  envoye?: boolean;
 };
 
 export interface DigestNewsletter {
@@ -41,7 +43,11 @@ export interface Tableau {
   /** Mandats / associations (classement de l'agent) : section masquée si vide. */
   mandats?: TableauMail[];
   priorites: TableauMail[];
-  enAttente: AgentListeElement[];
+  /**
+   * « En attente » : mails REÇUS encore dans la boîte de réception (un par fil), puis envois de la
+   * personne sans réponse depuis 14 jours au plus (`envoye`, hors boîte de réception par nature).
+   */
+  enAttente: Array<AgentListeElement & { mailbox?: string; conversationId?: string; envoye?: boolean }>;
   deCote: TableauMail[];
   compteurs: Record<'personnes' | 'clients' | 'mandats' | 'notifications' | 'newsletters' | 'factures' | 'priorites' | 'enAttente' | 'deCote', number>;
   version: string;
@@ -51,6 +57,8 @@ export interface Tableau {
   ecrituresActives: boolean;
   mode: string;
   moi: string;
+  /** Boîtes dont la boîte de réception n'a pas pu être relue (Graph) : rien n'y est masqué. */
+  inboxNonVerifiee?: string[];
 }
 
 export interface ReponseRedigee {
@@ -96,7 +104,11 @@ const lecture = <T>(path: string) => workerRequest<T>('GET', `agent/${path}`, un
 const ecriture = <T>(method: 'POST' | 'DELETE', path: string, body: unknown) => workerRequest<T>(method, `agent/${path}`, body, { timeoutMs: 90_000 });
 const qMailbox = (mailbox: string) => (mailbox && mailbox !== 'toutes' ? `?mailbox=${encodeURIComponent(mailbox)}` : '');
 
-export const fetchTableau = (mailbox = 'toutes') => lecture<Tableau>(`tableau${qMailbox(mailbox)}`);
+/** `frais` (« Actualiser », après une action) : le worker relit la boîte de réception sans attendre son cache. */
+export const fetchTableau = (mailbox = 'toutes', frais = false) => {
+  const q = qMailbox(mailbox);
+  return lecture<Tableau>(`tableau${q}${frais ? `${q ? '&' : '?'}frais=1` : ''}`);
+};
 export const fetchVersion = (mailbox = 'toutes') => workerRequest<{ version: string; misAJour: string }>('GET', `agent/tableau/version${qMailbox(mailbox)}`, undefined, { timeoutMs: 20_000 });
 
 export const redigerArgo = (messageId: string, mailbox: string) => ecriture<ReponseRedigee>('POST', 'tableau/reponse', { messageId, mailbox, source: 'argo' });
@@ -109,7 +121,10 @@ export const programmerEnvoi = (p: { brouillonId: string; quand: string; relance
   ecriture<{ ok: boolean; envoi: EnvoiProgramme }>('POST', 'tableau/envois', p);
 export const annulerEnvoi = (brouillonId: string) => ecriture<{ ok: boolean; envoi: EnvoiProgramme }>('DELETE', 'tableau/envois', { brouillonId });
 
-export const fetchEngagements = () => lecture<{ promis: Engagement[]; attendus: Engagement[]; verificationEnCours: boolean }>('tableau/engagements');
+/** promis / attendus : échus depuis 30 jours au plus, ou à venir ; anciens : au-delà (repliés). */
+export const fetchEngagements = () => lecture<{ promis: Engagement[]; attendus: Engagement[]; anciens?: Engagement[]; verificationEnCours: boolean }>('tableau/engagements');
+/** « Marquer abandonné » en lot (statut existant `cancelled` de la table Email Promises). */
+export const abandonnerEngagements = (recordIds: string[]) => ecriture<{ ok: boolean; faits: number; echecs: number; inconnus: number }>('POST', 'tableau/engagements/abandonner', { recordIds });
 export const marquerTenu = (recordId: string) => ecriture<{ ok: boolean }>('POST', 'tableau/engagements/tenu', { recordId });
 export const redigerEngagement = (recordId: string) => ecriture<ReponseRedigee>('POST', 'tableau/engagements/rediger', { recordId });
 
