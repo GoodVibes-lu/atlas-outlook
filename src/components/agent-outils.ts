@@ -36,6 +36,8 @@ import { openExternal, ATLAS_BASE } from '../api/platform';
 import { WORKER_BASE } from '../api/worker';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
+import { renderDossierProjet, type CtxDossiers } from './agent-dossiers';
+import { creerDossier, estVerrouFerme } from '../api/agent';
 
 export type InfoFn = (message: string, type?: 'success' | 'error' | 'info') => void;
 
@@ -126,6 +128,26 @@ function selectProjetHtml(i: number, candidats: CandidatChoix[], courant = ''): 
     </select>`;
 }
 
+type Choix = { id: string; libelle: string };
+const choixDe = (v: unknown): Choix[] => (Array.isArray(v) ? v : []).filter((x: any) => x && typeof x.id === 'string' && x.id).map((x: any) => ({ id: x.id, libelle: String(x.libelle || x.id) }));
+
+/** Devis fournisseur (07/10/2026, parité « Offre reçue ») : demande de devis et pièce jointe à choisir. */
+function selectDevisHtml(i: number, a: ActionProposee): string {
+  if (a.type !== 'devis-fournisseur') return '';
+  const d = a.donnees as any;
+  const devis = choixDe(d?.devisChoix);
+  const pieces = choixDe(d?.piecesChoix);
+  const courantDevis = typeof d?.devisId === 'string' ? d.devisId : '';
+  const courantPj = typeof d?.pieceJointeId === 'string' ? d.pieceJointeId : '';
+  const opt = (c: Choix, sel: string) => `<option value="${escapeHtml(c.id)}" ${c.id === sel ? 'selected' : ''}>${escapeHtml(c.libelle)}</option>`;
+  return `${devis.length > 1 || (!courantDevis && devis.length) ? `<div class="agent-carte-choix">
+      <label class="agent-muted" for="act-devis-${i}">Demande de devis</label>
+      <select class="agent-select" id="act-devis-${i}" data-devis="${i}"><option value="">Choisir la demande…</option>${devis.map(c => opt(c, courantDevis)).join('')}</select></div>` : ''}
+    ${pieces.length > 1 ? `<div class="agent-carte-choix">
+      <label class="agent-muted" for="act-pj-${i}">Pièce jointe déposée</label>
+      <select class="agent-select" id="act-pj-${i}" data-pj="${i}">${pieces.map(c => opt(c, courantPj)).join('')}</select></div>` : ''}`;
+}
+
 /** Facture hors projet sans règle apprise : le dossier Outlook est à choisir (cadrage du 06/10/2026, corrigé). */
 function choixDossierRequis(a: ActionProposee): boolean {
   return a.type === 'facture-hors-projet' && (a.donnees as any)?.choixDossier === true;
@@ -134,7 +156,8 @@ function choixDossierRequis(a: ActionProposee): boolean {
 /**
  * Sélecteur de DOSSIER OUTLOOK (GET /api/plugin/agent/factures/dossiers) : arborescence complète
  * de la boîte qui a reçu le mail (sous-dossiers compris), recherche par mots ; un clic fixe le
- * choix. Le mail y sera déplacé (jamais de création de dossier, jamais le NAS).
+ * choix. Le mail y sera déplacé (jamais le NAS). 07/10/2026 : « Nouveau dossier » sous le dossier choisi
+ * (ou à la racine), créé par le worker sous le double verrou de la boîte.
  */
 function brancherSelecteurDossier(host: HTMLElement, i: number, mailbox: string, choisis: Map<number, { id: string; chemin: string }>): void {
   const ouvrir = host.querySelector<HTMLButtonElement>(`[data-dossier-ouvrir="${i}"]`);
@@ -171,7 +194,30 @@ function brancherSelecteurDossier(host: HTMLElement, i: number, mailbox: string,
     if (!zone.querySelector('[data-dossier-recherche]')) {
       zone.innerHTML = `
         <input type="search" class="agent-input" data-dossier-recherche placeholder="Rechercher un dossier (ex. factures adobe)" aria-label="Rechercher un dossier Outlook">
-        <div data-dossier-resultats></div>`;
+        <div data-dossier-resultats></div>
+        <div class="btn-row"><input type="text" class="agent-input" data-dossier-nouveau placeholder="Nouveau dossier (sous le dossier choisi)" maxlength="120" aria-label="Nom du nouveau dossier">
+          <button type="button" class="btn btn-secondary agent-btn" data-dossier-creer>Créer</button></div>
+        <div data-dossier-creer-res hidden></div>`;
+      // 07/10/2026 (parité « Nouveau dossier » de l'Inbox ATLAS) : sous le dossier choisi, ou à la racine.
+      const nouveau = zone.querySelector<HTMLInputElement>('[data-dossier-nouveau]')!;
+      const resCreer = zone.querySelector<HTMLElement>('[data-dossier-creer-res]')!;
+      zone.querySelector<HTMLButtonElement>('[data-dossier-creer]')!.addEventListener('click', async ev => {
+        const b = ev.currentTarget as HTMLButtonElement;
+        const nom = nouveau.value.replace(/[\\/]/g, '-').trim();
+        if (!nom) { nouveau.focus(); return; }
+        b.disabled = true;
+        resCreer.hidden = true;
+        try {
+          const parent = choisis.get(i);
+          const r = await creerDossier({ ...(mailbox ? { mailbox } : {}), ...(parent ? { parentId: parent.id, nom } : { chemin: nom }) });
+          choisis.set(i, r.dossier);
+          choisi.textContent = r.dossier.chemin;
+          zone.hidden = true;
+        } catch (e) {
+          resCreer.hidden = false;
+          resCreer.innerHTML = estVerrouFerme(e) ? '<p class="agent-error" role="alert">L\'agent n\'écrit pas encore dans cette boîte : crée le dossier dans Outlook puis choisis-le.</p>' : erreurHtml('Création impossible', e);
+        } finally { b.disabled = false; }
+      });
       const champ = zone.querySelector<HTMLInputElement>('[data-dossier-recherche]')!;
       champ.addEventListener('input', () => {
         if (minuterie) clearTimeout(minuterie);
@@ -198,7 +244,7 @@ function faitesHtml(faites: ActionFaite[]): string {
  * Cartes « Que faire de ce mail ? » dans `host` (masqué s'il n'y a rien à proposer ni rien de fait).
  * `observation` : agent en mode à blanc (les exécutions reviennent `simule: true`, on le dit).
  */
-export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: string; mailbox: string; onInfo?: InfoFn }): Promise<void> {
+export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: string; mailbox: string; onInfo?: InfoFn; delegue?: CtxDossiers['delegue'] }): Promise<void> {
   if (!ctx.messageId) { host.hidden = true; return; }
   host.hidden = false;
   host.innerHTML = `
@@ -230,6 +276,7 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
         ${a.apercu ? `<div class="agent-carte-apercu">${escapeHtml(a.apercu)}</div>` : ''}
         ${a.avertissements?.length ? `<ul class="agent-avertissements">${a.avertissements.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>` : ''}
         <div class="agent-carte-choix" data-choix-wrap="${i}" ${choix ? '' : 'hidden'}>${choix ? selectProjetHtml(i, candidats, courant) : ''}</div>
+        ${selectDevisHtml(i, a)}
         ${choixDossierRequis(a) ? `<div class="agent-carte-choix" data-dossier-wrap="${i}">
           <div class="agent-muted">Dossier Outlook : <span data-dossier-choisi="${i}">à choisir</span></div>
           <button type="button" class="btn btn-secondary agent-btn" data-dossier-ouvrir="${i}">Choisir le dossier…</button>
@@ -280,6 +327,15 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
         return;
       }
       const dossierId = dossiersChoisis.get(i)?.id || '';
+      const selDevis = host.querySelector<HTMLSelectElement>(`[data-devis="${i}"]`);
+      const devisId = selDevis?.value || '';
+      const pieceJointeId = host.querySelector<HTMLSelectElement>(`[data-pj="${i}"]`)?.value || '';
+      if (selDevis && !devisId) {
+        res.hidden = false;
+        res.innerHTML = '<p class="agent-error" role="alert">Choisis d\'abord la demande de devis.</p>';
+        selDevis.focus();
+        return;
+      }
       if (choixDossierRequis(a) && !dossierId) {
         res.hidden = false;
         res.innerHTML = '<p class="agent-error" role="alert">Choisis d\'abord le dossier Outlook.</p>';
@@ -295,7 +351,7 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
           mailbox: ctx.mailbox || undefined,
           type: a.type,
           donnees: projetId ? { ...a.donnees, projetId } : a.donnees,
-          ...(projetId || dossierId ? { choix: { ...(projetId ? { projetId } : {}), ...(dossierId ? { dossierId } : {}) } } : {}),
+          ...(projetId || dossierId || devisId || pieceJointeId ? { choix: { ...(projetId ? { projetId } : {}), ...(dossierId ? { dossierId } : {}), ...(devisId ? { devisId } : {}), ...(pieceJointeId ? { pieceJointeId } : {}) } } : {}),
         });
         if (!host.isConnected) return;
         if (r.ok) {
@@ -325,6 +381,15 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
             }
           });
           ctx.onInfo?.(r.simule ? 'Action simulée (mode à blanc)' : 'Action faite', 'success');
+          // 07/10/2026 : dossier Outlook absent (projet, mandat) → « Créer le dossier et ranger », comme l'Inbox ATLAS.
+          if (r.dossierACreer?.chemin) {
+            const zoneDossier = document.createElement('div');
+            carte.appendChild(zoneDossier);
+            void renderDossierProjet(zoneDossier, {
+              messageId: ctx.messageId, mailbox: ctx.mailbox, onInfo: ctx.onInfo, ...(ctx.delegue ? { delegue: ctx.delegue } : {}),
+              propose: r.dossierACreer.chemin, ...(r.dossierACreer.projetId ? { projetId: r.dossierACreer.projetId } : {}), ...(r.dossierACreer.mandatId ? { mandatId: r.dossierACreer.mandatId } : {}),
+            });
+          }
           return;
         }
         btn.disabled = false;

@@ -119,17 +119,19 @@ function creerActions(ctx: () => Ctx) {
         await c().rafraichir(true);
       } catch (e) { toast(humanError(e), 'error'); }
     },
-    async lierProjet(m: TableauMail) {
-      if (m.famille === 'mandats') { toast('Mandat / association : ni projet ni client', 'info'); return; }
+    /** Rattache le mail à un projet ; renvoie le projet (null si rien n'est fait) pour proposer son dossier Outlook. */
+    async lierProjet(m: TableauMail): Promise<string | null> {
+      if (m.famille === 'mandats') { toast('Mandat / association : ni projet ni client', 'info'); return null; }
       const projetId = await choisirProjet();
-      if (!projetId) return;
+      if (!projetId) return null;
       try {
         await callAtlasWorker('emails/link-projet', {
           email: { id: m.graphId, internetMessageId: m.messageId, subject: m.subject, from: m.from, receivedAt: m.receivedAt },
           projetId, linkedByName: prenomDe(c().etat.t?.moi || ''), direction: 'reçu',
         });
         toast('Mail rattaché au projet', 'success');
-      } catch (e) { toast(humanError(e), 'error'); }
+        return projetId;
+      } catch (e) { toast(humanError(e), 'error'); return null; }
     },
   };
 }

@@ -11,7 +11,8 @@
  * Sur 50 dossiers × 200 = 10k mails scannés en ~30 sec.
  */
 
-import { getApiContext, listMailFolders } from './graph';
+import { getApiContext, listAllMailFolders } from './graph';
+import { dossiersDeRangement } from '../shared/mail-folder-tree';
 import { outlookFetch } from './net';
 import { bulkRecord } from './sender-folder-index';
 
@@ -34,29 +35,11 @@ export async function scanMailboxBuildIndex(
   const ctx = await getApiContext();
   const { token, base } = ctx;
 
-  // 1. Liste tous les dossiers de premier niveau, puis enfants (2 niveaux max)
-  const roots = await listMailFolders(token);
-  const flat: Array<{ id: string; path: string }> = [];
-  for (const f of roots) {
-    if (SKIP_FOLDERS.has((f.displayName || '').toLowerCase())) continue;
-    if (!f.displayName) continue;
-    flat.push({ id: f.id, path: f.displayName });
-    try {
-      const children = await listMailFolders(token, f.id);
-      for (const c of children) {
-        if (!c.displayName) continue;
-        flat.push({ id: c.id, path: `${f.displayName}/${c.displayName}` });
-        // 3e niveau
-        try {
-          const grand = await listMailFolders(token, c.id);
-          for (const g of grand) {
-            if (!g.displayName) continue;
-            flat.push({ id: g.id, path: `${f.displayName}/${c.displayName}/${g.displayName}` });
-          }
-        } catch { /* skip */ }
-      }
-    } catch { /* skip */ }
-  }
+  // 1. ARBORESCENCE COMPLÈTE (tous niveaux, pages suivies ; 07/10/2026 : plus de limite à 3 niveaux),
+  //    sans les dossiers système ni leurs sous-arbres fermés (corbeille, indésirables, brouillons…).
+  const flat: Array<{ id: string; path: string }> = dossiersDeRangement(await listAllMailFolders(token))
+    .filter(d => d.nom && !(d.profondeur === 0 && SKIP_FOLDERS.has(d.nom.toLowerCase())))
+    .map(d => ({ id: d.id, path: d.chemin }));
 
   let mailsIndexed = 0;
   let foldersScanned = 0;

@@ -6,6 +6,7 @@
 import type { MailMessageFull, MailAttachment } from '../types';
 import { readGraphToken } from './roaming-storage';
 import { AtlasError, outlookFetch, outlookHttpError } from './net';
+import { parcourirArborescence, type DossierArbre, type PageDossiers } from '../shared/mail-folder-tree';
 
 const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 
@@ -127,6 +128,7 @@ export async function getApiBase(): Promise<string> {
 
 // ── Graph API Helpers ──
 
+
 async function graphFetch<T>(path: string, token: string, baseOverride?: string): Promise<T> {
   // Si on a un token mais pas de base override → résout via getApiBase
   const base = baseOverride || await getApiBase();
@@ -137,6 +139,17 @@ async function graphFetch<T>(path: string, token: string, baseOverride?: string)
     const err = await res.json().catch(() => ({}));
     throw outlookHttpError(res.status, path.split("?")[0], JSON.stringify(err));
   }
+  return res.json();
+}
+
+/** Page Graph / Outlook REST : chemin relatif (base de l'API ajoutée) ou URL absolue (nextLink) de la même API. */
+async function lirePageAbsolue<T>(url: string, token: string): Promise<T> {
+  if (!/^https:\/\//i.test(url)) return graphFetch<T>(url, token);
+  const base = await getApiBase();
+  const host = (u: string) => { try { return new URL(u).host.toLowerCase(); } catch { return ''; } };
+  if (host(url) !== host(base)) throw new AtlasError('requete', 'lien de page inattendu', { service: 'outlook', route: 'mailFolders' });
+  const res = await outlookFetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
+  if (!res.ok) throw outlookHttpError(res.status, 'mailFolders');
   return res.json();
 }
 
@@ -240,19 +253,43 @@ export async function getCurrentUser(token: string): Promise<{ displayName: stri
 
 // ── Mail Folder Management ──
 
-/** List mail folders (optionally under a parent folder) */
+/**
+ * List mail folders (optionally under a parent folder). 07/10/2026 : TOUTES les pages suivies
+ * (@odata.nextLink / Outlook REST « @odata.nextLink »), plus de coupure à 200 dossiers par niveau.
+ */
 export async function listMailFolders(
   token: string, parentFolderId?: string
 ): Promise<Array<{ id: string; displayName: string }>> {
   const base = parentFolderId
     ? `/me/mailFolders/${parentFolderId}/childFolders`
     : '/me/mailFolders';
-  const data = await graphFetch<{ value: any[] }>(`${base}?$top=200&$select=id,displayName`, token);
-  // Outlook REST v2.0 peut renvoyer PascalCase (Id/DisplayName) selon le mode.
-  return (data.value ?? []).map((f: any) => ({
-    id: f.id || f.Id || '',
-    displayName: f.displayName || f.DisplayName || '',
-  }));
+  const out: Array<{ id: string; displayName: string }> = [];
+  let url: string | undefined = `${base}?$top=250&$select=id,displayName`;
+  const vues = new Set<string>();
+  while (url && !vues.has(url)) {
+    vues.add(url);
+    const data: any = await lirePageAbsolue<any>(url, token);
+    // Outlook REST v2.0 peut renvoyer PascalCase (Id/DisplayName) selon le mode.
+    for (const f of (data.value ?? [])) out.push({ id: f.id || f.Id || '', displayName: f.displayName || f.DisplayName || '' });
+    url = data['@odata.nextLink'] || undefined;
+  }
+  return out;
+}
+
+/**
+ * ARBORESCENCE COMPLÈTE de la boîte (tous niveaux, pages suivies ; plafond de sûreté 5 000 signalé
+ * en console). Même parcours que le worker et ATLAS (src/utils/mail-folder-tree.ts).
+ */
+export async function listAllMailFolders(token: string): Promise<DossierArbre[]> {
+  const sel = '$top=250&$select=id,displayName,childFolderCount';
+  const r = await parcourirArborescence({
+    racine: `/me/mailFolders?${sel}`,
+    enfants: id => `/me/mailFolders/${encodeURIComponent(id)}/childFolders?${sel}`,
+    lirePage: url => lirePageAbsolue<PageDossiers>(url, token),
+    surPlafond: n => console.warn(`[graph] arborescence : plafond de sûreté de ${n} dossiers atteint`),
+    surErreur: (chemin, e) => console.warn('[graph] sous-dossiers illisibles :', chemin, e),
+  });
+  return r.dossiers;
 }
 
 /** Navigate a folder path like "Clients/LUNEX/#530 Project" and return the leaf folder ID */

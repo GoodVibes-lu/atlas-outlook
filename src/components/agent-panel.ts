@@ -51,7 +51,8 @@ import {
   renderTraduction, renderModeles, renderFicheContact, renderDetections, renderPiecesLourdes,
 } from './agent-outils';
 import { renderEquipe } from './agent-equipe';
-import { convertToRestId } from '../api/graph';
+import { convertToRestId, getGraphToken } from '../api/graph';
+import { renderOffreRecue, renderClasserOutlook } from './agent-dossiers';
 import { escapeHtml } from '../utils/html';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
@@ -202,6 +203,10 @@ export class AgentPanel {
         <section id="agent-actions-metier" class="agent-section" hidden></section>
 
         <section id="agent-rappels" class="agent-section" hidden></section>
+
+        <section id="agent-offre" class="agent-section" hidden></section>
+
+        <section id="agent-classer" class="agent-section" hidden></section>
 
         <section class="agent-section">
           <div class="agent-section-title">Correspondant</div>
@@ -535,7 +540,7 @@ export class AgentPanel {
     const it = this.item;
     if (!it || !s.mailbox || s.mailbox.toLowerCase() === (it.mailbox || '').toLowerCase()) return;
     const actions = this.$('agent-actions-metier');
-    if (actions) renderActionsMetier(actions, { messageId: it.messageId, mailbox: s.mailbox, onInfo: showToast });
+    if (actions) renderActionsMetier(actions, { messageId: it.messageId, mailbox: s.mailbox, onInfo: showToast, delegue: this.delegue });
     const rappels = this.$('agent-rappels');
     if (rappels) { rappels.hidden = true; rappels.innerHTML = ''; }
   }
@@ -553,7 +558,12 @@ export class AgentPanel {
     // Phase 5 : bloc masqué si le mail n'est pas dans good@ ou si la personne n'en est pas membre.
     if (equipe) renderEquipe(equipe, { messageId: it.messageId, onInfo, onChange });
     const actions = this.$('agent-actions-metier');
-    if (actions) renderActionsMetier(actions, { messageId: it.messageId, mailbox: it.mailbox, onInfo });
+    if (actions) renderActionsMetier(actions, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue });
+    // 07/10/2026 (parité Inbox ATLAS) : « Offre fournisseur reçue » et « Classer dans Outlook » (arbre complet, nouveau dossier).
+    const offre = this.$('agent-offre');
+    if (offre && !this.mobile) renderOffreRecue(offre, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue, repondre: (html: string) => this.repondreHtml(html) });
+    const classer = this.$('agent-classer');
+    if (classer) renderClasserOutlook(classer, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue });
     const rappels = this.$('agent-rappels');
     // Mail envoyé par la personne (Éléments envoyés, ou lu dans un fil) : relance ; sinon plus tard.
     const envoye = !!it.fromEmail && !!it.mailbox && it.fromEmail.toLowerCase() === it.mailbox.toLowerCase();
@@ -578,6 +588,26 @@ export class AgentPanel {
         },
       });
     }
+  }
+
+  /**
+   * Repli « jeton de la personne » (comme l'Inbox ATLAS) quand l'agent ne peut pas écrire dans la boîte
+   * (double verrou fermé) : SA boîte seulement (jamais une boîte partagée), mail ouvert dans Outlook.
+   */
+  private delegue = async (): Promise<{ token: string; restId: string } | null> => {
+    try {
+      const it = this.item;
+      if (!it?.itemId) return null;
+      const moi = String(Office.context?.mailbox?.userProfile?.emailAddress || '').toLowerCase();
+      if (it.mailbox && moi && it.mailbox.toLowerCase() !== moi) return null;
+      return { token: await getGraphToken(), restId: convertToRestId(it.itemId) };
+    } catch { return null; }
+  };
+
+  /** Réponse préremplie (HTML déjà prêt, ex. remerciement ARGO) : rien n'est envoyé. */
+  private repondreHtml(html: string): void {
+    try { (Office.context.mailbox.item as any).displayReplyForm({ htmlBody: html }); }
+    catch (e) { console.warn('[AgentPanel] réponse préremplie impossible :', e); showToast('Réponse préremplie impossible ici : copie le texte.', 'error'); }
   }
 
   /** Pièces jointes du mail lu (item.attachments, Mailbox 1.0, mobile compris). */

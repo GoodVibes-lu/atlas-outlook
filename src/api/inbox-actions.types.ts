@@ -86,6 +86,8 @@ export interface ResultatExecution {
   erreur?: string;
   /** true = mode à blanc : rien n'a été écrit, l'action est seulement simulée. */
   simule?: boolean;
+  /** 07/10/2026 : dossier Outlook absent (projet, mandat) : chemin proposé à la création. */
+  dossierACreer?: { chemin: string; projetId?: string; mandatId?: string };
 }
 
 /** Projet candidat proposé par la détection (`donnees.candidats`, inbox-actions/commun.ts). */

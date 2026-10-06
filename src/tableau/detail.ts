@@ -9,10 +9,11 @@ import type { Ctx } from './app';
 import type { DigestNewsletter, ReponseRedigee, TableauMail } from '../api/tableau';
 import { deposerBrouillon, programmerEnvoi, redigerArgo, remplirModeleTableau } from '../api/tableau';
 import {
-  fetchActions, executerAction, fetchEquipe, relacherMail, attribuerMail, ajouterCommentaire, fetchModeles, demanderRelance,
+  fetchEquipe, relacherMail, attribuerMail, ajouterCommentaire, fetchModeles, demanderRelance,
   type ModeleReponse,
 } from '../api/agent';
-import { copierTexte } from '../components/agent-outils';
+import { copierTexte, renderActionsMetier } from '../components/agent-outils';
+import { renderDossierProjet, renderOffreRecue, renderClasserOutlook } from '../components/agent-dossiers';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
 import { filtrerCommandes, ilYA, prenomDe, quandLisible } from './logique';
@@ -44,6 +45,9 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
       </div>
     </div>
     <div class="tb-panel" id="tb-propositions"><div class="tb-h">L'agent propose</div><div class="tb-note">Chargement…</div></div>
+    <div class="tb-panel" id="tb-dossier-projet" hidden></div>
+    ${envoye ? '' : `<div class="tb-panel" id="tb-offre"></div>`}
+    <div class="tb-panel" id="tb-classer"></div>
     <div class="tb-panel" id="tb-composer" hidden></div>
     <div class="tb-panel" id="tb-equipe" hidden></div>`;
 
@@ -51,7 +55,13 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
   on('[data-a="ouvrir"]', () => ctx.actions.ouvrir(m));
   on('[data-a="cote"]', () => void ctx.actions.deCote(m));
   on('[data-a="remettre"]', () => void ctx.actions.remettre(m));
-  on('[data-a="projet"]', () => void ctx.actions.lierProjet(m));
+  // 07/10/2026 (parité Inbox ATLAS) : après le rattachement, dossier Outlook du projet (existant n'importe
+  // où dans l'arbre, sinon « Créer le dossier et ranger » au même endroit et avec le même nom qu'ATLAS).
+  on('[data-a="projet"]', async () => {
+    const projetId = await ctx.actions.lierProjet(m);
+    const zone = host.querySelector<HTMLElement>('#tb-dossier-projet');
+    if (projetId && zone) void renderDossierProjet(zone, { messageId: m.messageId, mailbox: m.mailbox, onInfo: toast, projetId });
+  });
   on('[data-a="relance"]', async () => {
     const jours = await choisirJours();
     if (!jours) return;
@@ -64,6 +74,11 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
   // Mandat / association : aucune action commerciale proposée.
   if (m.famille === 'mandats') host.querySelector('#tb-propositions')!.innerHTML = '<div class="tb-h">Mandat / association</div><p class="tb-note">Ni projet, ni client, ni prospect : aucune action commerciale proposée.</p>';
   else void propositions(host.querySelector('#tb-propositions')!, m);
+  const offre = host.querySelector<HTMLElement>('#tb-offre');
+  if (offre && m.famille !== 'mandats') renderOffreRecue(offre, { messageId: m.messageId, mailbox: m.mailbox, onInfo: toast });
+  else if (offre) offre.hidden = true;
+  const classer = host.querySelector<HTMLElement>('#tb-classer');
+  if (classer) renderClasserOutlook(classer, { messageId: m.messageId, mailbox: m.mailbox, onInfo: toast });
   if (!perso) void equipe(host.querySelector('#tb-equipe')!, m, ctx);
 }
 
@@ -79,26 +94,16 @@ async function choisirJours(): Promise<number | null> {
   });
 }
 
+/**
+ * « L'agent propose » : mêmes cartes que le panneau du mail (agent-outils › renderActionsMetier),
+ * choix compris (projet, demande de devis, pièce jointe, dossier Outlook) et « Créer le dossier »
+ * (07/10/2026 : plus de renvoi vers le panneau du mail pour un choix).
+ */
 async function propositions(host: HTMLElement, m: TableauMail): Promise<void> {
-  try {
-    const r = await fetchActions(m.messageId, m.mailbox);
-    if (!r.actions.length && !r.faites.length) { host.innerHTML = '<div class="tb-h">L\'agent propose</div><p class="tb-note">Rien de plus à faire dans ATLAS pour ce mail.</p>'; return; }
-    host.innerHTML = `<div class="tb-h">L'agent propose</div>
-      ${r.actions.map((a, i) => `<div class="tb-eng"><p><b>${h(a.libelle)}</b><br><small>${h(a.apercu || '')}</small></p><button type="button" class="tb-btn" data-i="${i}">Faire</button></div>`).join('')}
-      ${r.faites.map(f => `<div class="tb-eng"><p>${icon('check-circle', 14)} ${h(f.resume)}</p><small>${h(ilYA(f.at, Date.now()))}</small></div>`).join('')}`;
-    host.querySelectorAll<HTMLButtonElement>('[data-i]').forEach(b => b.addEventListener('click', async () => {
-      const a = r.actions[Number(b.dataset.i)];
-      b.disabled = true;
-      try {
-        const x = await executerAction({ messageId: m.messageId, mailbox: m.mailbox, type: a.type, donnees: a.donnees });
-        if (x.ok) { toast(x.resume || 'Fait', 'success'); void propositions(host, m); }
-        else toast(x.erreur === 'choix-requis' ? 'Un choix est nécessaire : ouvre le mail et le panneau ATLAS' : (x.resume || 'Action impossible'), 'error');
-      } catch (e) { toast(humanError(e), 'error'); }
-      b.disabled = false;
-    }));
-  } catch (e) {
-    host.innerHTML = `<div class="tb-h">L'agent propose</div><p class="tb-note">${h(humanError(e))}</p>`;
-  }
+  host.innerHTML = '<div data-cartes></div>';
+  const cartes = host.querySelector<HTMLElement>('[data-cartes]')!;
+  await renderActionsMetier(cartes, { messageId: m.messageId, mailbox: m.mailbox, onInfo: toast });
+  if (cartes.hidden) host.innerHTML = '<div class="tb-h">L\'agent propose</div><p class="tb-note">Rien de plus à faire dans ATLAS pour ce mail.</p>';
 }
 
 // ── Réponse : ARGO ou modèle, déposée dans le brouillon Outlook ──

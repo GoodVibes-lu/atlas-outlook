@@ -571,3 +571,74 @@ export async function restaurerNewsletter(actionId: string, interessant = true):
   await pluginFetch('POST', 'agent/newsletters/restaurer', { actionId, interessant });
   invalidateJournee();
 }
+
+// ── Dossiers Outlook (arbre complet, création, rangement sur clic) et « Offre reçue » (07/10/2026) ──
+
+/** true si l'erreur est le refus « double verrou fermé » du worker (rien n'a été écrit). */
+export function estVerrouFerme(e: unknown): boolean {
+  return e instanceof PluginHttpError && e.status === 409 && (e as any).data?.erreur === 'verrou';
+}
+
+/** GET /api/plugin/agent/dossiers?mailbox=&q= : arborescence COMPLÈTE de la boîte (tous niveaux), recherche par mots. */
+export async function fetchDossiers(mailbox?: string, recherche?: string): Promise<DossierOutlook[]> {
+  const q = new URLSearchParams();
+  if (mailbox) q.set('mailbox', mailbox);
+  if (recherche) q.set('q', recherche);
+  const s = q.toString();
+  const r = await pluginFetch<{ dossiers?: Array<Partial<DossierOutlook>> }>('GET', `agent/dossiers${s ? `?${s}` : ''}`);
+  return Array.isArray(r.dossiers) ? r.dossiers.filter(d => d && typeof d.id === 'string' && typeof d.chemin === 'string').map(d => ({ id: String(d.id), chemin: String(d.chemin) })) : [];
+}
+
+export interface DossierDuProjet { existant: DossierOutlook | null; propose: string | null; verrou: boolean }
+
+/** GET /api/plugin/agent/dossiers/projet : dossier existant du projet (n'importe où dans l'arbre) ou chemin proposé. */
+export async function fetchDossierProjet(projetId: string, mailbox?: string): Promise<DossierDuProjet> {
+  const q = new URLSearchParams({ projetId });
+  if (mailbox) q.set('mailbox', mailbox);
+  const r = await pluginFetch<any>('GET', `agent/dossiers/projet?${q.toString()}`);
+  const ex = r?.existant && typeof r.existant.id === 'string' ? { id: String(r.existant.id), chemin: String(r.existant.chemin || '') } : null;
+  return { existant: ex, propose: typeof r?.propose === 'string' ? r.propose : null, verrou: r?.verrou === true };
+}
+
+/** POST /api/plugin/agent/dossiers/creer : crée le dossier (niveaux manquants) ; lève (409 verrou) si l'agent ne peut pas écrire. */
+export async function creerDossier(args: { mailbox?: string; chemin?: string; parentId?: string; nom?: string }): Promise<{ dossier: DossierOutlook; cree: boolean }> {
+  const r = await pluginFetch<any>('POST', 'agent/dossiers/creer', args);
+  return { dossier: { id: String(r?.dossier?.id || ''), chemin: String(r?.dossier?.chemin || '') }, cree: r?.cree === true };
+}
+
+/** POST /api/plugin/agent/dossiers/ranger : (crée puis) range le mail ; annulable par actionId. */
+export async function rangerDansDossier(args: { messageId: string; mailbox?: string; dossierId?: string; projetId?: string; creer?: { chemin: string; projetId?: string; mandatId?: string } }): Promise<{ dossier: DossierOutlook; cree: boolean; actionId?: string }> {
+  const r = await pluginFetch<any>('POST', 'agent/dossiers/ranger', args);
+  invalidateJournee();
+  return { dossier: { id: String(r?.dossier?.id || ''), chemin: String(r?.dossier?.chemin || '') }, cree: r?.cree === true, ...(typeof r?.actionId === 'string' ? { actionId: r.actionId } : {}) };
+}
+
+export interface OffreFournisseurContexte {
+  mailbox: string;
+  projetId: string | null;
+  projets: Array<{ id: string; libelle: string }>;
+  demandes: Array<{ id: string; libelle: string; statut: string; note: number }>;
+  devisId: string | null;
+  pieces: Array<{ id: string; nom: string; pdf: boolean; devis: boolean }>;
+  pieceJointeId: string | null;
+}
+
+/** GET /api/plugin/agent/offre-fournisseur : « Offre reçue » (projet, demandes de devis notées, pièces). */
+export async function fetchOffreFournisseur(messageId: string, mailbox?: string, projetId?: string): Promise<OffreFournisseurContexte> {
+  const q = new URLSearchParams({ messageId });
+  if (mailbox) q.set('mailbox', mailbox);
+  if (projetId) q.set('projetId', projetId);
+  const r = await pluginFetch<any>('GET', `agent/offre-fournisseur?${q.toString()}`);
+  return {
+    mailbox: String(r?.mailbox || ''), projetId: typeof r?.projetId === 'string' ? r.projetId : null,
+    projets: Array.isArray(r?.projets) ? r.projets : [], demandes: Array.isArray(r?.demandes) ? r.demandes : [],
+    devisId: typeof r?.devisId === 'string' ? r.devisId : null, pieces: Array.isArray(r?.pieces) ? r.pieces : [],
+    pieceJointeId: typeof r?.pieceJointeId === 'string' ? r.pieceJointeId : null,
+  };
+}
+
+/** POST /api/plugin/agent/offre-fournisseur/remerciement : remerciement ARGO à reprendre dans la réponse (jamais envoyé). */
+export async function preparerRemerciementOffre(messageId: string, mailbox?: string, devisId?: string): Promise<{ html: string; texte: string }> {
+  const r = await pluginFetch<any>('POST', 'agent/offre-fournisseur/remerciement', { messageId, ...(mailbox ? { mailbox } : {}), ...(devisId ? { devisId } : {}) });
+  return { html: String(r?.html || ''), texte: String(r?.texte || '') };
+}

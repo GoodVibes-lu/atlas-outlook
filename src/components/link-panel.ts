@@ -3,7 +3,8 @@
  */
 
 import { getLinkedConversationIds, getAllLinkedEmailIds, linkEmailToProject, linkEmailToContact, getAllProjets, resolveClientIdInProjetsBase, getFolderMapping, saveFolderMapping } from '../api/airtable';
-import { getGraphToken, getMessageForLinking, convertToRestId, moveMessageToFolder, ensureFolderPath, resolveFolderPath } from '../api/graph';
+import { getGraphToken, getMessageForLinking, convertToRestId, moveMessageToFolder, ensureFolderPath, resolveFolderPath, listAllMailFolders } from '../api/graph';
+import { dossiersDeRangement, trouverDossierProjet, cheminDossierProjetPropose } from '../shared/mail-folder-tree';
 import { summarizeEmail } from '../api/argo';
 import { SearchPicker } from './search-picker';
 import type { SearchResult, MailMessageFull, Projet } from '../types';
@@ -372,10 +373,37 @@ export class LinkPanel {
           document.getElementById('move-to-folder-btn')!.closest('div')!.parentElement!.remove();
         });
       } else {
-        // No mapping — offer to create a folder
-        const suggestedPath = result.type === 'projet'
-          ? `Clients/${result.detail || 'Client'}/${result.label}`
-          : `Clients/${result.label}`;
+        // Pas de dossier appris (07/10/2026, parité Inbox ATLAS) : dossier du projet cherché dans TOUTE
+        // l'arborescence (n° de projet d'abord, puis nom) ; sinon chemin proposé à la même place et avec
+        // le même nom que l'Inbox ATLAS (« Clients/<Client>/#755 Nom »).
+        let suggestedPath = `Clients/${result.label}`;
+        if (result.type === 'projet') {
+          const arbre = dossiersDeRangement(await listAllMailFolders(token));
+          const p = (await getAllProjets().catch(() => [] as Projet[])).find(x => x.id === result.id);
+          const projet = { numero: p?.noProjet, nom: p?.denomination || result.label, clientNom: p?.client || result.detail || '' };
+          const trouve = trouverDossierProjet(arbre, projet);
+          if (trouve) {
+            statusEl.innerHTML += `
+              <div class="card folder-card is-known" style="margin-top:10px;">
+                <div class="folder-card-icon">${icon('folder', 18)}</div>
+                <div class="folder-card-body"><span class="eyebrow">Dossier du projet</span><p class="folder-card-title">${this.escapeHtml(trouve.dossier.chemin)}</p>
+                <div class="btn-row">
+                  <button class="btn btn-primary btn-sm" id="move-found-btn">Déplacer dans le dossier</button>
+                </div></div>
+              </div>`;
+            document.getElementById('move-found-btn')?.addEventListener('click', async () => {
+              try {
+                await moveMessageToFolder(token, messageId, trouve.dossier.id);
+                await saveFolderMapping(userEmail, 'projet', result.id, trouve.dossier.chemin, trouve.dossier.id).catch(() => undefined);
+                showToast(`Email déplacé dans ${trouve.dossier.chemin}`, 'success');
+                document.getElementById('move-found-btn')!.closest('div')!.parentElement!.innerHTML =
+                  `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans le dossier</p>`;
+              } catch (err) { showToast(`${humanError(err)}`, 'error'); }
+            });
+            return;
+          }
+          suggestedPath = cheminDossierProjetPropose(projet, arbre);
+        }
 
         statusEl.innerHTML += `
           <div class="card stack-sm" style="margin-top:10px;">
