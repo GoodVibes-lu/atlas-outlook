@@ -26,7 +26,7 @@
 import {
   fetchActions, executerAction, annulerAction, mettrePlusTard, retirerPlusTard, demanderRelance,
   annulerRelance, poserQuestion, fetchResumeFil, fetchRattrapage,
-  traduire, fetchModeles, remplirModele, fetchFicheContact, verifierPiecesLourdes, creerLienCourt, deposerPiecesLourdes, fetchDossiersNas,
+  traduire, fetchModeles, remplirModele, fetchFicheContact, verifierPiecesLourdes, creerLienCourt, deposerPiecesLourdes, fetchDossiersFactures,
   type DepotPiecesLourdes,
   type LangueTraduction, type ModeleReponse, type ModeleRempli, type DetectionsMail,
 } from '../api/agent';
@@ -126,45 +126,61 @@ function selectProjetHtml(i: number, candidats: CandidatChoix[], courant = ''): 
     </select>`;
 }
 
-/** Facture hors projet sans règle apprise : le dossier du NAS est à choisir (cadrage du 06/10/2026). */
+/** Facture hors projet sans règle apprise : le dossier Outlook est à choisir (cadrage du 06/10/2026, corrigé). */
 function choixDossierRequis(a: ActionProposee): boolean {
   return a.type === 'facture-hors-projet' && (a.donnees as any)?.choixDossier === true;
 }
 
 /**
- * Sélecteur de dossier du NAS (GET /api/plugin/agent/nas/dossiers) : navigation dans les
- * sous-dossiers existants de la racine des factures, « Ranger ici » fixe le choix. Jamais de création.
+ * Sélecteur de DOSSIER OUTLOOK (GET /api/plugin/agent/factures/dossiers) : arborescence complète
+ * de la boîte qui a reçu le mail (sous-dossiers compris), recherche par mots ; un clic fixe le
+ * choix. Le mail y sera déplacé (jamais de création de dossier, jamais le NAS).
  */
-function brancherSelecteurDossier(host: HTMLElement, i: number, choisis: Map<number, string>): void {
+function brancherSelecteurDossier(host: HTMLElement, i: number, mailbox: string, choisis: Map<number, { id: string; chemin: string }>): void {
   const ouvrir = host.querySelector<HTMLButtonElement>(`[data-dossier-ouvrir="${i}"]`);
-  const liste = host.querySelector<HTMLElement>(`[data-dossier-liste="${i}"]`);
+  const zone = host.querySelector<HTMLElement>(`[data-dossier-liste="${i}"]`);
   const choisi = host.querySelector<HTMLElement>(`[data-dossier-choisi="${i}"]`);
-  if (!ouvrir || !liste || !choisi) return;
-  const afficher = async (chemin?: string) => {
-    liste.hidden = false;
-    liste.innerHTML = '<div class="agent-loading"><div class="spinner"></div><span>Dossiers du NAS…</span></div>';
+  if (!ouvrir || !zone || !choisi) return;
+  let minuterie: ReturnType<typeof setTimeout> | undefined;
+  let demande = 0;
+  const afficher = async (recherche: string) => {
+    const liste = zone.querySelector<HTMLElement>('[data-dossier-resultats]');
+    if (!liste) return;
+    const n = ++demande;
+    liste.innerHTML = '<div class="agent-loading"><div class="spinner"></div><span>Dossiers Outlook…</span></div>';
     try {
-      const d = await fetchDossiersNas(chemin);
-      const parent = d.chemin && d.chemin !== d.racine ? d.chemin.slice(0, d.chemin.lastIndexOf('/')) : '';
-      liste.innerHTML = `
-        <div class="agent-muted">${escapeHtml(d.chemin)}</div>
-        <ul class="agent-faites">
-          ${parent ? `<li><button type="button" class="agent-link" data-nas-aller="${escapeHtml(parent)}">Dossier parent</button></li>` : ''}
-          ${d.dossiers.map(x => `<li><button type="button" class="agent-link" data-nas-aller="${escapeHtml(x.chemin)}">${escapeHtml(x.nom)}</button></li>`).join('')}
-        </ul>
-        <button type="button" class="btn btn-secondary agent-btn" data-nas-ici="${escapeHtml(d.chemin)}">Ranger ici</button>`;
-      liste.querySelectorAll<HTMLButtonElement>('[data-nas-aller]').forEach(b => b.addEventListener('click', () => { void afficher(b.dataset.nasAller); }));
-      liste.querySelector<HTMLButtonElement>('[data-nas-ici]')?.addEventListener('click', (e) => {
-        const c = (e.currentTarget as HTMLButtonElement).dataset.nasIci || '';
-        choisis.set(i, c);
-        choisi.textContent = c;
-        liste.hidden = true;
-      });
+      const dossiers = await fetchDossiersFactures(mailbox || undefined, recherche || undefined);
+      if (n !== demande || !liste.isConnected) return;
+      liste.innerHTML = dossiers.length
+        ? `<ul class="agent-faites">${dossiers.map((d, k) => `<li><button type="button" class="agent-link" data-dossier-k="${k}">${escapeHtml(d.chemin)}</button></li>`).join('')}</ul>`
+        : '<div class="agent-muted">Aucun dossier ne correspond.</div>';
+      liste.querySelectorAll<HTMLButtonElement>('[data-dossier-k]').forEach(b => b.addEventListener('click', () => {
+        const d = dossiers[Number(b.dataset.dossierK)];
+        if (!d) return;
+        choisis.set(i, d);
+        choisi.textContent = d.chemin;
+        zone.hidden = true;
+      }));
     } catch (e) {
-      liste.innerHTML = erreurHtml('Dossiers indisponibles', e);
+      if (n === demande) liste.innerHTML = erreurHtml('Dossiers Outlook indisponibles', e);
     }
   };
-  ouvrir.addEventListener('click', () => { void afficher(choisis.get(i) || undefined); });
+  ouvrir.addEventListener('click', () => {
+    if (!zone.hidden) { zone.hidden = true; return; }
+    zone.hidden = false;
+    if (!zone.querySelector('[data-dossier-recherche]')) {
+      zone.innerHTML = `
+        <input type="search" class="agent-input" data-dossier-recherche placeholder="Rechercher un dossier (ex. factures adobe)" aria-label="Rechercher un dossier Outlook">
+        <div data-dossier-resultats></div>`;
+      const champ = zone.querySelector<HTMLInputElement>('[data-dossier-recherche]')!;
+      champ.addEventListener('input', () => {
+        if (minuterie) clearTimeout(minuterie);
+        minuterie = setTimeout(() => { void afficher(champ.value.trim()); }, 250);
+      });
+      champ.focus();
+    }
+    void afficher(zone.querySelector<HTMLInputElement>('[data-dossier-recherche]')?.value.trim() || '');
+  });
 }
 
 function faitesHtml(faites: ActionFaite[]): string {
@@ -215,7 +231,7 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
         ${a.avertissements?.length ? `<ul class="agent-avertissements">${a.avertissements.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>` : ''}
         <div class="agent-carte-choix" data-choix-wrap="${i}" ${choix ? '' : 'hidden'}>${choix ? selectProjetHtml(i, candidats, courant) : ''}</div>
         ${choixDossierRequis(a) ? `<div class="agent-carte-choix" data-dossier-wrap="${i}">
-          <div class="agent-muted">Dossier du NAS : <span data-dossier-choisi="${i}">à choisir</span></div>
+          <div class="agent-muted">Dossier Outlook : <span data-dossier-choisi="${i}">à choisir</span></div>
           <button type="button" class="btn btn-secondary agent-btn" data-dossier-ouvrir="${i}">Choisir le dossier…</button>
           <div data-dossier-liste="${i}" hidden></div>
         </div>` : ''}
@@ -244,8 +260,8 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
     });
   });
 
-  const dossiersChoisis = new Map<number, string>();
-  cartes.forEach((a, i) => { if (choixDossierRequis(a)) brancherSelecteurDossier(host, i, dossiersChoisis); });
+  const dossiersChoisis = new Map<number, { id: string; chemin: string }>();
+  cartes.forEach((a, i) => { if (choixDossierRequis(a)) brancherSelecteurDossier(host, i, ctx.mailbox, dossiersChoisis); });
 
   host.querySelectorAll<HTMLButtonElement>('button[data-exec]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -263,10 +279,10 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
         select.focus();
         return;
       }
-      const dossierNas = dossiersChoisis.get(i) || '';
-      if (choixDossierRequis(a) && !dossierNas) {
+      const dossierId = dossiersChoisis.get(i)?.id || '';
+      if (choixDossierRequis(a) && !dossierId) {
         res.hidden = false;
-        res.innerHTML = '<p class="agent-error" role="alert">Choisis d\'abord le dossier du NAS.</p>';
+        res.innerHTML = '<p class="agent-error" role="alert">Choisis d\'abord le dossier Outlook.</p>';
         return;
       }
       btn.disabled = true;
@@ -279,7 +295,7 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
           mailbox: ctx.mailbox || undefined,
           type: a.type,
           donnees: projetId ? { ...a.donnees, projetId } : a.donnees,
-          ...(projetId || dossierNas ? { choix: { ...(projetId ? { projetId } : {}), ...(dossierNas ? { dossierNas } : {}) } } : {}),
+          ...(projetId || dossierId ? { choix: { ...(projetId ? { projetId } : {}), ...(dossierId ? { dossierId } : {}) } } : {}),
         });
         if (!host.isConnected) return;
         if (r.ok) {

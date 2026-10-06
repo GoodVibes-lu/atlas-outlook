@@ -539,17 +539,21 @@ export async function fetchAutoDraft(args: {
 
 // ── Cadrage Outlook du 06/10/2026 (section A) ──
 
-/** Dossier du NAS (factures hors projet) : sous-dossiers existants d'un chemin (racine par défaut). */
-export interface DossiersNas { racine: string; chemin: string; dossiers: Array<{ nom: string; chemin: string }> }
+/** Dossier Outlook de la boîte (factures hors projet) : id Graph + chemin lisible (« Comptabilité/Factures/Adobe »). */
+export interface DossierOutlook { id: string; chemin: string }
 
-/** GET /api/plugin/agent/nas/dossiers?chemin= : sélecteur du dossier de rangement d'une facture hors projet. */
-export async function fetchDossiersNas(chemin?: string): Promise<DossiersNas> {
-  const r = await pluginFetch<Partial<DossiersNas>>('GET', `agent/nas/dossiers${chemin ? `?chemin=${encodeURIComponent(chemin)}` : ''}`);
-  return {
-    racine: String(r.racine || ''),
-    chemin: String(r.chemin || ''),
-    dossiers: Array.isArray(r.dossiers) ? r.dossiers.filter(d => d && typeof d.chemin === 'string').map(d => ({ nom: String(d.nom || d.chemin), chemin: String(d.chemin) })) : [],
-  };
+/**
+ * GET /api/plugin/agent/factures/dossiers?mailbox=&q= : dossiers Outlook (arborescence complète,
+ * sous-dossiers compris) de la boîte qui a reçu le mail, filtrés par la recherche. Le mail sera
+ * DÉPLACÉ dans le dossier choisi (jamais un fichier sur le NAS ni le cloud).
+ */
+export async function fetchDossiersFactures(mailbox?: string, recherche?: string): Promise<DossierOutlook[]> {
+  const q = new URLSearchParams();
+  if (mailbox) q.set('mailbox', mailbox);
+  if (recherche) q.set('q', recherche);
+  const s = q.toString();
+  const r = await pluginFetch<{ dossiers?: Array<Partial<DossierOutlook>> }>('GET', `agent/factures/dossiers${s ? `?${s}` : ''}`);
+  return Array.isArray(r.dossiers) ? r.dossiers.filter(d => d && typeof d.id === 'string' && typeof d.chemin === 'string').map(d => ({ id: String(d.id), chemin: String(d.chemin) })) : [];
 }
 
 /** Newsletter jetée par l'agent (récapitulatif « supprimées aujourd'hui »). */
