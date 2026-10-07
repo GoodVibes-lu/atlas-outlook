@@ -54,6 +54,7 @@ import { renderEquipe } from './agent-equipe';
 import { convertToRestId, getGraphToken } from '../api/graph';
 import { renderOffreRecue, renderClasserOutlook } from './agent-dossiers';
 import { renderPlusActions } from './agent-parite';
+import { renderSecurite } from './agent-securite';
 import { escapeHtml } from '../utils/html';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
@@ -169,6 +170,7 @@ export class AgentPanel {
     this.navigate = navigate;
     this.item = readCurrentItem();
     this.renderShell();
+    this.loadSecurite();
     this.loadState();
     this.loadCorrespondant();
     this.renderOutils();
@@ -193,6 +195,8 @@ export class AgentPanel {
     }
     this.root.innerHTML = `
       <div class="agent-panel ${this.mobile ? 'is-mobile' : ''}">
+        <section id="agent-securite" class="agent-securite" hidden></section>
+
         <div id="agent-state" class="agent-state">
           <div class="agent-loading"><div class="spinner"></div><span>Lecture de l'état de l'agent…</span></div>
         </div>
@@ -260,6 +264,14 @@ export class AgentPanel {
       why.hidden = !why.hidden;
       toggle.setAttribute('aria-expanded', String(!why.hidden));
     });
+  }
+
+  // ── Sécurité du mail (backlog reczJ0zLhPXqkWF9S) : bandeau rouge en tête, masqué si risque faible ──
+
+  private loadSecurite(): void {
+    const host = this.$('agent-securite');
+    if (!host || !this.item?.messageId) return;
+    void renderSecurite(host, { messageId: this.item.messageId, onInfo: showToast });
   }
 
   // ── État de l'agent (sans IA) ──

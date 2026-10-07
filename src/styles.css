@@ -792,3 +792,23 @@ body.tdb { background: var(--bg); }
 .tdb-outils { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 @media (hover: hover) { .tdb-tile.is-clickable:hover { background: var(--surface-high); } }
 @media (max-width: 720px) { .tdb-columns, .tdb-outils { grid-template-columns: 1fr; } }
+
+/* ── Sécurité d'un mail (backlog reczJ0zLhPXqkWF9S) : bandeau en tête de « Ce mail » ── */
+.agent-securite { margin-bottom: 12px; }
+.secu-bandeau { padding: 12px; border: 1px solid var(--danger-border); border-left: 4px solid var(--danger); border-radius: var(--r-card); background: var(--danger-bg); color: var(--text, inherit); }
+.secu-bandeau.is-verifier { border-left-color: #b54708; }
+.secu-titre { display: flex; align-items: center; gap: 6px; font-weight: 700; color: var(--danger); margin-bottom: 6px; }
+.secu-bandeau.is-verifier .secu-titre { color: #b54708; }
+.secu-raisons { margin: 0 0 8px; padding-left: 18px; }
+.secu-raisons li { margin: 2px 0; line-height: 1.4; }
+.secu-note { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; margin: 4px 0; opacity: .9; }
+.secu-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.secu-btns .agent-btn { flex: 1 1 auto; min-width: 0; }
+.secu-res { margin-top: 8px; font-size: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.secu-prevenir { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--danger-border); }
+.secu-sous-titre { font-weight: 600; margin-bottom: 2px; }
+.secu-bloc { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.secu-label { font-size: 12px; font-weight: 600; }
+.secu-ligne { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.secu-ok { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 8px 0; }
+@media (prefers-color-scheme: dark) { .secu-bandeau.is-verifier { border-left-color: #f5a35c; } .secu-bandeau.is-verifier .secu-titre { color: #f5a35c; } }

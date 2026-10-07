@@ -15,6 +15,7 @@ import {
 import { copierTexte, renderActionsMetier } from '../components/agent-outils';
 import { renderDossierProjet, renderOffreRecue, renderClasserOutlook } from '../components/agent-dossiers';
 import { renderPlusActions } from '../components/agent-parite';
+import { renderSecurite } from '../components/agent-securite';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
 import { filtrerCommandes, ilYA, prenomDe, quandLisible } from './logique';
@@ -30,6 +31,7 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
   const envoye = ctx.etat.section === 'enAttente' && (m.envoye === true || m.categorie === 'envoi');
   const deCote = !!m.plusTardJusqua;
   host.innerHTML = `
+    <div class="tb-panel tb-securite" id="tb-securite" hidden></div>
     <div class="tb-panel is-raised">
       <div class="tb-detail-h">
         <h3>${h(m.subject || '(sans objet)')}</h3>
@@ -54,6 +56,9 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
     <div class="tb-panel" id="tb-composer" hidden></div>
     <div class="tb-panel" id="tb-equipe" hidden></div>`;
 
+  // Sécurité (backlog reczJ0zLhPXqkWF9S) : bandeau rouge en tête quand le mail est à vérifier ou à risque élevé.
+  const secu = host.querySelector<HTMLElement>('#tb-securite');
+  if (secu && !envoye) void renderSecurite(secu, { messageId: m.messageId, mailbox: m.mailbox, onInfo: (t, k) => toast(t, k || 'info') });
   const on = (sel: string, f: () => void) => host.querySelector<HTMLElement>(sel)?.addEventListener('click', f);
   on('[data-a="ouvrir"]', () => ctx.actions.ouvrir(m));
   on('[data-a="cote"]', () => void ctx.actions.deCote(m));

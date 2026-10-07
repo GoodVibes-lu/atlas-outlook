@@ -373,3 +373,6 @@ body.tb { background: var(--bg); min-width: 0; font-size: 13.5px; }
 }
 body.tb-tactile .tb-kbd, body.tb-tactile .tb-stat-k, body.tb-tactile .tb-clavier,
 body.tb-tactile .tb-dock, body.tb-tactile .tb-peek { display: none !important; }
+
+/* Sécurité d'un mail : le bandeau (styles.css › .secu-bandeau) porte son propre cadre. */
+.tb-panel.tb-securite { padding: 0; border: 0; background: none; box-shadow: none; }
