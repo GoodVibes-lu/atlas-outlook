@@ -16,9 +16,20 @@
  *
  * API Office : getAsync des destinataires / objet (Mailbox 1.1), body.getAsync (1.3),
  * getAttachmentsAsync (1.8, sous garde : sinon le contrôle de pièce jointe est sauté).
+ *
+ * « Relire avant envoi » (Assistant inbox, 07/10/2026) : en plus, tutoiement d'un client, langue
+ * habituelle du correspondant (profil de conversation), date incohérente avec le projet du fil,
+ * fournisseur visible d'un client, « Cordialement ». ENVOI AU BON MOMENT : destinataire hors de ses
+ * heures (fuseau d'après le domaine) → conseil ; « Différer l'envoi » par `item.delayDeliveryTime`
+ * (Mailbox 1.13 : nouvel Outlook pour Mac 1.1 à 1.14, web, Windows), sinon rappel de la commande
+ * d'Outlook « Programmer l'envoi ». L'annulation d'envoi est un réglage d'Outlook lui-même.
+ * Vérification Microsoft (doc du 16/09/2026) : `OnMessageSend` (Smart Alerts, 1.12) est pris en
+ * charge par le nouvel Outlook pour Mac avec le manifeste XML, mais exige un déploiement par
+ * l'administrateur et Mailbox 1.12 dans les Requirements du VersionOverrides (coupe le mobile) :
+ * le bouton manuel reste la voie par défaut (décision à prendre par Charles).
  */
 
-import { checkAvantEnvoi, hasBlocking, GENERIC_DOMAINS, type SendCheckProblem, type SendCheckInput, type SendCheckRecipient } from '../utils/send-check';
+import { checkAvantEnvoi, hasBlocking, momentEnvoi, GENERIC_DOMAINS, type SendCheckProblem, type SendCheckInput, type SendCheckRecipient } from '../utils/send-check';
 import { getAllContacts, getAllTiers, getAllProjets, getLinkedConversationIds, fetchContactArgoProfile } from '../api/airtable';
 import { supportsMailbox } from '../api/platform';
 import { escapeHtml } from './agent-lists';
@@ -80,16 +91,24 @@ async function enrichWithAtlas(input: SendCheckInput & { conversationId: string 
     }
     const clients = Array.from(new Set(projets.map(p => p.client).filter(Boolean)));
     const domainesClients: Record<string, string> = {};
+    const domainesFournisseurs: Record<string, string> = {};
+    const estFournisseur = (cat: string) => /fournisseur|prestataire|supplier|traiteur|r[ée]gie/i.test(cat || '');
     for (const t of tiers) {
       const dom = (t.email || '').toLowerCase().split('@')[1];
       if (dom && !GENERIC_DOMAINS.has(dom) && !domainesClients[dom]) domainesClients[dom] = t.relation;
+      if (dom && !GENERIC_DOMAINS.has(dom) && estFournisseur(t.categorie) && !domainesFournisseurs[dom]) domainesFournisseurs[dom] = t.relation;
     }
+    const fournisseurs = tiers.filter(t => estFournisseur(t.categorie)).map(t => t.relation).filter(Boolean)
+      // Un tiers à la fois client et fournisseur n'est pas « caché » au client.
+      .filter(f => !clients.some(c => c.toLowerCase() === f.toLowerCase()));
     // Tutoiement connu : profil de conversation du destinataire principal (un seul).
     let tutoiementConnu = false;
+    let langueHabituelle: string | null = null;
     const principal = [...(input.to || [])].find(r => !/@vibes\.lu$/i.test(r.email));
-    if (principal && (input.to || []).length === 1) {
+    if (principal) {
       const profile = await fetchContactArgoProfile(principal.email).catch(() => null);
-      tutoiementConnu = profile?.tonPrefere === 'Amical';
+      if ((input.to || []).length === 1) tutoiementConnu = profile?.tonPrefere === 'Amical';
+      langueHabituelle = profile?.languePreferee || null;
     }
     return {
       atlas: true,
@@ -100,6 +119,10 @@ async function enrichWithAtlas(input: SendCheckInput & { conversationId: string 
         clients,
         domainesClients,
         tutoiementConnu,
+        langueHabituelle,
+        fournisseurs,
+        domainesFournisseurs,
+        datesProjet: projet?.dateDebut ? { debut: projet.dateDebut, fin: projet.dateFin || projet.dateDebut } : null,
       },
     };
   } catch (e) {
@@ -127,10 +150,11 @@ export class SendCheckPanel {
   private render(): void {
     this.container.innerHTML = `
       <div class="panel-scroll">
-        <div class="section-heading">Vérifier avant d'envoyer</div>
-        <p class="agent-muted" style="margin-bottom:8px;">Pièce jointe annoncée, mauvais destinataire probable, « répondre à tous », tutoiement. Sans IA, rien n'est envoyé.</p>
+        <div class="section-heading">Relire avant envoi</div>
+        <p class="agent-muted" style="margin-bottom:8px;">Pièce jointe annoncée, mauvais destinataire, fournisseur visible du client, tutoiement d'un client, langue, dates du projet, « Cordialement », heure d'envoi. Sans IA, rien n'est envoyé.</p>
         <div id="send-check-result" class="send-check-result"></div>
-        <button type="button" class="btn btn-primary btn-block agent-btn" id="send-check-run">Vérifier avant d'envoyer</button>
+        <div id="send-check-moment"></div>
+        <button type="button" class="btn btn-primary btn-block agent-btn" id="send-check-run">Relire avant envoi</button>
       </div>
     `;
     this.container.querySelector('#send-check-run')?.addEventListener('click', () => this.run());
@@ -150,6 +174,7 @@ export class SendCheckPanel {
       if (this.destroyed) return;
       const problems = checkAvantEnvoi(input);
       this.renderResult(host, problems, { atlas, pjConnue: input.piecesJointes !== null && input.piecesJointes !== undefined });
+      this.renderMoment(input);
     } catch (e) {
       if (this.destroyed) return;
       host.innerHTML = `<p class="agent-muted">Vérification impossible (${escapeHtml(humanError(e))}).</p>`;
@@ -157,6 +182,31 @@ export class SendCheckPanel {
       this.busy = false;
       if (btn) { btn.disabled = false; btn.textContent = 'Revérifier'; }
     }
+  }
+
+  /** Envoi au bon moment : heure du destinataire principal, « Différer l'envoi » (Mailbox 1.13) ou rappel. */
+  private renderMoment(input: SendCheckInput): void {
+    const host = this.container.querySelector<HTMLElement>('#send-check-moment');
+    if (!host) return;
+    const dest = [...(input.to || [])].find(r => !/@vibes\.lu$/i.test(r.email));
+    const m = dest ? momentEnvoi(Date.now(), dest.email) : null;
+    if (!m?.horsHeures || !m.conseil) { host.innerHTML = ''; return; }
+    const item = Office.context.mailbox?.item as any;
+    const differable = supportsMailbox('1.13') && typeof item?.delayDeliveryTime?.setAsync === 'function';
+    host.innerHTML = `
+      <div class="send-check-item">${icon('clock', 14)}<span>Il est ${escapeHtml(m.heureLocale)} chez ${escapeHtml(dest!.name || dest!.email)}${m.fuseau !== 'Europe/Luxembourg' ? ` (${escapeHtml(m.fuseau)})` : ''}, hors de ses heures de bureau. Mieux reçu le ${escapeHtml(m.libelle || '')}.</span></div>
+      ${differable
+        ? `<button type="button" class="btn btn-secondary btn-block" id="send-check-differer">${icon('clock', 14)}Différer l'envoi au ${escapeHtml(m.libelle || '')}</button>`
+        : '<p class="agent-muted">Pour différer : flèche à côté d\'« Envoyer », puis « Programmer l\'envoi ».</p>'}
+      <p class="agent-muted">Le délai pour annuler un envoi se règle dans les paramètres d'Outlook (rédaction), pas dans ATLAS.</p>`;
+    host.querySelector('#send-check-differer')?.addEventListener('click', () => {
+      try {
+        item.delayDeliveryTime.setAsync(new Date(m.conseil!), (r: Office.AsyncResult<void>) => {
+          const ok = r.status === Office.AsyncResultStatus.Succeeded;
+          host.insertAdjacentHTML('beforeend', `<p class="agent-muted">${ok ? 'Envoi différé : clique « Envoyer », Outlook le garde jusqu\'à l\'heure prévue.' : `Report impossible (${escapeHtml(r.error?.message || 'Outlook')}) : utilise « Programmer l'envoi ».`}</p>`);
+        });
+      } catch (e) { host.insertAdjacentHTML('beforeend', `<p class="agent-muted">Report impossible (${escapeHtml(humanError(e))}).</p>`); }
+    });
   }
 
   private renderResult(host: HTMLElement, problems: SendCheckProblem[], ctx: { atlas: boolean; pjConnue: boolean }): void {

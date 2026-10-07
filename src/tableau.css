@@ -417,6 +417,11 @@ body.tb-tactile .tb-dock, body.tb-tactile .tb-peek { display: none !important; }
 }
 .tb-chips.is-gauche { justify-content: flex-start; }
 .tb-seance-brouillon { background: var(--surface-sunk); border-radius: var(--r-card); box-shadow: var(--tb-inset); padding: 8px 12px; }
+.tb-seance-suggestions { display: flex; flex-direction: column; gap: 6px; }
+.tb-seance-suggestions .tb-btn { justify-content: flex-start; text-align: left; white-space: normal; line-height: 1.4; }
+.tb-courbe { width: 100%; height: 48px; display: block; }
+.tb-courbe .obj { stroke: var(--success, #2e7d32); stroke-dasharray: 3 3; stroke-width: 1; }
+.tb-courbe .ligne { fill: none; stroke: var(--accent, #7c3aed); stroke-width: 1.6; }
 .tb-seance-brouillon summary { cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
 .tb-seance-brouillon pre { white-space: pre-wrap; font-family: var(--font); font-size: 13px; line-height: 1.5; margin: 8px 0 0; max-height: 34vh; overflow: auto; }
 .tb-note.is-err { color: var(--danger); }

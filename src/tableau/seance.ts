@@ -9,7 +9,11 @@
  * préparée par le worker (GET /api/plugin/agent/seance).
  *
  * Clavier : Entrée = action recommandée ; 1 répondre ; 2 confier ; 3 plus tard (demain / lundi) ;
- * 4 autre (menu) ; Échap = passer ; ⌘Z / Ctrl+Z ou « Annuler » = défaire la dernière action.
+ * 4 autre (menu) ; 5, 6, 7 = répondre avec l'une des trois réponses courtes proposées ; 8 = mise en
+ * relation (réponse préparée, introducteur en copie cachée) ; Échap = passer ; ⌘Z / Ctrl+Z ou
+ * « Annuler » = défaire la dernière action.
+ * « Ne rien laisser filer » (07/10/2026) : cartes « Tu as promis… » (tâche sur clic), « offre consultée,
+ * pas de réponse » (relance rédigée, copiée, jamais envoyée), « compte rendu à envoyer » (module Réunion).
  * Mail à risque (sécurité) : bandeau rouge, aucune action au clavier, aucun brouillon.
  *
  * Toutes les écritures passent par les routes EXISTANTES du worker : rangement sur clic dans SA boîte
@@ -21,9 +25,9 @@
  */
 import {
   fetchSeance, noterDecisionSeance, confierMail, annulerConfier, finSeance, actionGroupe, annulerGroupe, desabonner, poserRetour, retirerRetour,
-  repondreAutonomie, sollicitationsVues,
+  repondreAutonomie, sollicitationsVues, fetchSuggestions, preparerMiseEnRelation, promesseTache, promesseEcarter, promesseAnnuler, relanceOffre,
   type ConditionRetour, type Seance, type SeanceAction, type SeanceCarte, type SeanceDesabonnement, type SeanceGroupe,
-  type SeancePropositionAutonomie, type SeanceSemaine, type SeanceSollicitations,
+  type SeancePropositionAutonomie, type SeanceSemaine, type SeanceSollicitations, type SeancePromesse, type SeanceOffreConsultee, type SeanceCrASuivre,
 } from '../api/seance';
 import { annulerAction, executerAction, fetchDossierProjet, mettrePlusTard, rangerDansDossier, retirerPlusTard } from '../api/agent';
 import { deposerBrouillon, redigerArgo } from '../api/tableau';
@@ -48,7 +52,10 @@ type Special =
   | { kind: 'groupe'; g: SeanceGroupe }
   | { kind: 'desabonnement'; d: SeanceDesabonnement }
   | { kind: 'sollicitations'; s: SeanceSollicitations }
-  | { kind: 'autonomie'; a: SeancePropositionAutonomie };
+  | { kind: 'autonomie'; a: SeancePropositionAutonomie }
+  | { kind: 'promesse'; p: SeancePromesse }
+  | { kind: 'offre'; o: SeanceOffreConsultee }
+  | { kind: 'cr'; r: SeanceCrASuivre };
 
 interface Defaire {
   carte?: SeanceCarte; index: number; recommandee: string | null; faite: string; annuler?: () => Promise<void>; sortie: boolean | number;
@@ -114,6 +121,9 @@ export function ouvrirSeance(opts: OptionsSeance): void {
   const debut = Date.now();
   const pile: Defaire[] = [];
   let ferme = false;
+  /** Temps passé sur la carte (statistiques : temps par client). */
+  let carteAfficheeLe = Date.now();
+  const suggestionsDemandees = new Set<string>();
 
   // ── Rendu ──
   function majCompteur(): void {
@@ -208,6 +218,43 @@ export function ouvrirSeance(opts: OptionsSeance): void {
           { libelle: 'Vu, je les garde', detail: 'Elles restent hors de la séance', faire: async () => { await sollicitationsVues(so.semaine); return { message: 'Sollicitations passées en revue' }; } },
         ];
       }
+      case 'promesse': {
+        const p = sp.p;
+        return [
+          {
+            libelle: 'Créer la tâche', detail: `Échéance ${jourFr(p.echeance)}${p.enRetard ? ' (dépassée)' : ''}`,
+            faire: async () => {
+              const r = await promesseTache(p.messageId, p.index);
+              const id = r.tacheId;
+              return { message: `Tâche créée${r.projet ? ` dans ${r.projet}` : ''} pour le ${jourFr(r.echeance || p.echeance)}`, annuler: async () => { await promesseAnnuler(p.messageId, p.index, id); } };
+            },
+          },
+          { libelle: 'C\'est déjà fait', detail: 'Plus proposé', faire: async () => { await promesseEcarter(p.messageId, p.index); return { message: 'Promesse tenue, notée', annuler: async () => { await promesseAnnuler(p.messageId, p.index); } }; } },
+          ...(p.webLink ? [{ libelle: 'Ouvrir le mail envoyé', faire: async () => { opts.openLink(p.webLink!); return null; } }] : []),
+        ];
+      }
+      case 'offre': {
+        const o = sp.o;
+        return [
+          {
+            libelle: 'Préparer la relance', detail: 'Texte copié, tu relis et tu envoies depuis Outlook',
+            faire: async () => {
+              const r = await relanceOffre(o.messageId);
+              const copie = await copierTexte(r.texte);
+              if (r.webLink) opts.openLink(r.webLink);
+              return { message: copie ? 'Relance copiée : réponds au mail envoyé, colle, relis puis envoie' : 'Relance prête mais copie impossible ici : réessaie depuis le panneau du mail' };
+            },
+          },
+          { libelle: 'Plus tard', detail: 'Revient à la prochaine séance', faire: async () => ({ message: 'Gardé pour plus tard' }) },
+        ];
+      }
+      case 'cr': {
+        const r = sp.r;
+        return [
+          { libelle: 'Envoyer le compte rendu', detail: 'ATLAS ouvre la réunion : mail des participants avec relecture', faire: async () => { opts.openLink(r.lien); return { message: 'Réunion ouverte dans ATLAS' }; } },
+          { libelle: 'Pas de mail pour cette réunion', faire: async () => ({ message: 'Noté pour cette séance' }) },
+        ];
+      }
       case 'autonomie': {
         const a = sp.a;
         return [
@@ -231,6 +278,15 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     } else if (sp.kind === 'sollicitations') {
       titre = `${sp.s.mails.length} sollicitation${sp.s.mails.length > 1 ? 's' : ''} commerciale${sp.s.mails.length > 1 ? 's' : ''} cette semaine`;
       corps = `<p class="tb-seance-resume">Démarchages d'inconnus, sortis de ta séance. Un coup d'œil, puis on range.</p><ul class="tb-seance-liste">${sp.s.mails.slice(0, 8).map(m => `<li><b>${h(m.from?.name || m.from?.email)}</b> ${h(m.subject || '(sans objet)')}<span>${h(m.raisons.slice(0, 2).join(' · '))}</span></li>`).join('')}</ul>`;
+    } else if (sp.kind === 'promesse') {
+      titre = `Tu as promis : « ${sp.p.texte} »`;
+      corps = `<p class="tb-seance-resume">Dans ton mail « ${h(sp.p.sujet || '(sans objet)')} » à ${h(sp.p.a)}, ${h(ilYA(sp.p.sentAt, Date.now()))}. Échéance ${h(jourFr(sp.p.echeance))}${sp.p.enRetard ? ' : <b class="is-warn">dépassée</b>' : ''}. Aucune tâche ATLAS ne la suit encore.</p>`;
+    } else if (sp.kind === 'offre') {
+      titre = `Offre ${sp.o.offre} ${sp.o.libelle}, pas de réponse`;
+      corps = `<p class="tb-seance-resume">Envoyée à ${h(sp.o.a)} ${h(ilYA(sp.o.sentAt, Date.now()))}${sp.o.montant ? ` (${h(sp.o.montant)})` : ''}. Le lien de l'offre a été ouvert (clic sur le lien du portail, sans pixel de suivi) et rien n'est revenu depuis. ARGO prépare une relance courte, sans jamais dire au client qu'il a ouvert l'offre.</p>`;
+    } else if (sp.kind === 'cr') {
+      titre = `Compte rendu à envoyer : ${sp.r.titre}`;
+      corps = `<p class="tb-seance-resume">Validé ${h(ilYA(sp.r.valideLe, Date.now()))}, pas encore partagé avec les participants. Le module Réunion compose le mail de suivi (relu avant envoi).</p>`;
     } else {
       titre = 'Je le fais seul désormais ?';
       corps = `<p class="tb-seance-resume">Tu as choisi « ${h(sp.a.libelle)} » ${sp.a.acceptees} fois d'affilée.${s?.mode !== 'actif' ? ' Tant que l\'agent observe, rien ne bouge : ce sera prêt pour la suite.' : ''}</p>`;
@@ -294,6 +350,8 @@ export function ouvrirSeance(opts: OptionsSeance): void {
         <p class="tb-seance-resume">${h(c.resume || '')}</p>
         ${c.raisons.length ? `<div class="tb-chips is-gauche">${c.raisons.map(r => `<span class="tb-chip${/Client|Offre|Projet|Prospect|Devis/.test(r) ? ' is-argo' : ''}">${h(r)}</span>`).join('')}</div>` : ''}
         ${c.brouillon && !risque ? `<details class="tb-seance-brouillon"${rec?.type === 'repondre' ? ' open' : ''}><summary>${icon('reply', 14)}Brouillon prêt : ${h(c.brouillon.resumeIntention || 'réponse préparée')}</summary><pre>${h(c.brouillon.texte)}</pre>${(c.brouillon.alertes || []).map(a => `<p class="tb-note${a.gravite === 'bloquant' ? ' is-err' : ''}">${h(a.message)}</p>`).join('')}</details>` : ''}
+        ${!risque && c.suggestions?.length ? `<div class="tb-seance-suggestions" aria-label="Réponses courtes">${c.suggestions.map((t, k) => `<button type="button" class="tb-btn is-ghost" data-sugg="${k}"><span class="tb-kbd">${k + 5}</span><span>${h(t)}</span></button>`).join('')}</div>` : !risque && attendReponse(c) ? '<p class="tb-note" id="sc-sugg-attente">Réponses courtes en préparation…</p>' : ''}
+        ${!risque && c.miseEnRelation ? `<button type="button" class="tb-btn" id="sc-intro"><span class="tb-kbd">8</span><span><b>Mise en relation : répondre</b><small>L'introducteur passe en copie cachée, avec un merci</small></span></button>` : ''}
         ${rec ? `<button type="button" class="tb-btn is-primary tb-seance-reco" id="sc-reco"><span class="tb-kbd">Entrée</span><span><b>${h(rec.libelle)}</b>${rec.detail ? `<small>${h(rec.detail)}</small>` : ''}</span></button>${c.appris ? `<p class="tb-note">${h(c.appris)}</p>` : ''}` : ''}
         <div class="tb-seance-touches">
           ${risque
@@ -307,12 +365,55 @@ export function ouvrirSeance(opts: OptionsSeance): void {
       </article>
       <aside class="tb-seance-ctx tb-panel" aria-label="Contexte">${contexteHtml(c)}</aside>`;
     main.querySelector('#sc-reco')?.addEventListener('click', () => { if (rec) void faire(c, rec); });
+    main.querySelectorAll<HTMLButtonElement>('[data-sugg]').forEach(b => b.addEventListener('click', () => void repondreSuggestion(c, Number(b.dataset.sugg))));
+    main.querySelector('#sc-intro')?.addEventListener('click', () => void miseEnRelation(c));
+    carteAfficheeLe = Date.now();
+    if (!risque && !c.suggestions?.length && attendReponse(c)) void chargerSuggestions(c);
     main.querySelectorAll<HTMLButtonElement>('[data-k]').forEach(b => b.addEventListener('click', () => touche(b.dataset.k!)));
     main.querySelectorAll<HTMLButtonElement>('[data-alt]').forEach(b => b.addEventListener('click', () => {
       const a = b.dataset.alt === 'ouvrir' ? c.alternatives.find(x => x.type === 'ouvrir') : c.alternatives.find(x => x.type === 'plus-tard');
       if (a) void faire(c, a);
     }));
     (main.querySelector('#sc-reco') as HTMLElement | null)?.focus();
+  }
+
+  function attendReponse(c: SeanceCarte): boolean {
+    return c.raisons.includes('Attend une réponse') && !suggestionsDemandees.has(c.messageId);
+  }
+
+  /** Trois réponses courtes à la demande (cartes au-delà des premières, préparées par le worker). */
+  async function chargerSuggestions(c: SeanceCarte): Promise<void> {
+    suggestionsDemandees.add(c.messageId);
+    try {
+      const r = await fetchSuggestions(c.messageId, c.mailbox);
+      if (r.textes?.length) c.suggestions = r.textes.slice(0, 3);
+    } catch { /* facultatif */ }
+    if (cartes[i] === c && !specialCourant()) renderCarte();
+    else document.getElementById('sc-sugg-attente')?.remove();
+  }
+
+  async function repondreSuggestion(c: SeanceCarte, k: number): Promise<void> {
+    const t = c.suggestions?.[k];
+    if (!t || occupe) return;
+    const a: SeanceAction = { cle: 'repondre', type: 'repondre', libelle: 'Réponse courte', donnees: { pret: true } };
+    // Formule de fin de la charte selon la langue du mail (signature ajoutée à l'envoi par le serveur).
+    const fin = ({ EN: 'Kind regards,', DE: 'Mit freundlichen Grüßen,', LB: 'Mat beschte Gréiss,' } as Record<string, string>)[String(c.langue || '').toUpperCase()] || 'Bien à vous,';
+    await faire(c, a, undefined, `${t}\n\n${fin}`);
+  }
+
+  /** Mise en relation : réponse préparée (merci + introducteur en copie cachée), ouverte dans un nouveau message. */
+  async function miseEnRelation(c: SeanceCarte): Promise<void> {
+    if (occupe) return;
+    occupe = true;
+    try {
+      const r = await preparerMiseEnRelation(c.messageId, c.mailbox);
+      const u = `mailto:${r.a.map(encodeURIComponent).join(',')}?bcc=${r.cci.map(encodeURIComponent).join(',')}&subject=${encodeURIComponent(r.sujet)}&body=${encodeURIComponent(r.texte)}`;
+      const copie = await copierTexte(r.texte);
+      opts.openLink(u);
+      toast(`Nouveau message ouvert : ${r.introducteur.name || r.introducteur.email} en copie cachée. Relis puis envoie${copie ? ' (texte aussi copié)' : ''}`, 'success');
+    } catch (e) {
+      toast(humanError(e), 'error');
+    } finally { occupe = false; }
   }
 
   function renderFin(): void {
@@ -338,8 +439,8 @@ export function ouvrirSeance(opts: OptionsSeance): void {
   }
 
   /** Répondre : brouillon déposé (verrou du tableau ouvert), sinon formulaire de réponse d'Outlook, sinon texte copié et mail ouvert. */
-  async function repondre(c: SeanceCarte): Promise<boolean> {
-    let texte = c.brouillon?.texte || '';
+  async function repondre(c: SeanceCarte, impose?: string): Promise<boolean> {
+    let texte = impose || c.brouillon?.texte || '';
     if (!texte) {
       toast('ARGO rédige la réponse…', 'info');
       const r = await redigerArgo(c.messageId, c.mailbox);
@@ -368,7 +469,7 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     return k == null ? null : liste[k];
   }
 
-  async function faire(c: SeanceCarte, a: SeanceAction, quand?: string): Promise<void> {
+  async function faire(c: SeanceCarte, a: SeanceAction, quand?: string, texteImpose?: string): Promise<void> {
     if (occupe) return;
     if (a.type === 'ouvrir') { if (!openAgentMail(c, opts.openLink)) toast('Lien du mail indisponible : ouvre-le depuis Outlook', 'error'); return; }
     occupe = true;
@@ -379,7 +480,7 @@ export function ouvrirSeance(opts: OptionsSeance): void {
       let message = '';
       switch (a.type) {
         case 'repondre': {
-          if (!(await repondre(c))) return;
+          if (!(await repondre(c, texteImpose))) return;
           break;
         }
         case 'classer-projet': {
@@ -442,7 +543,7 @@ export function ouvrirSeance(opts: OptionsSeance): void {
           break;
         }
       }
-      noterDecisionSeance(c.recommandee?.cle ?? null, a.cle, false, c.patron);
+      noterDecisionSeance(c.recommandee?.cle ?? null, a.cle, false, c.patron, { dureeMs: Date.now() - carteAfficheeLe, client: c.contexte.tiers });
       pile.push({ carte: c, index: i, recommandee: c.recommandee?.cle ?? null, faite: a.cle, annuler, sortie, ...(c.patron ? { patron: c.patron } : {}) });
       traites++;
       if (message) toast(message, 'success', () => void defaire());
@@ -559,7 +660,9 @@ export function ouvrirSeance(opts: OptionsSeance): void {
       });
       return;
     }
-    if (k === '4') void autre(c);
+    if (k === '4') { void autre(c); return; }
+    if (k === '5' || k === '6' || k === '7') { const n = Number(k) - 5; if (c.suggestions?.[n]) void repondreSuggestion(c, n); return; }
+    if (k === '8' && c.miseEnRelation) void miseEnRelation(c);
   }
 
   function onKey(e: KeyboardEvent): void {
@@ -568,7 +671,7 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     if (cible instanceof HTMLInputElement || cible instanceof HTMLTextAreaElement) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); e.stopPropagation(); void defaire(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (['Enter', 'Escape', '1', '2', '3', '4'].includes(e.key)) {
+    if (['Enter', 'Escape', '1', '2', '3', '4', '5', '6', '7', '8'].includes(e.key)) {
       // Entrée sur un bouton de la carte : le clic s'en charge.
       if (e.key === 'Enter' && cible instanceof HTMLButtonElement && cible.id !== 'sc-reco' && cible.dataset.sp !== '0') return;
       e.preventDefault();
@@ -595,7 +698,12 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     try {
       s = await fetchSeance(frais);
       cartes = s.cartes || [];
-      avant = (s.groupes || []).map(g => ({ kind: 'groupe' as const, g }));
+      avant = [
+        ...(s.groupes || []).map(g => ({ kind: 'groupe' as const, g })),
+        ...(s.promesses || []).map(p => ({ kind: 'promesse' as const, p })),
+        ...(s.offresConsultees || []).map(o => ({ kind: 'offre' as const, o })),
+        ...(s.crsASuivre || []).map(r => ({ kind: 'cr' as const, r })),
+      ];
       apres = [
         ...(s.desabonnements || []).map(d => ({ kind: 'desabonnement' as const, d })),
         ...(s.sollicitations?.mails.length ? [{ kind: 'sollicitations' as const, s: s.sollicitations }] : []),

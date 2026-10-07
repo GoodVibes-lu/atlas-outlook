@@ -30,7 +30,7 @@ import { renderDetail, renderDigest } from './detail';
 import { renderAujourdhui } from './aujourdhui';
 import { ouvrirPalette, type ActionPalette } from './palette';
 import { ouvrirSeance } from './seance';
-import { fetchStatsSeance, type SeanceSemaine } from '../api/seance';
+import { fetchStatsSeance, fetchStatistiques, type SeanceSemaine, type StatistiquesBoite } from '../api/seance';
 
 export type Section = 'priorites' | 'personnes' | 'clients' | 'mandats' | 'enAttente' | 'deCote' | 'factures' | 'newsletters' | 'notifications';
 
@@ -341,6 +341,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       ${qui.length ? `<div class="tb-panel"><div class="tb-h">Qui traite quoi</div><div class="tb-mini">${qui.map(q => `<div class="tb-mini-row"><span>${h(q.nom)}</span><span class="tb-bar"><i style="width:${Math.round((q.mails / max) * 100)}%"></i></span><span class="mono">${q.mails}</span></div>`).join('')}</div></div>` : ''}
       ${t?.programmes.length ? `<div class="tb-panel"><div class="tb-h">Envois programmés<span class="tb-h-n">${t.programmes.length}</span></div><div class="tb-mini">${t.programmes.slice(0, 6).map(p => `<div class="tb-mini-row" title="${h(p.a.join(', '))}">${icon('clock', 13)}<span>${h(p.sujet || '(sans objet)')}</span><span class="tb-when">${h(quandLisible(p.quand, Date.now()))}</span></div>`).join('')}</div></div>` : ''}
       ${statsSeanceHtml()}
+      ${statistiquesHtml()}
       <div class="tb-panel tb-clavier"><div class="tb-h">Glisser un mail vers</div><p class="tb-note">« Je prends », une date ou un projet : le dock apparaît en bas pendant le glisser.</p></div>`;
     host.querySelectorAll<HTMLButtonElement>('[data-s]').forEach(b => b.addEventListener('click', () => allerSection(b.dataset.s as Section)));
     host.querySelector<HTMLButtonElement>('[data-seance]')?.addEventListener('click', seance);
@@ -358,8 +359,33 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
         + `<div class="tb-mini-row"><span>Clôture à 5 ou moins</span><span class="mono">${sem.objectifAtteint}/${sem.joursReleves}</span></div>` : '<p class="tb-note">Aucune séance cette semaine.</p>'}`
       + `</div><button type="button" class="tb-btn" data-seance>${icon('inbox', 14)}Lancer la séance</button></div>`;
   }
+  // Assistant inbox (07/10/2026) : expéditeurs, mails hors horaires, temps par client, courbe vers 5 mails.
+  let statistiques: StatistiquesBoite | null = null;
+  function courbeSvg(st: StatistiquesBoite): string {
+    const pts = st.courbe;
+    if (pts.length < 2) return '';
+    const max = Math.max(st.objectif + 1, ...pts.map(p => p.restants));
+    const x = (k: number) => Math.round((k / (pts.length - 1)) * 200);
+    const y = (v: number) => Math.round(46 - (v / max) * 42);
+    const d = pts.map((p, k) => `${k ? 'L' : 'M'}${x(k)} ${y(p.restants)}`).join(' ');
+    const dernier = pts[pts.length - 1];
+    return `<svg class="tb-courbe" viewBox="0 0 200 48" preserveAspectRatio="none" role="img" aria-label="Mails restants à la clôture, ${pts.length} derniers relevés, dernier ${dernier.restants}, objectif ${st.objectif}"><line class="obj" x1="0" x2="200" y1="${y(st.objectif)}" y2="${y(st.objectif)}"/><path class="ligne" d="${d}"/></svg>`;
+  }
+  function statistiquesHtml(): string {
+    const st = statistiques;
+    if (!st || (!st.total && !st.courbe.length)) return '';
+    const top = st.topExpediteurs.slice(0, 5);
+    const maxTop = Math.max(1, ...top.map(t => t.n));
+    return `<div class="tb-panel"><div class="tb-h">Ta boîte, 30 jours</div><div class="tb-mini">`
+      + `${courbeSvg(st)}${st.courbe.length >= 2 ? `<p class="tb-note">Mails restants à la clôture (pointillé : objectif ${st.objectif}).</p>` : ''}`
+      + `<div class="tb-mini-row"><span>Reçus hors horaires</span><span class="mono">${st.horsHoraires.n} · ${st.horsHoraires.part} %</span></div>`
+      + top.map(t => `<div class="tb-mini-row" title="${h(t.email)}"><span>${h(t.nom || t.email)}</span><span class="tb-bar"><i style="width:${Math.round((t.n / maxTop) * 100)}%"></i></span><span class="mono">${t.n}</span></div>`).join('')
+      + (st.tempsParClient.length ? `<div class="tb-h" style="margin-top:6px">Temps de tri par client</div>${st.tempsParClient.slice(0, 5).map(c => `<div class="tb-mini-row"><span>${h(c.client)}</span><span class="mono">${c.minutes} min</span></div>`).join('')}` : '')
+      + '</div></div>';
+  }
   async function chargerStatsSeance(): Promise<void> {
     try { statsSeance = await fetchStatsSeance(); renderLeft(); } catch { /* facultatif (boîte non suivie) */ }
+    try { statistiques = await fetchStatistiques(); renderLeft(); } catch { /* facultatif */ }
   }
   function seance(): void {
     ouvrirSeance({ openLink: opts.openLink, repondreDansOutlook: opts.repondreDansOutlook, onFerme: () => { void rafraichir(true); void chargerStatsSeance(); } });

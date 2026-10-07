@@ -16,7 +16,13 @@
  *        l'objet), d'après les fiches contacts / clients ATLAS ;
  *  - « répondre à tous » avec beaucoup de destinataires alors que le message s'adresse à une seule
  *    personne (« Bonjour Marc, ») ;
- *  - tutoiement / vouvoiement incohérent avec le fil cité (français).
+ *  - tutoiement / vouvoiement incohérent avec le fil cité (français) ;
+ *  - Assistant inbox (07/10/2026, « Relire avant envoi ») : tutoiement d'un CLIENT (sans habitude
+ *    connue), langue différente de celle d'habitude du correspondant, date citée incohérente avec
+ *    les dates du projet du fil, adresse d'un FOURNISSEUR en copie d'un mail client (les
+ *    fournisseurs ne sont jamais exposés), « Cordialement » (charte : « Bien à vous ») ;
+ *  - moment d'envoi : destinataire hors de ses heures ouvrées (fuseau d'après le domaine) →
+ *    conseil d'envoi différé (`momentEnvoi`, copie de src/utils/inbox-reponse-suivi.ts).
  *
  * Les fonctions de texte (ownPart, visibleText, detectLang, tutoiementMarks) sont une COPIE de
  * `src/utils/client-send-check.ts` (racine du dépôt, contrôle avant envoi client d'ATLAS) : le
@@ -30,7 +36,8 @@
 export type SendCheckGravite = 'bloquant' | 'avertissement';
 
 export interface SendCheckProblem {
-  code: 'piece_jointe' | 'homonyme' | 'client_autre_projet' | 'repondre_a_tous' | 'tutoiement' | 'vouvoiement' | 'registre_mixte';
+  code: 'piece_jointe' | 'homonyme' | 'client_autre_projet' | 'repondre_a_tous' | 'tutoiement' | 'vouvoiement' | 'registre_mixte'
+    | 'tutoiement_client' | 'langue' | 'date_projet' | 'fournisseur_en_copie' | 'cordialement';
   message: string;
   gravite: SendCheckGravite;
 }
@@ -79,6 +86,15 @@ export interface SendCheckInput {
   tutoiementConnu?: boolean;
   /** Seuil « répondre à tous » (destinataires hors soi-même). Défaut 4. */
   seuilRepondreATous?: number;
+  /** Langue habituelle du correspondant principal (profil de conversation : FR, EN, DE, LU). */
+  langueHabituelle?: string | null;
+  /** Sociétés FOURNISSEURS (tiers ATLAS) et fournisseurs par domaine. */
+  fournisseurs?: string[];
+  domainesFournisseurs?: Record<string, string>;
+  /** Dates du projet du fil ('YYYY-MM-DD'), si connues. */
+  datesProjet?: { debut: string; fin?: string } | null;
+  /** Date du jour (tests). */
+  maintenant?: number;
 }
 
 // ── Texte (copie de src/utils/client-send-check.ts) ─────────────────────────
@@ -419,6 +435,153 @@ export function checkRegistre(input: { ownText: string; threadText: string; tuto
   return [];
 }
 
+// ── Assistant inbox : relire avant envoi (07/10/2026) ───────────────────────
+
+/** « Cordialement » dans le texte rédigé (charte de l'agence : « Bien à vous »). */
+export function checkCordialement(ownText: string): SendCheckProblem[] {
+  return /\bcordialement\b/i.test(ownText || '')
+    ? [{ code: 'cordialement', gravite: 'avertissement', message: '« Cordialement » : la charte de l\'agence termine par « Bien à vous ».' }]
+    : [];
+}
+
+/** Société d'un destinataire : fiche contact ATLAS, sinon domaine connu (hors messageries grand public). */
+function societeDe(d: SendCheckRecipient, contacts: SendCheckContact[], parDomaine: Record<string, string>): string {
+  const fiche = (contacts || []).find(c => mail(c.email) === d.email);
+  if (fiche?.societe) return fiche.societe;
+  const dom = domainOf(d.email);
+  return dom && !GENERIC_DOMAINS.has(dom) ? parDomaine[dom] || '' : '';
+}
+
+/** Destinataires clients (société cliente d'au moins un projet, ou client du projet du fil). */
+function destinatairesClients(input: SendCheckInput, destinataires: SendCheckRecipient[]): SendCheckRecipient[] {
+  const clients = [...(input.clients || []), ...(input.projetDuFil?.client ? [input.projetDuFil.client] : [])];
+  return destinataires.filter(d => {
+    if (domainOf(d.email) === INTERNAL_DOMAIN) return false;
+    const soc = societeDe(d, input.contacts || [], input.domainesClients || {});
+    return !!soc && clients.some(c => memeSociete(c, soc));
+  });
+}
+
+/** Tutoiement d'un client sans habitude connue de se tutoyer (français). */
+export function checkTutoiementClient(ownText: string, clientsDest: SendCheckRecipient[], tutoiementConnu?: boolean): SendCheckProblem[] {
+  if (!clientsDest.length || tutoiementConnu || detectLang(ownText).lang !== 'FR') return [];
+  const tu = tutoiementMarks(ownText);
+  if (!tu.length) return [];
+  const qui = clientsDest[0].name || clientsDest[0].email;
+  return [{ code: 'tutoiement_client', gravite: 'avertissement', message: `Tu tutoies (${Array.from(new Set(tu.map(x => x.toLowerCase()))).slice(0, 3).map(x => `« ${x} »`).join(', ')}) ${qui}, client : la règle est le vouvoiement des clients.` }];
+}
+
+const NOMS_LANGUE: Record<string, string> = { FR: 'français', EN: 'anglais', DE: 'allemand', LB: 'luxembourgeois' };
+/** Langue du texte différente de la langue habituelle du correspondant (profil de conversation). */
+export function checkLangue(ownText: string, habituelle: string | null | undefined): SendCheckProblem[] {
+  const h = String(habituelle || '').toUpperCase().replace(/^LU$/, 'LB');
+  if (!NOMS_LANGUE[h]) return [];
+  const d = detectLang(ownText);
+  if (!d.lang || d.confiance < 0.6 || d.mots < 12 || d.lang === h) return [];
+  return [{ code: 'langue', gravite: 'avertissement', message: `Mail en ${NOMS_LANGUE[d.lang]}, alors que vous échangez d'habitude en ${NOMS_LANGUE[h]}.` }];
+}
+
+const MOIS_FR: Record<string, number> = { janvier: 1, fevrier: 2, mars: 3, avril: 4, mai: 5, juin: 6, juillet: 7, aout: 8, septembre: 9, octobre: 10, novembre: 11, decembre: 12, january: 1, february: 2, march: 3, april: 4, may: 5, june: 6, july: 7, august: 8, september: 9, october: 10, november: 11, december: 12 };
+
+/** Dates citées ('YYYY-MM-DD') : « 15/10 », « 15.10.2026 », « 15 octobre ». Année : celle du projet, sinon l'année en cours. */
+export function datesCitees(text: string, anneeDefaut: number): string[] {
+  const out = new Set<string>();
+  const t = norm(text || '');
+  const ajoute = (d: number, m: number, y?: number) => {
+    if (m < 1 || m > 12 || d < 1 || d > 31) return;
+    out.add(`${y || anneeDefaut}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+  };
+  let m: RegExpExecArray | null;
+  const reNum = /(?<![\d:])(\d{1,2})[/.](\d{1,2})(?:[/.](\d{4}|\d{2}))?(?![\d:])/g;
+  while ((m = reNum.exec(t))) { let y = m[3] ? +m[3] : undefined; if (y && y < 100) y += 2000; ajoute(+m[1], +m[2], y); }
+  const reNom = new RegExp(`(?<!\\d)(\\d{1,2})(?:er)?\\s+(${Object.keys(MOIS_FR).join('|')})(?:\\s+(\\d{4}))?`, 'g');
+  while ((m = reNom.exec(t))) ajoute(+m[1], MOIS_FR[m[2]], m[3] ? +m[3] : undefined);
+  return [...out];
+}
+
+/**
+ * Date citée proche du projet (14 jours autour) mais en dehors de ses dates : probable erreur
+ * (« le 14/10 » pour un événement du 15/10 au 16/10).
+ */
+export function checkDateProjet(ownText: string, dates: { debut: string; fin?: string } | null | undefined, nomProjet?: string): SendCheckProblem[] {
+  if (!dates?.debut || !/^\d{4}-\d{2}-\d{2}/.test(dates.debut)) return [];
+  const debut = dates.debut.slice(0, 10), fin = (dates.fin || dates.debut).slice(0, 10);
+  const t0 = Date.parse(debut), t1 = Date.parse(fin);
+  const horsProjet = datesCitees(ownText, +debut.slice(0, 4)).filter(d => {
+    const t = Date.parse(d);
+    return Number.isFinite(t) && (d < debut || d > fin) && t >= t0 - 14 * 86_400_000 && t <= t1 + 14 * 86_400_000;
+  });
+  if (!horsProjet.length) return [];
+  const fr = (iso: string) => iso.split('-').reverse().join('/');
+  return [{ code: 'date_projet', gravite: 'avertissement', message: `Date citée ${horsProjet.slice(0, 2).map(fr).join(', ')} : le projet${nomProjet ? ` ${nomProjet}` : ''} est ${debut === fin ? `le ${fr(debut)}` : `du ${fr(debut)} au ${fr(fin)}`}.` }];
+}
+
+/** Adresse d'un FOURNISSEUR en À ou Cc d'un mail adressé à un client (les fournisseurs ne sont jamais exposés). */
+export function checkFournisseurEnCopie(input: SendCheckInput, clientsDest: SendCheckRecipient[]): SendCheckProblem[] {
+  if (!clientsDest.length) return [];
+  const moi = mail(input.moi);
+  const visibles = [...(input.to || []), ...(input.cc || [])].map(r => ({ email: mail(r.email), name: (r.name || '').trim() })).filter(r => r.email && r.email !== moi);
+  const out: SendCheckProblem[] = [];
+  for (const d of visibles) {
+    if (domainOf(d.email) === INTERNAL_DOMAIN || clientsDest.some(c => c.email === d.email)) continue;
+    const soc = societeDe(d, input.contacts || [], input.domainesFournisseurs || {});
+    if (!soc || !(input.fournisseurs || []).some(f => memeSociete(f, soc))) continue;
+    out.push({ code: 'fournisseur_en_copie', gravite: 'bloquant', message: `${d.name || d.email} (${soc}, fournisseur) est visible du client : les fournisseurs ne sont jamais exposés. Retire-le ou passe-le en Cci.` });
+  }
+  return out;
+}
+
+// ── Moment d'envoi (copie de src/utils/inbox-reponse-suivi.ts › momentEnvoi) ──
+
+const FUSEAUX_TLD: Record<string, string> = {
+  lu: 'Europe/Luxembourg', fr: 'Europe/Paris', be: 'Europe/Brussels', de: 'Europe/Berlin', nl: 'Europe/Amsterdam', ch: 'Europe/Zurich',
+  at: 'Europe/Vienna', it: 'Europe/Rome', es: 'Europe/Madrid', pt: 'Europe/Lisbon', uk: 'Europe/London', ie: 'Europe/Dublin',
+  pl: 'Europe/Warsaw', cz: 'Europe/Prague', dk: 'Europe/Copenhagen', se: 'Europe/Stockholm', no: 'Europe/Oslo', fi: 'Europe/Helsinki',
+  gr: 'Europe/Athens', ro: 'Europe/Bucharest', us: 'America/New_York', ca: 'America/Toronto', br: 'America/Sao_Paulo',
+  ae: 'Asia/Dubai', in: 'Asia/Kolkata', sg: 'Asia/Singapore', cn: 'Asia/Shanghai', jp: 'Asia/Tokyo', au: 'Australia/Sydney', ma: 'Africa/Casablanca',
+};
+export function fuseauDuDestinataire(email: string): string {
+  const d = mail(email).split('@')[1] || '';
+  if (d.endsWith('.co.uk')) return 'Europe/London';
+  return FUSEAUX_TLD[d.split('.').pop() || ''] || 'Europe/Luxembourg';
+}
+function partiesFuseau(ms: number, tz: string): { y: number; mo: number; d: number; h: number; mi: number; wd: number } {
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', weekday: 'short', hour12: false });
+  const ps = f.formatToParts(new Date(ms));
+  const g = (t: string) => ps.find(p => p.type === t)?.value || '';
+  const wd = ({ Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 } as Record<string, number>)[g('weekday')] ?? 0;
+  return { y: +g('year'), mo: +g('month'), d: +g('day'), h: (+g('hour')) % 24, mi: +g('minute'), wd };
+}
+function murVersMs(y: number, mo: number, d: number, h: number, mi: number, tz: string): number {
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  const off = (t: number) => { const p = partiesFuseau(t, tz); return Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi) - t; };
+  let t = guess - off(guess);
+  t = guess - off(t);
+  return t;
+}
+const p2 = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * Moment d'envoi : à l'heure du destinataire, hors 8 h - 18 h ou le week-end → conseil : prochain
+ * matin ouvré à 8 h 30 chez lui (`conseil` = instant ISO, `libelle` lisible, heure de Luxembourg).
+ */
+export function momentEnvoi(now: number, email: string): { fuseau: string; heureLocale: string; horsHeures: boolean; conseil?: string; libelle?: string } {
+  const tz = fuseauDuDestinataire(email);
+  const p = partiesFuseau(now, tz);
+  const heureLocale = `${p.h} h ${p2(p.mi)}`;
+  const weekend = p.wd === 0 || p.wd === 6;
+  if (!weekend && p.h >= 8 && p.h < 18) return { fuseau: tz, heureLocale, horsHeures: false };
+  let t = Date.UTC(p.y, p.mo - 1, p.d);
+  if (p.h >= 8 || weekend) t += 86_400_000;
+  while ([0, 6].includes(new Date(t).getUTCDay())) t += 86_400_000;
+  const j = new Date(t);
+  const conseil = murVersMs(j.getUTCFullYear(), j.getUTCMonth() + 1, j.getUTCDate(), 8, 30, tz);
+  const lux = partiesFuseau(conseil, 'Europe/Luxembourg');
+  const jour = `${p2(j.getUTCDate())}/${p2(j.getUTCMonth() + 1)}`;
+  const ici = tz === 'Europe/Luxembourg';
+  return { fuseau: tz, heureLocale, horsHeures: true, conseil: new Date(conseil).toISOString(), libelle: `${jour} à 8 h 30${ici ? '' : ` chez ton correspondant (${lux.h} h ${p2(lux.mi)} à Luxembourg)`}` };
+}
+
 // ── Contrôle complet ─────────────────────────────────────────────────────────
 
 export function checkAvantEnvoi(input: SendCheckInput): SendCheckProblem[] {
@@ -432,7 +595,19 @@ export function checkAvantEnvoi(input: SendCheckInput): SendCheckProblem[] {
     ...checkHomonymes(destinataires, input.contacts || []),
     ...checkClientAutreProjet(destinataires, input.projetDuFil, input.contacts || [], input.clients || [], input.domainesClients || {}),
     ...checkRepondreATous({ estReponse, destinataires, ownText, seuil: input.seuilRepondreATous }),
-    ...checkRegistre({ ownText, threadText, tutoiementConnu: input.tutoiementConnu, nbDestinataires: destinataires.length }),
+    ...(() => {
+      const registre = checkRegistre({ ownText, threadText, tutoiementConnu: input.tutoiementConnu, nbDestinataires: destinataires.length });
+      const clientsDest = destinatairesClients(input, destinataires);
+      return [
+        ...registre,
+        // Tutoiement d'un client : pas en double avec l'alerte « le fil vouvoie ».
+        ...(registre.some(p => p.code === 'tutoiement') ? [] : checkTutoiementClient(ownText, clientsDest, input.tutoiementConnu)),
+        ...checkFournisseurEnCopie(input, clientsDest),
+      ];
+    })(),
+    ...checkLangue(ownText, input.langueHabituelle),
+    ...checkDateProjet(ownText, input.datesProjet, input.projetDuFil?.nom),
+    ...checkCordialement(ownText),
   ];
 }
 

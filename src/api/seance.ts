@@ -53,7 +53,16 @@ export interface SeanceCarte {
   contexte: SeanceContexte;
   patron?: string;
   regle?: { id: string; interpretation: string };
+  /** Trois réponses courtes (touches 5, 6, 7), jamais envoyées. */
+  suggestions?: string[];
+  /** Mise en relation probable (touche 8 : introducteur en copie cachée). */
+  miseEnRelation?: boolean;
 }
+
+// « Ne rien laisser filer » (07/10/2026, miroir de src/utils/inbox-seance.ts).
+export interface SeancePromesse { messageId: string; index: number; texte: string; echeance: string; sujet: string; a: string; sentAt: string; enRetard: boolean; webLink?: string }
+export interface SeanceOffreConsultee { messageId: string; projetId: string; offre: string; montant?: string; a: string; sentAt: string; libelle: string; webLink?: string }
+export interface SeanceCrASuivre { id: string; titre: string; valideLe: string; lien: string }
 
 // Assistant inbox (07/10/2026) : cartes spéciales (miroir de src/utils/inbox-seance.ts).
 export interface SeanceGroupe {
@@ -96,6 +105,9 @@ export interface Seance {
   sollicitationsHorsSeance?: number;
   autonomie?: SeancePropositionAutonomie[];
   concentration?: { actif: boolean; creneaux: string[]; retenus: number; prochain?: string; libelle?: string };
+  promesses?: SeancePromesse[];
+  offresConsultees?: SeanceOffreConsultee[];
+  crsASuivre?: SeanceCrASuivre[];
 }
 
 export const fetchSeance = (frais = false) =>
@@ -104,9 +116,37 @@ export const fetchStatsSeance = () =>
   workerRequest<{ stats: SeanceSemaine[]; dansLaBoite: number | null; objectif: number }>('GET', 'agent/seance/stats', undefined, { retry: true, timeoutMs: 30_000 });
 
 /** Apprentissage : action recommandée acceptée ou remplacée (`annule` : retour en arrière). Jamais bloquant. */
-export function noterDecisionSeance(recommandee: string | null, faite: string, annule = false, patron?: string): void {
-  void workerRequest('POST', 'agent/seance/decision', { recommandee, faite, ...(annule ? { annule: true } : {}), ...(patron ? { patron } : {}) }, { timeoutMs: 15_000 }).catch(() => { /* facultatif */ });
+export function noterDecisionSeance(recommandee: string | null, faite: string, annule = false, patron?: string, temps?: { dureeMs: number; client?: string }): void {
+  void workerRequest('POST', 'agent/seance/decision', {
+    recommandee, faite, ...(annule ? { annule: true } : {}), ...(patron ? { patron } : {}),
+    ...(temps && temps.client && !annule ? { dureeMs: Math.round(temps.dureeMs), client: temps.client } : {}),
+  }, { timeoutMs: 15_000 }).catch(() => { /* facultatif */ });
 }
+
+// ── Répondre plus vite, ne rien laisser filer (worker/inbox-agent/reponse-suivi.ts) ──
+export const fetchSuggestions = (messageId: string, mailbox: string) =>
+  workerRequest<{ textes: string[] }>('POST', 'agent/seance/suggestions', { messageId, mailbox }, { timeoutMs: 45_000 });
+export const preparerMiseEnRelation = (messageId: string, mailbox: string) =>
+  workerRequest<{ a: string[]; cci: string[]; sujet: string; texte: string; introducteur: { email: string; name: string } }>('POST', 'agent/seance/mise-en-relation', { messageId, mailbox }, { timeoutMs: 30_000 });
+export const promesseTache = (messageId: string, index: number) =>
+  workerRequest<{ ok: boolean; tacheId?: string; echeance?: string; projet?: string; lien?: string }>('POST', 'agent/seance/promesse', { messageId, index, action: 'tache' }, { timeoutMs: 45_000 });
+export const promesseEcarter = (messageId: string, index: number) =>
+  workerRequest<{ ok: boolean }>('POST', 'agent/seance/promesse', { messageId, index, action: 'ecarter' }, { timeoutMs: 20_000 });
+export const promesseAnnuler = (messageId: string, index: number, tacheId?: string) =>
+  workerRequest<{ ok: boolean }>('DELETE', 'agent/seance/promesse', { messageId, index, ...(tacheId ? { tacheId } : {}) }, { timeoutMs: 30_000 });
+export const relanceOffre = (messageId: string) =>
+  workerRequest<{ texte: string; resumeIntention: string; a: string[]; sujet: string; webLink: string }>('POST', 'agent/seance/relance-offre', { messageId }, { timeoutMs: 90_000 });
+export interface StatistiquesBoite {
+  topExpediteurs: Array<{ email: string; nom?: string; n: number }>;
+  horsHoraires: { n: number; part: number };
+  total: number;
+  tempsParClient: Array<{ client: string; minutes: number }>;
+  courbe: Array<{ jour: string; restants: number }>;
+  objectif: number;
+}
+export const fetchStatistiques = () => workerRequest<StatistiquesBoite>('GET', 'agent/seance/statistiques', undefined, { retry: true, timeoutMs: 30_000 });
+export const enregistrerRemplacant = (remplacant: string | null) =>
+  workerRequest<{ ok: boolean; remplacant: string | null }>('POST', 'agent/assistant/remplacant', { remplacant: remplacant || '' }, { timeoutMs: 20_000 });
 
 export const confierMail = (p: { messageId: string; mailbox: string; a: string; quand: string }) =>
   workerRequest<{ ok: boolean; nom?: string; jusqua?: string; prevenu?: boolean }>('POST', 'agent/seance/confier', p, { timeoutMs: 30_000 });
@@ -126,6 +166,9 @@ export interface ReglagesAssistant {
   ecrituresAgent: boolean;
   autonomieRanger: boolean;
   boiteSuivie: boolean;
+  /** Remplaçant pendant les congés (mails clients proposés), et collègues possibles. */
+  remplacant?: string | null;
+  collegues?: string[];
 }
 export type ConditionRetour =
   | { type: 'date'; at: string }

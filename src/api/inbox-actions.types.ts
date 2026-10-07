@@ -43,7 +43,8 @@ export type TypeAction =
   | 'newsletter-interessante'
   | 'newsletter-sans-interet'
   | 'mandat-associatif'
-  | 'modele-appris';
+  | 'modele-appris'
+  | 'tache-projet';
 
 export interface ActionProposee {
   type: TypeAction;

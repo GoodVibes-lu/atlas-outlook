@@ -6,7 +6,7 @@
  */
 import { showToast } from '../taskpane';
 import {
-  creerRegle, enregistrerConcentration, etatRegle, fetchReglagesAssistant, retirerDelegation, supprimerRegle,
+  creerRegle, enregistrerConcentration, enregistrerRemplacant, etatRegle, fetchReglagesAssistant, retirerDelegation, supprimerRegle,
   type ReglagesAssistant, type RegleAssistant,
 } from '../api/seance';
 import { humanError } from '../api/net';
@@ -54,6 +54,20 @@ export function monterReglagesAssistant(host: HTMLElement): void {
         </div>
       </div>
 
+      <div class="tool-row">
+        <div class="tool-row-icon">${icon('user', 18)}</div>
+        <div class="tool-row-body">
+          <p class="tool-row-title">Pendant mes congés</p>
+          <p class="help">Les mails clients qui attendent une réponse sont proposés à ce collègue, avec le contexte du projet (cloche ATLAS, dans ses horaires). Rien n'est transféré ni envoyé. À ton retour, le rattrapage ne te montre plus ce qu'il a pris en charge.</p>
+          <label class="form-label" for="as-remplacant">Remplaçant</label>
+          <select class="form-input" id="as-remplacant">
+            <option value="">Personne</option>
+            ${(r.collegues || []).map(e => `<option value="${escapeHtml(e)}" ${r!.remplacant === e ? 'selected' : ''}>${escapeHtml(e)}</option>`).join('')}
+          </select>
+          <button class="btn btn-secondary btn-sm" id="as-remplacant-save">${icon('check', 14)}Enregistrer</button>
+        </div>
+      </div>
+
       ${r.delegations.length ? `<div class="tool-row">
         <div class="tool-row-icon">${icon('check-circle', 18)}</div>
         <div class="tool-row-body">
@@ -61,6 +75,15 @@ export function monterReglagesAssistant(host: HTMLElement): void {
           ${r.delegations.map(d => `<div class="as-regle" data-p="${escapeHtml(d.patron)}"><p>${escapeHtml(d.libelle)}<br/><small>${d.etat === 'appliquer' ? `en service${d.appliquees ? ` · ${d.appliquees} fois` : ''}` : 'prêt, dès que l\'agent sort du mode observation'}</small></p><div class="btn-row"><button class="btn btn-ghost btn-sm" data-a="retirer">Reprendre la main</button></div></div>`).join('')}
         </div>
       </div>` : ''}`;
+
+    host.querySelector('#as-remplacant-save')?.addEventListener('click', async () => {
+      const v = (host.querySelector('#as-remplacant') as HTMLSelectElement).value;
+      try {
+        const res = await enregistrerRemplacant(v || null);
+        r!.remplacant = res.remplacant;
+        showToast(res.remplacant ? `Pendant tes congés : ${res.remplacant}` : 'Plus de remplaçant', 'success');
+      } catch (e) { showToast(humanError(e), 'error'); }
+    });
 
     host.querySelector('#as-conc-save')?.addEventListener('click', async () => {
       const actif = (host.querySelector('#as-conc-actif') as HTMLInputElement).checked;
