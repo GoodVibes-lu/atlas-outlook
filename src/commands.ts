@@ -23,10 +23,11 @@
  *                              et ouvre les mails demandés (src/api/dialogue-tableau.ts).
  *
  * Phase 2 de l'agent d'inbox : `atlasOnMessageSend`, gestionnaire de l'événement d'envoi
- * (Smart Alerts, `OnMessageSend`, mode « soft block », Mailbox 1.12) : contrôles avant l'envoi
- * LOCAUX (pièce jointe annoncée, « répondre à tous », tutoiement), sans appel réseau. Prêt mais
- * pas déclaré dans le manifeste (cf. commentaire « Smart Alerts » de manifest.xml) : le contrôle
- * se fait aujourd'hui dans l'onglet « 🛡️ Vérifier » du panneau de rédaction.
+ * (Smart Alerts, `OnMessageSend`, mode « soft block », Mailbox 1.12), ACTIVÉ dans manifest.xml le
+ * 08/10/2026 (décision de la direction). Ce fichier est chargé par commands.html (runtime
+ * navigateur : nouvel Outlook pour Mac, web, nouvel Outlook Windows) : mêmes contrôles que l'onglet
+ * « Relire avant envoi », données ATLAS comprises, dans un budget de 5 s ; réseau en panne ou budget
+ * dépassé = contrôles locaux, puis envoi autorisé. Outlook classique Windows charge launch-event.ts.
  */
 
 import {
@@ -48,8 +49,8 @@ import {
 import { lookupSenderFolder, recordSenderFolder } from './api/sender-folder-index';
 import { initRoamingStorage } from './api/roaming-storage';
 import { supportsMailbox } from './api/platform';
-import { checkAvantEnvoi, smartAlertMessage } from './utils/send-check';
-import { readComposeItem } from './components/send-check-panel';
+import { gererOnMessageSend } from './utils/send-check-office';
+import { enrichWithAtlas } from './components/send-check-panel';
 import { humanError } from './api/net';
 import { ouvrirTableauDialogue } from './api/dialogue-tableau';
 
@@ -356,20 +357,12 @@ export function atlasTableauCommand(event: Office.AddinCommands.Event): void {
 // ── Smart Alerts : contrôles avant l'envoi (OnMessageSend, Mailbox 1.12) ──
 
 /**
- * Gestionnaire de l'événement d'envoi (Smart Alerts, `SendMode="SoftBlock"`). Contrôles LOCAUX
- * seulement (pas d'appel au worker : Outlook limite la durée du gestionnaire) ; s'il y a quelque
- * chose à signaler, l'envoi est retenu avec le message, l'utilisateur peut corriger ou envoyer
- * quand même. En cas d'erreur ou d'API absente : l'envoi passe (jamais bloqué par ATLAS).
+ * Gestionnaire de l'événement d'envoi (Smart Alerts, `SendMode="SoftBlock"`), runtime navigateur.
+ * Mêmes contrôles que le bouton manuel (utils/send-check-office.ts), enrichis des fiches ATLAS quand
+ * le worker répond à temps ; s'il y a quelque chose à signaler, l'envoi est retenu avec le message et
+ * la personne peut corriger ou envoyer quand même. Erreur, API absente, réseau en panne ou budget
+ * dépassé : l'envoi passe (jamais bloqué par ATLAS).
  */
 async function atlasOnMessageSend(event: any): Promise<void> {
-  try {
-    if (!supportsMailbox('1.12')) { event.completed({ allowEvent: true }); return; }
-    const input = await readComposeItem();
-    const problems = checkAvantEnvoi(input);
-    if (!problems.length) { event.completed({ allowEvent: true }); return; }
-    event.completed({ allowEvent: false, errorMessage: smartAlertMessage(problems) });
-  } catch (e) {
-    console.warn('[ATLAS commands] contrôle avant envoi impossible, envoi autorisé :', e);
-    event.completed({ allowEvent: true });
-  }
+  await gererOnMessageSend(event, { enrichir: async (input) => (await enrichWithAtlas(input)).input });
 }

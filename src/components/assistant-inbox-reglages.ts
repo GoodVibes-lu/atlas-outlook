@@ -58,7 +58,7 @@ export function monterReglagesAssistant(host: HTMLElement): void {
         <div class="tool-row-icon">${icon('user', 18)}</div>
         <div class="tool-row-body">
           <p class="tool-row-title">Pendant mes congés</p>
-          <p class="help">Les mails clients qui attendent une réponse sont proposés à ce collègue, avec le contexte du projet (cloche ATLAS, dans ses horaires). Rien n'est transféré ni envoyé. À ton retour, le rattrapage ne te montre plus ce qu'il a pris en charge.</p>
+          <p class="help">Les mails clients qui attendent une réponse sont proposés à ce collègue, avec le contexte du projet (cloche ATLAS, dans ses horaires, même quand l'agent observe). Si ta demande de congé dans ATLAS désigne un remplaçant, c'est lui qui est prévenu ; ce réglage sert sinon. Rien n'est transféré ni envoyé. À ton retour, le rattrapage ne te montre plus ce qu'il a pris en charge.</p>
           <label class="form-label" for="as-remplacant">Remplaçant</label>
           <select class="form-input" id="as-remplacant">
             <option value="">Personne</option>

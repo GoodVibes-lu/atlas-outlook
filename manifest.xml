@@ -9,8 +9,15 @@
 
   Surfaces :
     - Panneau LECTURE : bureau (Windows classique, nouvel Outlook, Mac), web (DesktopFormFactor,
-      épinglable : SupportsPinning) ET mobile (MobileFormFactor / MobileMessageReadCommandSurface).
+      épinglable : SupportsPinning). Mobile : bloc MobileFormFactor conservé mais INACTIF depuis la
+      1.5.0 (Mailbox 1.12 exigé par Smart Alerts ; Outlook iPhone / Android s'arrête à 1.5) :
+      décision de la direction du 08/10/2026, le contrôle automatique avant envoi prime.
     - Panneau RÉDACTION : bureau et web uniquement (pas de surface de rédaction sur mobile).
+    - SMART ALERTS (1.5.0) : contrôle automatique avant chaque envoi (LaunchEvent OnMessageSend,
+      SendMode SoftBlock : la personne relit et peut envoyer quand même ; jamais HardBlock).
+      Runtime navigateur = commands.html (nouvel Outlook Mac / Windows, web) ; Outlook classique
+      Windows = launch-event.js (fichier seul, produit au build). Exige un déploiement par
+      l'administrateur (Centre d'administration Microsoft 365 › Applications intégrées).
   Domaines autorisés : uniquement le domaine du complément et worker.vibes.lu (aucun appel direct
   à Airtable ni à l'IA : tout passe par le worker).
   Plan d'essai : docs/agent-inbox-essai-complement.md
@@ -22,7 +29,7 @@
            xsi:type="MailApp">
 
   <Id>4f0d857e-bcc2-4f63-bc08-322e21ec2acc</Id>
-  <Version>1.4.0</Version>
+  <Version>1.5.0</Version>
   <ProviderName>GOOD VIBES</ProviderName>
   <DefaultLocale>fr-FR</DefaultLocale>
   <DisplayName DefaultValue="ATLAS" />
@@ -68,14 +75,24 @@
   <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides" xsi:type="VersionOverridesV1_0">
     <VersionOverrides xmlns="http://schemas.microsoft.com/office/mailappversionoverrides/1.1" xsi:type="VersionOverridesV1_1">
 
+      <!-- Mailbox 1.12 : exigé par l'événement OnMessageSend (Smart Alerts). Un client sans 1.12
+           (Outlook iPhone / Android, anciens Outlook) ne charge plus le complément : accepté. -->
       <Requirements>
-        <bt:Sets DefaultMinVersion="1.5">
+        <bt:Sets DefaultMinVersion="1.12">
           <bt:Set Name="Mailbox" />
         </bt:Sets>
       </Requirements>
 
       <Hosts>
         <Host xsi:type="MailHost">
+          <!-- Smart Alerts : runtime léger de l'événement d'envoi. Page HTML pour le runtime
+               navigateur (nouvel Outlook Mac / Windows, web) ; fichier .js seul pour Outlook
+               classique Windows (runtime JavaScript seul). -->
+          <Runtimes>
+            <Runtime resid="commandsFileUrl">
+              <Override type="javascript" resid="smartAlertsJsUrl" />
+            </Runtime>
+          </Runtimes>
           <DesktopFormFactor>
 
             <!-- ── FunctionFile : page invisible qui charge commands.js pour exécuter
@@ -322,35 +339,24 @@
               </OfficeTab>
             </ExtensionPoint>
 
-            <!-- ── Smart Alerts : contrôles avant l'envoi (agent d'inbox, phase 2). PRÊT, NON ACTIVÉ ──
-                 Aujourd'hui le contrôle est MANUEL : onglet « Vérifier » du panneau de rédaction
-                 (bureau / web). Le gestionnaire d'envoi « atlasOnMessageSend » existe déjà
-                 (src/commands.ts, mode soft block : l'utilisateur peut envoyer quand même).
-                 Pourquoi pas activé : l'événement OnMessageSend exige Mailbox 1.12 dans les
-                 Requirements de CE VersionOverrides (aujourd'hui 1.5, à cause du mobile) ; un client
-                 sans 1.12 (Outlook iPhone / Android, anciens Outlook) perdrait alors TOUT le complément.
-                 Pour l'activer (manifeste distinct bureau / web, ou le jour où le mobile suit) :
-                   1. Requirements de ce VersionOverrides : DefaultMinVersion="1.12" ;
-                   2. sous Host, avant DesktopFormFactor :
-                        <Runtimes>
-                          <Runtime resid="commandsFileUrl">
-                            <Override type="javascript" resid="smartAlertsJsUrl" />
-                          </Runtime>
-                        </Runtimes>
-                      (Outlook classique Windows exige un fichier .js seul : à produire au build et
-                      à déclarer dans bt:Urls sous l'id smartAlertsJsUrl) ;
-                   3. décommenter le point d'extension ci-dessous, puis augmenter Version.
+            <!-- ── Smart Alerts : contrôle AUTOMATIQUE avant l'envoi (activé le 08/10/2026) ──
+                 Gestionnaire « atlasOnMessageSend » : commands.ts (runtime navigateur) et
+                 launch-event.ts (Outlook classique Windows), mêmes contrôles que l'onglet « Relire
+                 avant envoi ». SoftBlock : l'envoi est retenu avec le message, la personne peut
+                 corriger ou envoyer quand même ; erreur, réseau en panne ou budget (5 s) dépassé =
+                 envoi autorisé. Jamais HardBlock. -->
             <ExtensionPoint xsi:type="LaunchEvent">
               <LaunchEvents>
                 <LaunchEvent Type="OnMessageSend" FunctionName="atlasOnMessageSend" SendMode="SoftBlock" />
               </LaunchEvents>
               <SourceLocation resid="commandsFileUrl" />
             </ExtensionPoint>
-            -->
 
           </DesktopFormFactor>
 
           <!-- ── Mobile (Outlook iPhone / Android) : panneau LECTURE seulement ──
+               INACTIF depuis la 1.5.0 : ce VersionOverrides exige Mailbox 1.12 (Smart Alerts), le
+               mobile s'arrête à 1.5. Bloc conservé pour le jour où Outlook mobile suivra.
                Mailbox 1.5 + ajouts sur mobile, pas d'épinglage ni de rédaction.
                Icônes : 25, 32 et 48 px aux échelles 1, 2 et 3 (exigence Microsoft). -->
           <MobileFormFactor>
@@ -404,6 +410,8 @@
           <bt:Url id="ctxCreateUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=create" />
           <bt:Url id="ctxReunionUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=reunion" />
           <bt:Url id="commandsFileUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/commands.html" />
+          <!-- Smart Alerts, Outlook classique Windows : fichier JS seul produit au build (vite.config.ts). -->
+          <bt:Url id="smartAlertsJsUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/launch-event.js" />
         </bt:Urls>
         <bt:ShortStrings>
           <bt:String id="groupLabel" DefaultValue="ATLAS" />

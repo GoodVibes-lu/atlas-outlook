@@ -10,9 +10,11 @@
  * sont indisponibles, seuls les contrôles locaux sont faits. Aucun appel IA, rien n'est envoyé ni
  * modifié.
  *
- * Contrôle manuel (« Vérifier avant d'envoyer ») : l'événement d'envoi `OnMessageSend` (Smart
- * Alerts, Mailbox 1.12) est prêt dans commands.ts mais pas activé dans le manifeste (il imposerait
- * Mailbox 1.12 à tout le complément, mobile compris) : voir le commentaire de manifest.xml.
+ * Contrôle manuel (« Relire avant envoi ») ET automatique : depuis le 08/10/2026 (décision de la
+ * direction), l'événement d'envoi `OnMessageSend` (Smart Alerts, Mailbox 1.12, SendMode SoftBlock)
+ * est activé dans manifest.xml ; commands.ts (runtime navigateur) et launch-event.ts (Outlook
+ * classique Windows) appliquent les MÊMES contrôles via utils/send-check-office.ts. Le mobile
+ * (Mailbox 1.5) perd le complément : accepté par la direction.
  *
  * API Office : getAsync des destinataires / objet (Mailbox 1.1), body.getAsync (1.3),
  * getAttachmentsAsync (1.8, sous garde : sinon le contrôle de pièce jointe est sauté).
@@ -23,62 +25,25 @@
  * heures (fuseau d'après le domaine) → conseil ; « Différer l'envoi » par `item.delayDeliveryTime`
  * (Mailbox 1.13 : nouvel Outlook pour Mac 1.1 à 1.14, web, Windows), sinon rappel de la commande
  * d'Outlook « Programmer l'envoi ». L'annulation d'envoi est un réglage d'Outlook lui-même.
- * Vérification Microsoft (doc du 16/09/2026) : `OnMessageSend` (Smart Alerts, 1.12) est pris en
- * charge par le nouvel Outlook pour Mac avec le manifeste XML, mais exige un déploiement par
- * l'administrateur et Mailbox 1.12 dans les Requirements du VersionOverrides (coupe le mobile) :
- * le bouton manuel reste la voie par défaut (décision à prendre par Charles).
+ * Vérification Microsoft (doc « Activate add-ins with events », relue le 08/10/2026) : `OnMessageSend`
+ * (Smart Alerts, 1.12) est pris en charge par le nouvel Outlook pour Mac, le web et Windows (nouveau
+ * et classique) avec le manifeste XML ; exige un déploiement par l'administrateur (Applications
+ * intégrées) et Mailbox 1.12 dans les Requirements du VersionOverrides (coupe le mobile).
  */
 
-import { checkAvantEnvoi, hasBlocking, momentEnvoi, GENERIC_DOMAINS, type SendCheckProblem, type SendCheckInput, type SendCheckRecipient } from '../utils/send-check';
+import { checkAvantEnvoi, hasBlocking, momentEnvoi, GENERIC_DOMAINS, type SendCheckProblem, type SendCheckInput } from '../utils/send-check';
+import { readComposeItem } from '../utils/send-check-office';
 import { getAllContacts, getAllTiers, getAllProjets, getLinkedConversationIds, fetchContactArgoProfile } from '../api/airtable';
 import { supportsMailbox } from '../api/platform';
 import { escapeHtml } from './agent-lists';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
 
-function getAsyncValue<T>(getter: ((cb: (r: Office.AsyncResult<T>) => void) => void) | undefined, fallback: T): Promise<T> {
-  return new Promise((resolve) => {
-    if (!getter) { resolve(fallback); return; }
-    try {
-      getter((r) => resolve(r.status === Office.AsyncResultStatus.Succeeded ? (r.value ?? fallback) : fallback));
-    } catch { resolve(fallback); }
-  });
-}
-
-const toRecipients = (list: Office.EmailAddressDetails[] | undefined): SendCheckRecipient[] =>
-  (list || []).map(r => ({ email: String(r?.emailAddress || ''), name: String(r?.displayName || '') })).filter(r => r.email);
-
-/** Message en cours de rédaction → entrée des contrôles (sans les données ATLAS). */
-export async function readComposeItem(): Promise<SendCheckInput & { conversationId: string }> {
-  const item = Office.context.mailbox?.item as any;
-  if (!item) throw new Error('Aucun message en cours de rédaction.');
-  const [subject, to, cc, bcc, html] = await Promise.all([
-    getAsyncValue<string>(item.subject?.getAsync?.bind(item.subject), ''),
-    getAsyncValue<Office.EmailAddressDetails[]>(item.to?.getAsync?.bind(item.to), []),
-    getAsyncValue<Office.EmailAddressDetails[]>(item.cc?.getAsync?.bind(item.cc), []),
-    getAsyncValue<Office.EmailAddressDetails[]>(item.bcc?.getAsync?.bind(item.bcc), []),
-    getAsyncValue<string>(item.body?.getAsync ? (cb: any) => item.body.getAsync(Office.CoercionType.Html, cb) : undefined, ''),
-  ]);
-  // Pièces jointes : Mailbox 1.8 en rédaction ; sinon inconnu (contrôle sauté plutôt que faux positif).
-  let piecesJointes: number | null = null;
-  if (supportsMailbox('1.8') && item.getAttachmentsAsync) {
-    const list = await getAsyncValue<Office.AttachmentDetailsCompose[] | null>(item.getAttachmentsAsync.bind(item), null);
-    if (list) piecesJointes = list.filter(a => !a.isInline).length;
-  }
-  return {
-    subject,
-    html,
-    to: toRecipients(to),
-    cc: toRecipients(cc),
-    bcc: toRecipients(bcc),
-    moi: String(Office.context.mailbox?.userProfile?.emailAddress || ''),
-    piecesJointes,
-    conversationId: String(item.conversationId || ''),
-  };
-}
+/** Lecture du message en cours : utils/send-check-office.ts (partagé avec le gestionnaire d'envoi). */
+export { readComposeItem };
 
 /** Complète l'entrée avec les données ATLAS (contacts, clients, projet du fil, tutoiement connu). */
-async function enrichWithAtlas(input: SendCheckInput & { conversationId: string }): Promise<{ input: SendCheckInput; atlas: boolean }> {
+export async function enrichWithAtlas(input: SendCheckInput & { conversationId: string }): Promise<{ input: SendCheckInput; atlas: boolean }> {
   try {
     const [contacts, tiers, projets, linked] = await Promise.all([
       getAllContacts(), getAllTiers(), getAllProjets(), getLinkedConversationIds().catch(() => new Map()),

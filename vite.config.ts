@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import { copyFileSync, cpSync, mkdirSync, existsSync } from 'fs';
+import { buildSync } from 'esbuild';
 
 export default defineConfig({
   root: '.',
@@ -26,6 +27,18 @@ export default defineConfig({
       name: 'copy-manifest-and-assets',
       closeBundle() {
         const dist = resolve(__dirname, 'dist');
+        // Smart Alerts (OnMessageSend) sur Outlook CLASSIQUE Windows : runtime JavaScript seul, qui
+        // exige UN fichier .js sans import (manifest.xml, bt:Url « smartAlertsJsUrl »). IIFE esbuild.
+        buildSync({
+          entryPoints: [resolve(__dirname, 'src/launch-event.ts')],
+          bundle: true,
+          format: 'iife',
+          platform: 'browser',
+          target: 'es2019',
+          minify: true,
+          outfile: resolve(dist, 'launch-event.js'),
+          logLevel: 'error',
+        });
         // Copy manifests
         copyFileSync(resolve(__dirname, 'manifest.xml'), resolve(dist, 'manifest.xml'));
         copyFileSync(resolve(__dirname, 'manifest.json'), resolve(dist, 'manifest.json'));
