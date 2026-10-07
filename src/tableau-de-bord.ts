@@ -238,6 +238,8 @@ async function chargerOfficeJs(): Promise<boolean> {
 
 /** Ouverture des liens propre à l'hôte (remplacée dans le dialogue Office). */
 let openLinkHote: ((url: string) => void) | null = null;
+/** Séance de tri : réponse dans Outlook par la page parente (dialogue Office seulement). */
+let repondreHote: ((messageId: string, html: string) => Promise<boolean>) | undefined;
 
 /** Ouvre une adresse depuis l'onglet (Outlook sur le web pour un mail, ATLAS pour une fiche). */
 function openLink(url: string): void {
@@ -285,7 +287,7 @@ async function start(): Promise<void> {
     renderError(e);
     return;
   }
-  demarrerTableau(document.getElementById('app')!, { openLink, ouvrirDansNavigateur: hoteMobile() ? ouvrirDansNavigateur : undefined });
+  demarrerTableau(document.getElementById('app')!, { openLink, ouvrirDansNavigateur: hoteMobile() ? ouvrirDansNavigateur : undefined, repondreDansOutlook: repondreHote });
 }
 
 async function initDialogueOffice(): Promise<void> {
@@ -298,6 +300,7 @@ async function initDialogueOffice(): Promise<void> {
     const lien = brancherSurParent(params.get('parent') === '1');
     setExternalTokenProvider(lien.jeton);
     openLinkHote = lien.openLink;
+    repondreHote = lien.repondre;
   }
   // Retour de la connexion par redirection : MSAL termine et revient à la page de départ.
   if (/[#&](code|error)=/.test(window.location.hash)) await finishDialogRedirect();
@@ -305,6 +308,8 @@ async function initDialogueOffice(): Promise<void> {
 
 (async () => {
   document.body.classList.add('tb');
+  // Lien de la cloche « Séance de tri » (`?seance=1`) : gardé pendant une éventuelle connexion Microsoft par redirection.
+  try { if (new URLSearchParams(window.location.search).get('seance') === '1') sessionStorage.setItem('atlas_tdb_seance', '1'); } catch { /* stockage indisponible */ }
   applyTheme(null);
   if (enFenetreConnexion()) {
     await fenetreConnexion();

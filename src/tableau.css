@@ -376,3 +376,73 @@ body.tb-tactile .tb-dock, body.tb-tactile .tb-peek { display: none !important; }
 
 /* Sécurité d'un mail : le bandeau (styles.css › .secu-bandeau) porte son propre cadre. */
 .tb-panel.tb-securite { padding: 0; border: 0; background: none; box-shadow: none; }
+
+/* ── Séance de tri (07/10/2026) : plein écran, une carte à la fois, action recommandée en jaune ── */
+.tb-seance-btn { white-space: nowrap; }
+.tb-seance {
+  position: fixed; inset: 0; z-index: 45; background: var(--bg); display: grid; grid-template-rows: auto 1fr auto;
+  opacity: 0; transform: translateY(8px); transition: opacity var(--tb-med) var(--tb-ease), transform var(--tb-med) var(--tb-ease);
+}
+.tb-seance.is-on { opacity: 1; transform: none; }
+.tb-seance.is-busy { cursor: progress; }
+.tb-seance.is-busy .tb-seance-carte { opacity: 0.75; }
+.tb-seance-top { display: flex; align-items: center; gap: 14px; padding: 12px 20px; background: var(--surface); box-shadow: var(--tb-depth-1); }
+.tb-seance-compteur { font-size: 14px; color: var(--text-2); }
+.tb-seance-compteur b:first-child { font-size: 22px; font-family: var(--mono); color: var(--text); margin-right: 2px; }
+.tb-seance-compteur.is-ok b:first-child { color: var(--success); }
+.tb-seance-prog { font-size: 12px; color: var(--text-3); font-family: var(--mono); }
+.tb-seance-main {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 340px); gap: 18px; align-items: start;
+  padding: 24px clamp(16px, 4vw, 56px); overflow: auto; max-width: 1180px; width: 100%; margin: 0 auto; box-sizing: border-box;
+}
+.tb-seance-carte {
+  background: var(--surface); border-radius: var(--r-card); box-shadow: var(--tb-depth-2); padding: 20px 22px;
+  display: flex; flex-direction: column; gap: 12px; animation: tb-seance-entre var(--tb-med) var(--tb-ease);
+}
+@keyframes tb-seance-entre { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+.tb-seance-carte.is-risque { box-shadow: 0 0 0 2px var(--danger-border), var(--tb-depth-2); }
+.tb-seance-risque {
+  display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--r-card);
+  background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border);
+}
+.tb-seance-risque div { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; }
+.tb-seance-de { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.tb-seance-de b { font-size: 15px; }
+.tb-seance-de span { color: var(--text-3); font-size: 12px; }
+.tb-seance-de .tb-when { margin-left: auto; }
+.tb-seance-objet { font-size: 19px; line-height: 1.3; margin: 0; }
+.tb-seance-resume {
+  margin: 0; color: var(--text-2); font-size: 14px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.tb-chips.is-gauche { justify-content: flex-start; }
+.tb-seance-brouillon { background: var(--surface-sunk); border-radius: var(--r-card); box-shadow: var(--tb-inset); padding: 8px 12px; }
+.tb-seance-brouillon summary { cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
+.tb-seance-brouillon pre { white-space: pre-wrap; font-family: var(--font); font-size: 13px; line-height: 1.5; margin: 8px 0 0; max-height: 34vh; overflow: auto; }
+.tb-note.is-err { color: var(--danger); }
+.tb-seance-reco {
+  display: flex; align-items: center; gap: 12px; justify-content: flex-start; text-align: left; padding: 12px 16px; font-size: 14.5px;
+}
+.tb-seance-reco span:last-child { display: flex; flex-direction: column; gap: 2px; }
+.tb-seance-reco small, .tb-seance-menu small { display: block; font-size: 11.5px; font-weight: 400; opacity: 0.8; }
+.tb-seance-touches { display: flex; flex-wrap: wrap; gap: 6px; }
+.tb-seance-touches .tb-btn { display: inline-flex; align-items: center; gap: 6px; }
+.tb-seance-ctx { position: sticky; top: 0; }
+.tb-seance-ctx-l { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.tb-seance-ctx-l:last-child { border-bottom: 0; }
+.tb-seance-ctx-l span { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: var(--text-3); }
+.tb-seance-ctx-l em { font-style: normal; color: var(--text-2); }
+.tb-seance-ctx-l em.is-warn { color: var(--warning); font-weight: 600; }
+.tb-seance-pied { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; padding: 10px 20px; font-size: 12px; color: var(--text-2); background: var(--surface); box-shadow: var(--tb-depth-1); }
+.tb-seance-fin { grid-column: 1 / -1; max-width: 560px; margin: 8vh auto 0; }
+.tb-seance-menu .tb-presets { grid-template-columns: minmax(0, 1fr); }
+.tb-seance-menu .tb-btn { display: flex; align-items: center; gap: 8px; text-align: left; justify-content: flex-start; }
+@media (max-width: 760px) {
+  .tb-seance-main { grid-template-columns: minmax(0, 1fr); padding: 14px 16px; }
+  .tb-seance-ctx { position: static; }
+  .tb-seance-top { flex-wrap: wrap; gap: 8px; padding: 10px 16px; }
+  .tb-cmdk { min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tb-seance, .tb-seance-carte { transition: none !important; animation: none !important; }
+}

@@ -16,6 +16,13 @@
 
 import { fetchJournee, type AgentJournee, type AgentListePile } from '../api/agent';
 import { renderMailList, type MailListOptions } from './agent-lists';
+import { ouvrirTableauDialogue } from '../api/dialogue-tableau';
+import { isMobile } from '../api/platform';
+
+/** Séance de tri (07/10/2026) : ouverte dans la grande fenêtre du tableau de bord (dialogue Office, Mac compris). */
+function seancePossible(): boolean {
+  try { return !isMobile() && typeof Office !== 'undefined' && typeof Office.context?.ui?.displayDialogAsync === 'function'; } catch { return false; }
+}
 
 interface Compteur { texte: string; n: number; libelle: string; pile?: AgentListePile; alerte?: boolean }
 
@@ -68,6 +75,7 @@ export async function refreshJourneeBanner(host: HTMLElement | null, opts: Pick<
   host.innerHTML = `
     <section class="journee-banner" aria-label="Ma journée">
       <span class="journee-title">Ma journée</span>
+      ${seancePossible() ? '<button type="button" class="journee-seance" id="journee-seance" title="Séance de tri : une carte par mail, l\'action est déjà préparée">Séance de tri</button>' : ''}
       <div class="journee-counts">${cs.map(x => x.pile
         ? `<button type="button" class="journee-count${x.alerte ? ' is-alert' : ''}" data-pile="${x.pile}" aria-expanded="false" aria-controls="journee-list" title="Voir la liste : ${x.libelle}">${chipInner(x)}</button>`
         : `<span class="journee-count is-static${x.alerte ? ' is-alert' : ''}">${chipInner(x)}</span>`).join('')}</div>
@@ -75,6 +83,9 @@ export async function refreshJourneeBanner(host: HTMLElement | null, opts: Pick<
     <div class="journee-list" id="journee-list" hidden></div>
   `;
   const list = host.querySelector<HTMLElement>('#journee-list')!;
+  host.querySelector('#journee-seance')?.addEventListener('click', () => {
+    ouvrirTableauDialogue({ seance: true, onErreur: (message) => opts.onInfo?.(message, 'error') });
+  });
   let ouverte: AgentListePile | null = null;
   host.querySelectorAll<HTMLButtonElement>('button[data-pile]').forEach(btn => {
     btn.addEventListener('click', () => {

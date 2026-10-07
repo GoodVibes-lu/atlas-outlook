@@ -29,6 +29,8 @@ import { h, toast, animerChiffre, choisirMoment, ouvrirCouche, mouvementReduit }
 import { renderDetail, renderDigest } from './detail';
 import { renderAujourdhui } from './aujourdhui';
 import { ouvrirPalette, type ActionPalette } from './palette';
+import { ouvrirSeance } from './seance';
+import { fetchStatsSeance, type SeanceSemaine } from '../api/seance';
 
 export type Section = 'priorites' | 'personnes' | 'clients' | 'mandats' | 'enAttente' | 'deCote' | 'factures' | 'newsletters' | 'notifications';
 
@@ -249,7 +251,7 @@ export function ecranTactile(): boolean {
   try { return window.matchMedia('(hover: none) and (pointer: coarse)').matches; } catch { return false; }
 }
 
-export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: string) => void; ouvrirDansNavigateur?: () => void }): void {
+export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: string) => void; ouvrirDansNavigateur?: () => void; repondreDansOutlook?: (messageId: string, html: string) => Promise<boolean> }): void {
   const tactile = ecranTactile();
   let boiteMemo = 'toutes';
   try { boiteMemo = localStorage.getItem('atlas.tdb.boite') || 'toutes'; } catch { /* stockage indisponible */ }
@@ -266,6 +268,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
         <span class="tb-mark">ATLAS</span>
         <div class="tb-boites" id="tb-boites" role="group" aria-label="Boîtes"></div>
         <span class="tb-spacer"></span>
+        <button type="button" class="tb-btn is-primary tb-seance-btn" id="tb-seance-btn" title="Séance de tri : une carte par mail, l'action est déjà préparée">${icon('inbox', 14)}<span>Séance de tri</span></button>
         <button type="button" class="tb-cmdk" id="tb-cmdk" aria-label="Rechercher ou agir">${icon('search', 14)}<span>Rechercher, agir…</span><span class="tb-spacer"></span><span class="tb-kbd">⌘K</span></button>
         <span class="tb-live" id="tb-live" aria-live="polite"><i></i><span>connexion…</span></span>
         <span class="tb-compte" id="tb-compte" hidden><span class="tb-compte-nom" id="tb-compte-nom"></span><button type="button" class="tb-lien" id="tb-compte-changer">Changer de compte</button></span>
@@ -337,8 +340,29 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       <div class="tb-panel"><div class="tb-h">Sections</div><nav class="tb-nav">${sectionsVisibles(t).map(s => `<button type="button" data-s="${s.id}" aria-current="${s.id === etat.section}">${h(s.libelle)}<span class="n">${t ? compteDe(t, s.id) : ''}</span></button>`).join('')}</nav></div>
       ${qui.length ? `<div class="tb-panel"><div class="tb-h">Qui traite quoi</div><div class="tb-mini">${qui.map(q => `<div class="tb-mini-row"><span>${h(q.nom)}</span><span class="tb-bar"><i style="width:${Math.round((q.mails / max) * 100)}%"></i></span><span class="mono">${q.mails}</span></div>`).join('')}</div></div>` : ''}
       ${t?.programmes.length ? `<div class="tb-panel"><div class="tb-h">Envois programmés<span class="tb-h-n">${t.programmes.length}</span></div><div class="tb-mini">${t.programmes.slice(0, 6).map(p => `<div class="tb-mini-row" title="${h(p.a.join(', '))}">${icon('clock', 13)}<span>${h(p.sujet || '(sans objet)')}</span><span class="tb-when">${h(quandLisible(p.quand, Date.now()))}</span></div>`).join('')}</div></div>` : ''}
+      ${statsSeanceHtml()}
       <div class="tb-panel tb-clavier"><div class="tb-h">Glisser un mail vers</div><p class="tb-note">« Je prends », une date ou un projet : le dock apparaît en bas pendant le glisser.</p></div>`;
     host.querySelectorAll<HTMLButtonElement>('[data-s]').forEach(b => b.addEventListener('click', () => allerSection(b.dataset.s as Section)));
+    host.querySelector<HTMLButtonElement>('[data-seance]')?.addEventListener('click', seance);
+  }
+
+  // Séance de tri (07/10/2026) : statistiques de la semaine (mails restants à la clôture, temps passé).
+  let statsSeance: { stats: SeanceSemaine[]; dansLaBoite: number | null; objectif: number } | null = null;
+  function statsSeanceHtml(): string {
+    const sem = statsSeance?.stats?.[0];
+    const n = statsSeance?.dansLaBoite;
+    if (!statsSeance) return '';
+    return `<div class="tb-panel"><div class="tb-h">Séance de tri</div><div class="tb-mini">`
+      + `${n != null ? `<div class="tb-mini-row"><span>Dans la boîte</span><span class="mono">${n} / objectif ${statsSeance.objectif}</span></div>` : ''}`
+      + `${sem ? `<div class="tb-mini-row"><span>Cette semaine</span><span class="mono">${sem.traites} triés · ${sem.minutes} min</span></div>`
+        + `<div class="tb-mini-row"><span>Clôture à 5 ou moins</span><span class="mono">${sem.objectifAtteint}/${sem.joursReleves}</span></div>` : '<p class="tb-note">Aucune séance cette semaine.</p>'}`
+      + `</div><button type="button" class="tb-btn" data-seance>${icon('inbox', 14)}Lancer la séance</button></div>`;
+  }
+  async function chargerStatsSeance(): Promise<void> {
+    try { statsSeance = await fetchStatsSeance(); renderLeft(); } catch { /* facultatif (boîte non suivie) */ }
+  }
+  function seance(): void {
+    ouvrirSeance({ openLink: opts.openLink, repondreDansOutlook: opts.repondreDansOutlook, onFerme: () => { void rafraichir(true); void chargerStatsSeance(); } });
   }
 
   function renderListe(nouv: string[] = []): void {
@@ -564,6 +588,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   document.addEventListener('keydown', e => {
     const cible = e.target as HTMLElement;
     const saisie = cible instanceof HTMLInputElement || cible instanceof HTMLTextAreaElement || cible instanceof HTMLSelectElement || cible?.isContentEditable;
+    if (document.getElementById('tb-seance')) return; // séance de tri ouverte : elle a son propre clavier
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); palette(); return; }
     if (saisie || e.metaKey || e.ctrlKey || e.altKey || document.querySelector('.tb-overlay')) return;
     const lignes = etat.section === 'newsletters' ? (etat.t?.newsletters.map(d => `nl|${d.expediteur}`) || []) : lignesDe(etat.t, etat.section).map(cleDe);
@@ -586,6 +611,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     else if (m && k === 'l') { e.preventDefault(); void actions.lierProjet(m); }
     else if (m && ['r', 't', 'c'].includes(k)) { e.preventDefault(); document.querySelector<HTMLElement>(`[data-raccourci="${k}"]`)?.click(); }
     else if (k === 'g') { e.preventDefault(); void rafraichir(true); }
+    else if (k === 'b') { e.preventDefault(); seance(); }
   });
 
   function commandesPalette(): ActionPalette[] {
@@ -603,6 +629,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     }
     sectionsVisibles(etat.t).forEach((s, i) => cmds.push({ id: `s-${s.id}`, groupe: 'Aller à', libelle: s.titre, raccourci: String(i + 1), faire: () => allerSection(s.id) }));
     cmds.push(
+      { id: 'seance', groupe: 'Général', libelle: 'Séance de tri : vider la boîte, une carte par mail', motsCles: 'trier inbox zéro objectif 5 fermer', raccourci: 'b', faire: () => seance() },
       { id: 'aujourdhui', groupe: 'Aller à', libelle: 'Aujourd\'hui : rendez-vous, engagements, réactivité', motsCles: 'agenda rdv promesses délai', faire: () => choisir(null) },
       { id: 'question', groupe: 'ARGO', libelle: 'Poser une question à ma boîte', motsCles: 'chercher qui quand', faire: () => outil('question') },
       { id: 'rattrapage', groupe: 'ARGO', libelle: 'Rattraper ce que j\'ai manqué', motsCles: 'absence retour résumé', faire: () => outil('rattrapage') },
@@ -636,13 +663,14 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     const lignes: Array<[string, string]> = [
       ['j / k', 'Mail suivant / précédent'], ['Entrée', 'Ouvrir dans Outlook'], ['r', 'Répondre avec ARGO'], ['t', 'Répondre avec un modèle'],
       ['e', 'De côté jusqu\'à demain 8 h'], ['s', 'De côté jusqu\'à…'], ['p', 'Je prends (boîte partagée)'], ['l', 'Rattacher à un projet'],
-      ['c', 'Commentaire interne'], ['x', 'Cocher le mail (Maj-x / Maj-clic : plage)'], ['l (mails cochés)', 'Rattacher le lot à un projet'], ['1 à 9', 'Sections'], ['⌘K ou /', 'Palette : chercher, agir'], ['g', 'Actualiser'], ['Échap', 'Fermer, revenir à Aujourd\'hui'],
+      ['b', 'Séance de tri (une carte par mail)'], ['c', 'Commentaire interne'], ['x', 'Cocher le mail (Maj-x / Maj-clic : plage)'], ['l (mails cochés)', 'Rattacher le lot à un projet'], ['1 à 9', 'Sections'], ['⌘K ou /', 'Palette : chercher, agir'], ['g', 'Actualiser'], ['Échap', 'Fermer, revenir à Aujourd\'hui'],
     ];
     el.innerHTML = `<h3>Raccourcis clavier</h3><div class="tb-help">${lignes.map(([k, v]) => `<span class="tb-kbd">${h(k)}</span><span>${h(v)}</span>`).join('')}</div><p class="tb-note">Glisser un mail : « Je prends », une date ou un projet.</p>`;
     ouvrirCouche(el);
   }
 
   $('tb-cmdk').addEventListener('click', palette);
+  $('tb-seance-btn').addEventListener('click', seance);
   // Écran étroit (téléphone) : la colonne de droite devient un volet ; « Aujourd'hui » l'ouvre, « Retour » le ferme.
   $('tb-jour').addEventListener('click', () => {
     if (etat.sel) choisir(null);
@@ -730,6 +758,11 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   renderListe();
   renderDroite();
   void rafraichir(true);
+  void chargerStatsSeance();
+  // Lien de la cloche de fin de journée (`?seance=1`, gardé pendant la connexion Microsoft) : séance ouverte d'emblée.
+  let lienSeance = new URLSearchParams(window.location.search).get('seance') === '1';
+  try { lienSeance = lienSeance || sessionStorage.getItem('atlas_tdb_seance') === '1'; sessionStorage.removeItem('atlas_tdb_seance'); } catch { /* stockage indisponible */ }
+  if (lienSeance) seance();
   window.setInterval(() => { if (document.visibilityState === 'visible') void rafraichir(false); }, POLL_MS);
   window.setInterval(() => { if (etat.enLigne && etat.derniereSync) majLive('ok'); }, 15_000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - etat.derniereSync > POLL_MS) void rafraichir(false); });

@@ -30,6 +30,9 @@ type Message =
   | { atlas: typeof MARQUE; type: 'jeton'; id: number; force?: boolean }
   | { atlas: typeof MARQUE; type: 'jeton-reponse'; id: number; token?: string; erreur?: string }
   | { atlas: typeof MARQUE; type: 'ouvrir'; url: string }
+  /** Séance de tri (07/10/2026) : formulaire de réponse d'Outlook sur le mail affiché par la fenêtre parente. */
+  | { atlas: typeof MARQUE; type: 'repondre'; id: number; messageId: string; html: string }
+  | { atlas: typeof MARQUE; type: 'repondre-reponse'; id: number; ok: boolean }
   | { atlas: typeof MARQUE; type: 'fermer' };
 
 function lire(raw: unknown): Message | null {
@@ -89,6 +92,25 @@ function idDuLienOutlook(url: string): string {
   return id;
 }
 
+/**
+ * Séance de tri : ouvre le formulaire de réponse d'Outlook (Mailbox 1.1 `displayReplyForm`, nouvel
+ * Outlook pour Mac compris) avec le texte préparé, SEULEMENT si la fenêtre parente montre ce mail-là
+ * (même internetMessageId). Office.js ne sait pas répondre à un autre mail que l'élément courant :
+ * sinon false, et le tableau copie le texte puis ouvre le mail. Rien n'est envoyé.
+ */
+function repondreSurElementCourant(messageId: string, html: string): boolean {
+  try {
+    const item: any = Office.context?.mailbox?.item;
+    if (!item || typeof item.displayReplyForm !== 'function') return false;
+    if (String(item.internetMessageId || '').trim() !== String(messageId || '').trim()) return false;
+    item.displayReplyForm(html);
+    return true;
+  } catch (e) {
+    console.warn('[dialogue-tableau] displayReplyForm impossible :', e);
+    return false;
+  }
+}
+
 /** Ouvre, depuis la fenêtre principale, l'adresse demandée par le tableau de bord. */
 function ouvrirDepuisTableau(url: string): void {
   const id = idDuLienOutlook(url);
@@ -102,6 +124,8 @@ function ouvrirDepuisTableau(url: string): void {
 }
 
 export interface OuvrirTableauOptions {
+  /** Ouvre directement la séance de tri (bouton « Séance de tri » du panneau). */
+  seance?: boolean;
   /** Appelé quand la fenêtre se ferme (ou n'a pas pu s'ouvrir). */
   onFerme?: () => void;
   /** Message lisible si la fenêtre ne s'ouvre pas. */
@@ -141,7 +165,9 @@ export function ouvrirTableauDialogue(opts: OuvrirTableauOptions = {}): void {
     // Pas de fin() : la fenêtre ouverte garde son propre suivi.
     return;
   }
-  Office.context.ui.displayDialogAsync(urlTableauDialogue(), {
+  const url = new URL(urlTableauDialogue());
+  if (opts.seance) url.searchParams.set('seance', '1');
+  Office.context.ui.displayDialogAsync(url.toString(), {
     width: 95,
     height: 90,
     // Web : vraie fenêtre (pas un cadre), sans demande de confirmation. Ignoré sur Mac / Windows.
@@ -171,6 +197,8 @@ export function ouvrirTableauDialogue(opts: OuvrirTableauOptions = {}): void {
         getWorkerToken(!!m.force)
           .then(token => repondre({ atlas: MARQUE, type: 'jeton-reponse', id: m.id, token }))
           .catch(e => repondre({ atlas: MARQUE, type: 'jeton-reponse', id: m.id, erreur: humanError(e) }));
+      } else if (m.type === 'repondre' && typeof m.messageId === 'string' && typeof m.html === 'string') {
+        repondre({ atlas: MARQUE, type: 'repondre-reponse', id: m.id, ok: repondreSurElementCourant(m.messageId, m.html) });
       } else if (m.type === 'ouvrir' && typeof m.url === 'string') {
         ouvrirDepuisTableau(m.url);
       } else if (m.type === 'fermer') {
@@ -193,6 +221,8 @@ export interface LienParent {
   jeton: (forceRefresh: boolean) => Promise<string>;
   /** Ouvre une adresse (un mail : dans Outlook, par la page parente ; sinon le navigateur). */
   openLink: (url: string) => void;
+  /** Séance de tri : réponse dans Outlook par la page parente (false : pas le mail affiché, ou pas de réponse). */
+  repondre: (messageId: string, html: string) => Promise<boolean>;
 }
 
 /**
@@ -202,6 +232,7 @@ export interface LienParent {
 export function brancherSurParent(avecJeton: boolean): LienParent {
   const ui: any = (Office.context as any)?.ui;
   const attente = new Map<number, { ok: (t: string) => void; ko: (e: Error) => void }>();
+  const reponses = new Map<number, (ok: boolean) => void>();
   let suivant = 1;
   let ecoute = false;
 
@@ -216,6 +247,7 @@ export function brancherSurParent(avecJeton: boolean): LienParent {
     try {
       ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg: any) => {
         const m = lire(arg?.message);
+        if (m?.type === 'repondre-reponse') { const r = reponses.get(m.id); reponses.delete(m.id); r?.(m.ok === true); return; }
         if (!m || m.type !== 'jeton-reponse') return;
         const p = attente.get(m.id);
         if (!p) return;
@@ -252,5 +284,15 @@ export function brancherSurParent(avecJeton: boolean): LienParent {
     window.open(url, '_blank', 'noopener');
   };
 
-  return { jeton, openLink };
+  const repondreParent = (messageId: string, html: string): Promise<boolean> => {
+    if (!avecJeton || !ecoute || typeof ui?.messageParent !== 'function') return Promise.resolve(false);
+    const id = suivant++;
+    return new Promise<boolean>(ok => {
+      const t = setTimeout(() => { reponses.delete(id); ok(false); }, 5000);
+      reponses.set(id, v => { clearTimeout(t); ok(v); });
+      if (!envoyer({ atlas: MARQUE, type: 'repondre', id, messageId, html })) { clearTimeout(t); reponses.delete(id); ok(false); }
+    });
+  };
+
+  return { jeton, openLink, repondre: repondreParent };
 }
