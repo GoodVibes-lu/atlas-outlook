@@ -5,6 +5,7 @@
 import { getLinkedConversationIds, getAllLinkedEmailIds, linkEmailToProject, linkEmailToContact, getAllProjets, resolveClientIdInProjetsBase, getFolderMapping, saveFolderMapping } from '../api/airtable';
 import { lireMailPourLiaison } from '../api/mail-liaison';
 import { fetchDossierProjet, rangerDansDossier } from '../api/agent';
+import { fetchProjetDuMail } from '../api/parite';
 import { convertToRestId, moveMessageToFolder, ensureFolderPath, resolveFolderPath, listAllMailFolders } from '../api/graph';
 import { dossiersDeRangement, trouverDossierProjet, cheminDossierProjetPropose } from '../shared/mail-folder-tree';
 import { summarizeEmail } from '../api/argo';
@@ -32,6 +33,8 @@ export class LinkPanel {
   private container: HTMLElement;
   private userName: string;
   private emailInfo: EmailInfo | null = null;
+  /** Projet auquel le mail est lié dans ATLAS (fil lié ou appris), affiché en tête du panneau. */
+  private projetLie: { id: string; libelle: string } | null = null;
   private isPrive = false;
   private searchPicker: SearchPicker | null = null;
   private searchExpanded = false;
@@ -138,10 +141,17 @@ export class LinkPanel {
       };
 
       // Check if already linked
-      const { graphIds } = await getAllLinkedEmailIds();
+      const { graphIds, internetIds } = await getAllLinkedEmailIds();
       const restId = convertToRestId(itemId);
-      if (graphIds.has(restId)) {
+      if (graphIds.has(restId) || (internetMessageId && internetIds.has(internetMessageId))) {
         this.emailInfo.isAlreadyLinked = true;
+      }
+      // Projet lié (07/10/2026, retour de Charles : « on ne voit nulle part à quel projet il est lié ») :
+      // même source que l'Inbox ATLAS (fil lié dans ATLAS, sinon fil appris par l'agent).
+      this.projetLie = null;
+      if (internetMessageId) {
+        this.projetLie = await fetchProjetDuMail(internetMessageId).catch(() => null);
+        if (this.projetLie) this.emailInfo.isAlreadyLinked = true;
       }
 
       // Render email info
@@ -151,8 +161,19 @@ export class LinkPanel {
           <dt>De</dt><dd>${this.escapeHtml(this.emailInfo.from || this.emailInfo.fromEmail)}${this.emailInfo.from ? `<br/><span class="meta">${this.escapeHtml(this.emailInfo.fromEmail)}</span>` : ''}</dd>
           <dt>À</dt><dd>${this.escapeHtml(this.emailInfo.to)}</dd>
         </dl>
-        ${this.emailInfo.isAlreadyLinked ? `<p class="status-linked" style="margin-top:10px;">${icon('check-circle', 14)}Déjà lié dans ATLAS</p>` : ''}
+        ${this.projetLie
+          ? `<p class="status-linked" style="margin-top:10px;">${icon('check-circle', 14)}Lié au projet ${this.escapeHtml(this.projetLie.libelle)}</p>`
+          : this.emailInfo.isAlreadyLinked ? `<p class="status-linked" style="margin-top:10px;">${icon('check-circle', 14)}Déjà lié dans ATLAS</p>` : ''}
       `;
+      // Mail déjà lié à un projet : « Classer » dans le dossier Outlook du projet, comme l'Inbox ATLAS.
+      if (this.projetLie && internetMessageId) {
+        const statusEl = document.getElementById('link-status');
+        if (statusEl) {
+          statusEl.style.display = 'block';
+          statusEl.innerHTML = '';
+          void this.offerFolderFilingViaAtlas({ type: 'projet', id: this.projetLie.id, label: this.projetLie.libelle, detail: '' } as SearchResult, internetMessageId);
+        }
+      }
 
       // Auto-detect project from subject (#NNN)
       await this.autoDetect();
@@ -213,7 +234,7 @@ export class LinkPanel {
         directContainer.style.display = 'none';
         searchToggleSection.style.display = 'block';
 
-        const isLinked = this.emailInfo.isAlreadyLinked;
+        const isLinked = this.projetLie ? this.projetLie.id === found.id : this.emailInfo.isAlreadyLinked;
 
         autoContent.innerHTML = `
           <section class="section" aria-labelledby="lk-h-det">
@@ -316,8 +337,11 @@ export class LinkPanel {
       document.getElementById('auto-suggestions')!.style.display = 'none';
 
       // Offer to file in Outlook folder if mapping exists
-      if (lu.viaAtlas) await this.offerFolderFilingViaAtlas(result, fullMessage.internetMessageId || this.emailInfo.internetMessageId || '');
-      else await this.offerFolderFiling(result, restId, token);
+      // Rangement par ATLAS (mêmes règles que l'Inbox : dossier du projet n'importe où, sinon création) ;
+      // repli sur le jeton de boîte du complément si la boîte n'est pas suivie par l'agent.
+      if (result.type === 'projet') this.projetLie = { id: result.id, libelle: result.label };
+      const parAtlas = await this.offerFolderFilingViaAtlas(result, fullMessage.internetMessageId || this.emailInfo.internetMessageId || '');
+      if (!parAtlas && !lu.viaAtlas) await this.offerFolderFiling(result, restId, token);
 
     } catch (err) {
       statusEl.innerHTML = errorHtml(err, { title: 'Liaison impossible', retry: false, compact: true });
@@ -332,12 +356,16 @@ export class LinkPanel {
    * le dossier du projet est cherché et le mail rangé par ATLAS (mêmes routes que le tableau de bord :
    * dossier trouvé n'importe où dans l'arbre, appris, création des niveaux manquants, annulable).
    */
-  private async offerFolderFilingViaAtlas(result: SearchResult, internetMessageId: string): Promise<void> {
-    if (!internetMessageId) return;
+  private async offerFolderFilingViaAtlas(result: SearchResult, internetMessageId: string): Promise<boolean> {
+    if (!internetMessageId) return false;
     const statusEl = document.getElementById('link-status')!;
     try {
       const projetId = result.type === 'projet' ? result.id : '';
-      const d = projetId ? await fetchDossierProjet(projetId) : { existant: null, propose: `Clients/${result.label}`, verrou: false };
+      const d = projetId ? await fetchDossierProjet(projetId, undefined, internetMessageId) : { existant: null, propose: `Clients/${result.label}`, verrou: false, dejaRange: false };
+      if (d.existant && d.dejaRange) {
+        statusEl.innerHTML += `<p class="status-linked" style="margin-top:10px;">${icon('folder', 14)}Classé dans ${this.escapeHtml(d.existant.chemin)}</p>`;
+        return true;
+      }
       if (d.existant) {
         statusEl.innerHTML += `
           <div class="card folder-card is-known" style="margin-top:10px;">
@@ -355,9 +383,9 @@ export class LinkPanel {
               `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans le dossier</p>`;
           } catch (err) { showToast(`${humanError(err)}`, 'error'); }
         });
-        return;
+        return true;
       }
-      if (!d.propose) return;
+      if (!d.propose) return false;
       statusEl.innerHTML += `
         <div class="card stack-sm" style="margin-top:10px;">
           <label class="form-label" for="folder-path-atlas">Ranger dans un nouveau dossier Outlook ?</label>
@@ -387,8 +415,12 @@ export class LinkPanel {
       document.getElementById('skip-atlas-btn')?.addEventListener('click', () => {
         document.getElementById('create-atlas-btn')!.closest('div')!.parentElement!.remove();
       });
-    } catch {
-      // Non bloquant : le rangement reste facultatif
+      return true;
+    } catch (err) {
+      // Boîte non suivie par l'agent (403) : le complément essaie avec son propre jeton. Sinon, dit pourquoi.
+      if ((err as any)?.status === 403) return false;
+      statusEl.innerHTML += `<p class="help" style="margin-top:10px;">Classement dans Outlook impossible pour le moment : ${this.escapeHtml(humanError(err))}</p>`;
+      return true;
     }
   }
 

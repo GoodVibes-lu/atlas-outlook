@@ -589,15 +589,16 @@ export async function fetchDossiers(mailbox?: string, recherche?: string): Promi
   return Array.isArray(r.dossiers) ? r.dossiers.filter(d => d && typeof d.id === 'string' && typeof d.chemin === 'string').map(d => ({ id: String(d.id), chemin: String(d.chemin) })) : [];
 }
 
-export interface DossierDuProjet { existant: DossierOutlook | null; propose: string | null; verrou: boolean }
+export interface DossierDuProjet { existant: DossierOutlook | null; propose: string | null; verrou: boolean; dejaRange?: boolean }
 
 /** GET /api/plugin/agent/dossiers/projet : dossier existant du projet (n'importe où dans l'arbre) ou chemin proposé. */
-export async function fetchDossierProjet(projetId: string, mailbox?: string): Promise<DossierDuProjet> {
+export async function fetchDossierProjet(projetId: string, mailbox?: string, messageId?: string): Promise<DossierDuProjet> {
   const q = new URLSearchParams({ projetId });
   if (mailbox) q.set('mailbox', mailbox);
+  if (messageId) q.set('messageId', messageId);
   const r = await pluginFetch<any>('GET', `agent/dossiers/projet?${q.toString()}`);
   const ex = r?.existant && typeof r.existant.id === 'string' ? { id: String(r.existant.id), chemin: String(r.existant.chemin || '') } : null;
-  return { existant: ex, propose: typeof r?.propose === 'string' ? r.propose : null, verrou: r?.verrou === true };
+  return { existant: ex, propose: typeof r?.propose === 'string' ? r.propose : null, verrou: r?.verrou === true, dejaRange: r?.dejaRange === true };
 }
 
 /** POST /api/plugin/agent/dossiers/creer : crée le dossier (niveaux manquants) ; lève (409 verrou) si l'agent ne peut pas écrire. */
