@@ -19,7 +19,7 @@
  */
 import { fetchTableau, fetchVersion, type Tableau, type TableauMail, type DigestNewsletter } from '../api/tableau';
 import { mettrePlusTard, retirerPlusTard, prendreMail, relacherMail } from '../api/agent';
-import { autoriserConnexionInteractive, callAtlasWorker } from '../api/worker';
+import { autoriserConnexionInteractive, callAtlasWorker, changerDeCompte, compteConnecte } from '../api/worker';
 import { getAllProjets, getAllContacts } from '../api/airtable';
 import { openAgentMail } from '../components/agent-lists';
 import { AtlasError, humanError } from '../api/net';
@@ -249,7 +249,7 @@ export function ecranTactile(): boolean {
   try { return window.matchMedia('(hover: none) and (pointer: coarse)').matches; } catch { return false; }
 }
 
-export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: string) => void }): void {
+export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: string) => void; ouvrirDansNavigateur?: () => void }): void {
   const tactile = ecranTactile();
   let boiteMemo = 'toutes';
   try { boiteMemo = localStorage.getItem('atlas.tdb.boite') || 'toutes'; } catch { /* stockage indisponible */ }
@@ -268,6 +268,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
         <span class="tb-spacer"></span>
         <button type="button" class="tb-cmdk" id="tb-cmdk" aria-label="Rechercher ou agir">${icon('search', 14)}<span>Rechercher, agir…</span><span class="tb-spacer"></span><span class="tb-kbd">⌘K</span></button>
         <span class="tb-live" id="tb-live" aria-live="polite"><i></i><span>connexion…</span></span>
+        <span class="tb-compte" id="tb-compte" hidden><span class="tb-compte-nom" id="tb-compte-nom"></span><button type="button" class="tb-lien" id="tb-compte-changer">Changer de compte</button></span>
         <button type="button" class="tb-iconbtn tb-seul-etroit" id="tb-jour" title="Aujourd'hui" aria-label="Aujourd'hui : rendez-vous, engagements, réactivité">${icon('clock', 16)}</button>
         <button type="button" class="tb-iconbtn tb-clavier" id="tb-aide" title="Raccourcis (?)" aria-label="Raccourcis clavier">${icon('question', 16)}</button>
         <button type="button" class="tb-iconbtn" id="tb-refresh" title="Actualiser" aria-label="Actualiser">${icon('refresh', 16)}</button>
@@ -653,6 +654,19 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   });
   $('tb-aide').addEventListener('click', aide);
   $('tb-refresh').addEventListener('click', () => rafraichir(true));
+  // Compte connecté (07/10/2026 : sur Outlook iPhone, le jeton venait d'une boîte d'équipe ajoutée
+  // dans Outlook) : affiché en permanence, « Changer de compte » propose le choix du compte.
+  function majCompte(): void {
+    const c = compteConnecte();
+    $('tb-compte').hidden = !c;
+    $('tb-compte-nom').textContent = c ? `Connecté en tant que ${c}` : '';
+    $('tb-compte-nom').title = c;
+  }
+  $('tb-compte-changer').addEventListener('click', async () => {
+    changerDeCompte();
+    await rafraichir(true);
+    majCompte();
+  });
 
   // ── Données et temps réel ──
   function majLive(statut: 'sync' | 'ok' | 'off', texte?: string): void {
@@ -680,7 +694,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       if (etat.boite !== 'toutes' && !t.boites.includes(etat.boite)) etat.boite = 'toutes';
       etat.derniereSync = Date.now();
       etat.enLigne = true;
-      renderBoites(); renderStats(); renderLeft(); renderListe(nouv);
+      renderBoites(); renderStats(); renderLeft(); renderListe(nouv); majCompte();
       // La colonne de droite n'est redessinée que si le mail choisi a disparu (saisie en cours protégée).
       if (etat.sel && !trouver(etat.sel) && !etat.sel.startsWith('nl|')) { etat.sel = null; renderDroite(); }
       // « Aujourd'hui » relu seulement si la personne n'y écrit pas (question à sa boîte, etc.).
@@ -690,14 +704,25 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     } catch (e) {
       etat.enLigne = false;
       majLive('off', 'hors ligne');
+      const session = e instanceof AtlasError && e.kind === 'session';
+      const choix = session && !!(e as AtlasError).data?.choixCompte;
       if (!etat.t) {
-        $('tb-list').innerHTML = `<div class="tb-empty"><strong>Tableau indisponible</strong><span>${h(humanError(e))}</span><button type="button" class="tb-btn" id="tb-retry">${e instanceof AtlasError && e.kind === 'session' ? 'Se connecter' : 'Réessayer'}</button></div>`;
+        $('tb-list').innerHTML = `<div class="tb-empty"><strong>Tableau indisponible</strong><span>${h(humanError(e))}</span>`
+          + `<span class="tb-actions"><button type="button" class="tb-btn is-primary" id="tb-retry">${choix ? 'Choisir mon compte' : session ? 'Se connecter' : 'Réessayer'}</button>`
+          + `${session && !choix ? '<button type="button" class="tb-btn" id="tb-choix">Changer de compte</button>' : ''}`
+          + `${session && opts.ouvrirDansNavigateur ? '<button type="button" class="tb-btn" id="tb-navigateur">Ouvrir dans le navigateur</button>' : ''}</span></div>`;
         document.getElementById('tb-retry')?.addEventListener('click', () => {
-          // Session refusée : le clic autorise la fenêtre de connexion de l'hôte (jamais ouverte toute seule).
-          if (e instanceof AtlasError && e.kind === 'session') autoriserConnexionInteractive();
+          // Session refusée : le clic autorise la fenêtre de connexion de l'hôte (jamais ouverte toute seule),
+          // avec le choix du compte si le compte proposé n'est pas un compte employé.
+          if (choix) changerDeCompte(); else if (session) autoriserConnexionInteractive();
           void rafraichir(true);
         });
+        document.getElementById('tb-choix')?.addEventListener('click', () => { changerDeCompte(); void rafraichir(true); });
+        document.getElementById('tb-navigateur')?.addEventListener('click', () => opts.ouvrirDansNavigateur?.());
+      } else if (session && force) {
+        toast(humanError(e), 'error');
       }
+      majCompte();
     }
   }
 

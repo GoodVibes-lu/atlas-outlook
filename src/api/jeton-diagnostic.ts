@@ -102,8 +102,11 @@ export function libelleProblemes(p: ProblemeJeton[]): string {
 }
 
 export interface ContexteConnexion {
-  /** 'teams' : application de la barre de gauche / onglet Applications ; 'dialogue' : grande fenêtre du complément ; 'office' : panneau. */
-  hote: 'teams' | 'dialogue' | 'office';
+  /**
+   * 'teams' : application de la barre de gauche / onglet Applications ; 'dialogue' : grande fenêtre du
+   * complément ; 'office' : panneau ; 'navigateur' : page ouverte seule dans un navigateur (repli mobile).
+   */
+  hote: 'teams' | 'dialogue' | 'office' | 'navigateur';
   /** Nom de l'application hôte (« Outlook », « Teams »…) et plateforme (« ios », « android », « desktop », « web »), si connus. */
   appli?: string;
   plateforme?: string;

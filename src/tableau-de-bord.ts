@@ -33,12 +33,24 @@
  *   4. chaque jeton est contrôlé avant usage (audience, étendue, tenant, compte) et, si le worker le
  *      refuse quand même, sa raison (`GET /api/plugin/agent/jeton`) est affichée : la page dit QUOI
  *      corriger (src/api/jeton-diagnostic.ts).
+ *
+ * CHOIX DU COMPTE (07/10/2026, Outlook iPhone : l'hôte donnait le jeton de good@vibes.lu, boîte
+ * d'équipe ajoutée dans Outlook, et « Se connecter » ne faisait rien : le jeton refusé restait en
+ * cache et le SSO redonnait le même compte, la fenêtre de connexion n'était jamais ouverte) :
+ *   - un compte refusé par le worker (pas de fiche Employés active) est mis de côté sur l'appareil ;
+ *     « Choisir mon compte » / « Changer de compte » ouvrent directement la fenêtre de connexion avec
+ *     prompt=select_account ; le compte choisi est retenu (localStorage) et passe avant les jetons
+ *     automatiques d'un autre compte (src/api/choix-compte.ts) ;
+ *   - « Connecté en tant que … · Changer de compte » dans la barre du haut (src/tableau/app.ts) ;
+ *   - repli mobile « Ouvrir dans le navigateur » : la même page (`?navigateur=1`) hors de l'hôte,
+ *     connexion MSAL par redirection avec choix du compte.
  */
 
 import {
-  autoriserConnexionInteractive, enableDialogRedirectLogin, enableHostedNaa, finishDialogRedirect, getWorkerToken,
-  setContexteConnexion, setExternalTokenProvider, setHoteTeams,
+  autoriserConnexionInteractive, changerDeCompte, enableDialogRedirectLogin, enableHostedNaa, finishDialogRedirect, getWorkerToken,
+  jetonFenetreConnexion, setContexteConnexion, setExternalTokenProvider, setHoteTeams,
 } from './api/worker';
+import { lireOptionsFenetre, urlFenetreConnexion, type OptionsConnexion } from './api/choix-compte';
 import { brancherSurParent } from './api/dialogue-tableau';
 import { ATLAS_BASE } from './api/platform';
 import { AtlasError, getDiag, humanError } from './api/net';
@@ -75,9 +87,24 @@ async function initHost(): Promise<InfoHote> {
   return info;
 }
 
-/** Adresse de la page de connexion ouverte par la fenêtre de l'hôte (même page, mode `auth=debut`). */
-function urlFenetreConnexion(): string {
-  return `${window.location.origin}${window.location.pathname}?auth=debut`;
+/** Adresse de la page sans paramètres (fenêtre de connexion, ouverture dans le navigateur). */
+function urlPage(): string {
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
+/** Hôte détecté (plateforme mobile : bouton « Ouvrir dans le navigateur »). */
+let infoHote: InfoHote = { ok: false, appli: '', plateforme: '' };
+function hoteMobile(): boolean {
+  return infoHote.plateforme === 'ios' || infoHote.plateforme === 'android';
+}
+
+/**
+ * Repli quand la fenêtre de connexion de l'hôte ne s'ouvre pas (Outlook mobile) : la même page dans
+ * le navigateur (`?navigateur=1`), où la connexion Microsoft se fait par redirection avec choix du
+ * compte (compte retenu ensuite dans ce navigateur).
+ */
+function ouvrirDansNavigateur(): void {
+  openLink(`${urlPage()}?navigateur=1`);
 }
 
 /**
@@ -90,8 +117,10 @@ function brancherConnexionTeams(info: InfoHote): void {
   if (!info.ok || !auth) return;
   setHoteTeams({
     sso: typeof auth.getAuthToken === 'function' ? () => auth.getAuthToken() : undefined,
+    // Page de départ sur le domaine de la page (validDomains du manifeste Teams), choix du compte
+    // (prompt=select_account) ou compte retenu pré-rempli (login_hint) passés dans l'adresse.
     fenetre: typeof auth.authenticate === 'function'
-      ? () => auth.authenticate({ url: urlFenetreConnexion(), width: 600, height: 640 })
+      ? (o: OptionsConnexion) => auth.authenticate({ url: urlFenetreConnexion(urlPage(), o), width: 600, height: 640 })
       : undefined,
   });
 }
@@ -120,20 +149,32 @@ async function fenetreConnexion(): Promise<void> {
   const app = document.getElementById('app')!;
   app.innerHTML = '<div class="loading"><div class="spinner"></div><p>Connexion à ton compte Microsoft…</p></div>';
   await initHost();
-  enableDialogRedirectLogin();
-  if (/[#&](code|error)=/.test(window.location.hash)) await finishDialogRedirect();
   try {
-    const token = await getWorkerToken();
+    // Retour de Microsoft traité par MSAL ; sinon départ vers Microsoft (choix du compte ou compte
+    // pré-rempli, passés par l'onglet dans l'adresse). '' : la page part vers Microsoft.
+    const token = await jetonFenetreConnexion(lireOptionsFenetre(window.location.search));
+    if (!token) return;
     try { sessionStorage.removeItem(CLE_HOTE); } catch { /* rien */ }
     teams?.authentication?.notifySuccess?.(token);
   } catch (e) {
     const detail = e instanceof AtlasError ? e.detail : String((e as Error)?.message || e);
-    // Redirection lancée : la page est en train de partir vers Microsoft, rien à signaler.
-    if (/redirection\)|connexion Microsoft en cours/.test(detail)) return;
-    try { sessionStorage.removeItem(CLE_HOTE); } catch { /* rien */ }
     if (typeof teams?.authentication?.notifyFailure === 'function') teams.authentication.notifyFailure(detail.slice(0, 400));
-    else renderError(humanError(e));
+    else renderError(e);
   }
+}
+
+const CLE_NAVIGATEUR = 'navigateur';
+
+/** Vrai si la page est ouverte seule dans un navigateur (`?navigateur=1`), ou au retour de Microsoft dans ce mode. */
+function enNavigateur(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('navigateur') === '1') {
+    try { sessionStorage.setItem(CLE_HOTE, CLE_NAVIGATEUR); } catch { /* stockage indisponible */ }
+    return true;
+  }
+  try {
+    return sessionStorage.getItem(CLE_HOTE) === CLE_NAVIGATEUR;
+  } catch { return false; }
 }
 
 /** Thème d'Outlook ('default' = clair, 'dark' / 'contrast' = sombre) ; sans hôte : celui du système. */
@@ -207,7 +248,9 @@ function openLink(url: string): void {
   window.open(url, '_blank', 'noopener');
 }
 
-function renderError(message: string): void {
+function renderError(e: unknown): void {
+  const message = humanError(e);
+  const choix = e instanceof AtlasError && !!e.data?.choixCompte;
   const app = document.getElementById('app')!;
   const diag = getDiag() as any;
   const detail = String(diag?.token?.lastError || '');
@@ -218,12 +261,19 @@ function renderError(message: string): void {
       <p class="tb-note">Le panneau ATLAS d'un mail (bandeau « Ma journée ») reste utilisable.</p>
       ${detail ? `<details class="tb-note"><summary>Détail technique</summary><p style="word-break:break-word">${h(detail.slice(0, 900))}</p></details>` : ''}
       <div class="tb-actions">
-        <button type="button" class="tb-btn is-primary" id="tdb-retry">Se connecter</button>
+        <button type="button" class="tb-btn is-primary" id="tdb-retry">${choix ? 'Choisir mon compte' : 'Se connecter'}</button>
+        ${choix ? '' : '<button type="button" class="tb-btn" id="tdb-choix">Changer de compte</button>'}
+        ${hoteMobile() ? '<button type="button" class="tb-btn" id="tdb-navigateur">Ouvrir dans le navigateur</button>' : ''}
         <button type="button" class="tb-btn" id="tdb-open-atlas">Ouvrir ATLAS</button>
       </div>
     </div>`;
   // Le clic autorise la fenêtre de connexion de l'hôte (jamais ouverte sans geste).
-  document.getElementById('tdb-retry')?.addEventListener('click', () => { autoriserConnexionInteractive(); void start(); });
+  document.getElementById('tdb-retry')?.addEventListener('click', () => {
+    if (choix) changerDeCompte(); else autoriserConnexionInteractive();
+    void start();
+  });
+  document.getElementById('tdb-choix')?.addEventListener('click', () => { changerDeCompte(); void start(); });
+  document.getElementById('tdb-navigateur')?.addEventListener('click', () => ouvrirDansNavigateur());
   document.getElementById('tdb-open-atlas')?.addEventListener('click', () => openLink(ATLAS_BASE));
 }
 
@@ -232,10 +282,10 @@ async function start(): Promise<void> {
     // Connexion d'abord : son erreur exacte est plus parlante qu'un tableau vide.
     await getWorkerToken();
   } catch (e) {
-    renderError(humanError(e));
+    renderError(e);
     return;
   }
-  demarrerTableau(document.getElementById('app')!, { openLink });
+  demarrerTableau(document.getElementById('app')!, { openLink, ouvrirDansNavigateur: hoteMobile() ? ouvrirDansNavigateur : undefined });
 }
 
 async function initDialogueOffice(): Promise<void> {
@@ -262,10 +312,15 @@ async function initDialogueOffice(): Promise<void> {
   }
   if (enDialogueOffice()) {
     await initDialogueOffice();
+  } else if (enNavigateur()) {
+    // Page ouverte seule dans le navigateur (repli d'Outlook mobile) : connexion par redirection.
+    setContexteConnexion({ hote: 'navigateur' });
+    enableDialogRedirectLogin();
+    if (/[#&](code|error)=/.test(window.location.hash)) await finishDialogRedirect();
   } else {
-    const info = await initHost();
+    infoHote = await initHost();
     enableHostedNaa();
-    brancherConnexionTeams(info);
+    brancherConnexionTeams(infoHote);
   }
   await start();
 })();

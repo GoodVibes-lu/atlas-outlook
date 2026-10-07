@@ -22,8 +22,12 @@ import {
   AtlasError, humanMessage, isHumanText, kindForStatus, netFetch, setDiagWorkerUrl, setTokenDiag,
 } from './net';
 import {
-  expliquerEchecConnexion, expliquerRaisonWorker, libelleProblemes, problemesJeton, resumeJeton, type ContexteConnexion,
+  expliquerEchecConnexion, expliquerRaisonWorker, libelleProblemes, lireClaims, problemesJeton, resumeJeton, type ContexteConnexion,
 } from './jeton-diagnostic';
+import {
+  CLE_COMPTES, apresConnexionInteractive, apresRefusWorker, deciderJeton, ecrireEtatComptes, lireEtatComptes,
+  messageCompteEcarte, normaliserCompte, optionsConnexion, type EtatComptes, type OptionsConnexion,
+} from './choix-compte';
 
 const DEFAULT_WORKER_URL = 'https://worker.vibes.lu';
 
@@ -222,7 +226,8 @@ async function getSsoToken(errors: string[]): Promise<string> {
 //     la personne (« Se connecter ») : jamais ouverte toute seule.
 export interface HoteTeams {
   sso?: () => Promise<string>;
-  fenetre?: () => Promise<string>;
+  /** Fenêtre de connexion de l'hôte, avec le choix du compte ou le compte pré-rempli. */
+  fenetre?: (o: OptionsConnexion) => Promise<string>;
 }
 let hoteTeams: HoteTeams | null = null;
 export function setHoteTeams(h: HoteTeams | null): void {
@@ -230,10 +235,57 @@ export function setHoteTeams(h: HoteTeams | null): void {
 }
 /** Autorise UNE tentative interactive (fenêtre de connexion de l'hôte) au prochain calcul du jeton. */
 let interactifAutorise = false;
+/** « Changer de compte » demandé : la prochaine connexion saute les voies automatiques et propose le choix. */
+let changementDemande = false;
+/**
+ * Geste « Se connecter » : autorise la fenêtre de connexion ET oublie le jeton en cache. Sans cet
+ * oubli (cause du 07/10/2026 sur Outlook iPhone), le clic relisait le jeton du compte refusé encore
+ * valide, ou le SSO le redonnait aussitôt : rien ne se passait.
+ */
 export function autoriserConnexionInteractive(): void {
   interactifAutorise = true;
   lastTokenFailure = null;
+  cachedToken = null;
+  cachedUntil = 0;
 }
+/** Geste « Changer de compte » / « Choisir mon compte » : connexion interactive avec choix du compte. */
+export function changerDeCompte(): void {
+  changementDemande = true;
+  autoriserConnexionInteractive();
+}
+
+// ── Compte choisi (tableau de bord seulement, cf. choix-compte.ts) ──
+//
+// Les règles de compte ne s'appliquent qu'aux pages du tableau de bord (contexteConnexion posé) :
+// le panneau du complément garde le compte de la boîte ouverte, comme avant.
+
+function lireComptes(): EtatComptes {
+  try { return lireEtatComptes(localStorage.getItem(CLE_COMPTES)); } catch { return lireEtatComptes(null); }
+}
+function ecrireComptes(e: EtatComptes): void {
+  try { localStorage.setItem(CLE_COMPTES, ecrireEtatComptes(e)); } catch { /* stockage indisponible : choix non retenu */ }
+}
+/** Adresse du compte d'un jeton (claims non vérifiés, le worker vérifie). */
+function compteDuJeton(token: string): string {
+  const c = lireClaims(token);
+  return normaliserCompte(c?.preferred_username || c?.upn || c?.email);
+}
+/** Compte du jeton en service ('' si aucun). */
+export function compteConnecte(): string {
+  return cachedToken ? compteDuJeton(cachedToken) : '';
+}
+/** Compte retenu sur cet appareil ('' si aucun). */
+export function compteRetenu(): string {
+  return lireComptes().retenu;
+}
+function reglesComptes(): boolean {
+  return !!contexteConnexion;
+}
+function estMobile(): boolean {
+  return contexteConnexion?.plateforme === 'ios' || contexteConnexion?.plateforme === 'android';
+}
+/** Dernier jeton automatique écarté à cause du compte (message et bouton adaptés). */
+let compteEcarte: { compte: string; raison: 'autre_compte_retenu' | 'compte_refuse' } | null = null;
 
 /** Hôte de la page, pour des messages d'erreur qui disent quoi corriger (null : panneau, messages historiques). */
 let contexteConnexion: ContexteConnexion | null = null;
@@ -255,11 +307,11 @@ async function getTeamsSsoToken(errors: string[]): Promise<string> {
   }
 }
 
-async function getTeamsFenetreToken(errors: string[]): Promise<string> {
+async function getTeamsFenetreToken(o: OptionsConnexion, errors: string[]): Promise<string> {
   if (!hoteTeams?.fenetre || !interactifAutorise) return '';
   interactifAutorise = false;
   try {
-    return String(await withTimeout(hoteTeams.fenetre(), TOKEN_STEP_TIMEOUT * 9, 'fenêtre de connexion') || '');
+    return String(await withTimeout(hoteTeams.fenetre(o), TOKEN_STEP_TIMEOUT * 9, 'fenêtre de connexion') || '');
   } catch (e) {
     errors.push(`fenêtre de connexion : ${messageErreur(e)}`);
     return '';
@@ -312,7 +364,12 @@ async function getRedirectClient(): Promise<any | null> {
         });
         await pca.initialize();
         const r = await pca.handleRedirectPromise().catch(() => null);
-        if (r?.account) pca.setActiveAccount(r.account);
+        if (r?.account) {
+          pca.setActiveAccount(r.account);
+          // Retour d'une connexion interactive : compte choisi par la personne, retenu sur l'appareil.
+          if (r.accessToken) retourRedirection = { token: String(r.accessToken), compte: normaliserCompte(r.account.username) };
+          if (contexteConnexion && r.account.username) ecrireComptes(apresConnexionInteractive(lireComptes(), r.account.username));
+        }
         return pca;
       } catch (e) {
         console.warn('[worker] MSAL (redirection) indisponible :', (e as Error)?.message || e);
@@ -329,12 +386,53 @@ export async function finishDialogRedirect(): Promise<void> {
   if (redirectLogin) await getRedirectClient();
 }
 
+/** Jeton rendu par le retour d'une connexion interactive par redirection (consommé une fois). */
+let retourRedirection: { token: string; compte: string } | null = null;
+
+/** Compte MSAL du cache dont l'adresse est `compte` (comparaison sans casse). */
+function compteMsal(pca: any, compte: string): any | undefined {
+  const c = normaliserCompte(compte);
+  if (!c) return undefined;
+  try {
+    return (pca.getAllAccounts?.() || []).find((a: any) => normaliserCompte(a?.username) === c);
+  } catch { return undefined; }
+}
+
+/**
+ * Jeton silencieux du compte RETENU, depuis le cache MSAL de la page (localStorage). Dans l'onglet
+ * (iframe ou vue web de l'hôte), jamais de fenêtre ni d'iframe cachée : cache et jeton de
+ * rafraîchissement seulement (CacheLookupPolicy.AccessTokenAndRefreshToken = 2).
+ */
+async function getRetenuSilencieux(retenu: string, forceRefresh: boolean, errors: string[]): Promise<string> {
+  if (!retenu || !ADDIN_SCOPE || !(redirectLogin || hoteTeams)) return '';
+  const pca = await getRedirectClient();
+  const account = pca ? compteMsal(pca, retenu) : undefined;
+  if (!account) return '';
+  try {
+    const r = await withTimeout<any>(pca.acquireTokenSilent({
+      scopes: [ADDIN_SCOPE], account,
+      ...(redirectLogin ? {} : { cacheLookupPolicy: 2 }),
+      ...(forceRefresh ? { forceRefresh: true } : {}),
+    }), TOKEN_STEP_TIMEOUT, 'compte retenu');
+    return r?.accessToken ? String(r.accessToken) : '';
+  } catch (e) {
+    errors.push(`compte retenu (${retenu}) : ${(e as any)?.errorCode || (e as Error)?.message || e}`);
+    return '';
+  }
+}
+
 /** Sans jeton silencieux, lance la redirection vers la connexion Microsoft (la page est quittée). */
-async function getRedirectToken(forceRefresh: boolean, errors: string[]): Promise<string> {
+async function getRedirectToken(forceRefresh: boolean, o: OptionsConnexion, errors: string[]): Promise<string> {
   if (!redirectLogin || !ADDIN_SCOPE) return '';
   const pca = await getRedirectClient();
   if (!pca) { errors.push('MSAL redirection indisponible'); return ''; }
-  const account = (pca.getActiveAccount?.() || pca.getAllAccounts?.()?.[0]) ?? undefined;
+  if (retourRedirection) {
+    const r = retourRedirection;
+    retourRedirection = null;
+    return r.token;
+  }
+  // Compte pré-rempli (retenu) d'abord, sinon le compte actif ; jamais en cas de choix demandé.
+  const account = o.choix ? undefined : (compteMsal(pca, o.indice) || (!o.indice ? (pca.getActiveAccount?.() || pca.getAllAccounts?.()?.[0]) : undefined)) ?? undefined;
   if (account) {
     try {
       const r = await withTimeout<any>(pca.acquireTokenSilent({ scopes: [ADDIN_SCOPE], account, ...(forceRefresh ? { forceRefresh: true } : {}) }), TOKEN_STEP_TIMEOUT, 'redirection silencieuse');
@@ -344,12 +442,31 @@ async function getRedirectToken(forceRefresh: boolean, errors: string[]): Promis
     }
   }
   try {
-    await pca.acquireTokenRedirect({ scopes: [ADDIN_SCOPE], redirectStartPage: window.location.href });
+    await pca.acquireTokenRedirect({
+      scopes: [ADDIN_SCOPE], redirectStartPage: window.location.href,
+      ...(o.choix ? { prompt: 'select_account' } : {}),
+      ...(o.indice ? { loginHint: o.indice } : {}),
+    });
     errors.push('connexion Microsoft en cours (redirection)');
   } catch (e) {
     errors.push(`redirection : ${(e as any)?.errorCode || (e as Error)?.message || e}`);
   }
   return '';
+}
+
+/**
+ * Fenêtre de connexion ouverte par l'hôte (`authentication.authenticate`, page `?auth=debut`) :
+ * jeton du retour de Microsoft, sinon jeton silencieux du compte pré-rempli, sinon redirection vers
+ * Microsoft (choix du compte ou compte pré-rempli). '' : la page part vers Microsoft.
+ */
+export async function jetonFenetreConnexion(o: OptionsConnexion): Promise<string> {
+  redirectLogin = true;
+  const errors: string[] = [];
+  const token = await getRedirectToken(false, o, errors);
+  if (token) return token;
+  const detail = errors.join(' | ');
+  if (/redirection\)/.test(detail)) return '';
+  throw new Error(detail || 'connexion Microsoft impossible');
 }
 
 let tokenInFlight: Promise<string> | null = null;
@@ -370,43 +487,84 @@ export async function getWorkerToken(forceRefresh = false): Promise<string> {
     const errors: string[] = [];
     let source: 'naa' | 'sso' | 'parent' | 'redirection' | '' = '';
     let token = '';
-    if (externalTokenProvider) {
-      try { token = await externalTokenProvider(forceRefresh); } catch (e) { errors.push(`page parente : ${(e as Error)?.message || e}`); }
-      token = jetonUtilisable(token, 'page parente', errors);
-      if (token) source = 'parent';
-    }
-    // Dans un dialogue Office (redirectLogin), ni NAA ni SSO Office : on passe à la redirection.
-    if (!token && !redirectLogin) {
-      token = jetonUtilisable(await getNaaToken(forceRefresh, errors), 'NAA', errors);
-      if (token) source = 'naa';
-    }
-    // Hôte Teams / Microsoft 365 : SSO Teams, puis (sur geste) la fenêtre de connexion de l'hôte.
-    if (!token && hoteTeams) {
-      token = jetonUtilisable(await getTeamsSsoToken(errors), 'SSO Teams', errors);
-      if (token) source = 'sso';
-      if (!token) {
-        token = jetonUtilisable(await getTeamsFenetreToken(errors), 'fenêtre de connexion', errors);
+    const regles = reglesComptes();
+    const comptes = regles ? lireComptes() : lireEtatComptes(null);
+    const changement = changementDemande;
+    changementDemande = false;
+    compteEcarte = null;
+    const opts = optionsConnexion(comptes, changement);
+    /**
+     * Jeton automatique : contrôles du worker (jetonUtilisable), puis règles du compte choisi
+     * (tableau de bord) : un autre compte que le compte retenu, ou un compte refusé par le worker
+     * (pas de fiche Employés active), est écarté.
+     */
+    const auto = (t: string, src: string): string => {
+      const ok = jetonUtilisable(t, src, errors);
+      if (!ok || !regles) return ok;
+      const d = deciderJeton(compteDuJeton(ok), comptes, false);
+      if (d.ok) return ok;
+      compteEcarte = { compte: d.compte, raison: d.raison };
+      errors.push(`${src} : compte ${d.compte} écarté (${d.raison === 'autre_compte_retenu' ? `compte retenu ${comptes.retenu}` : 'pas de fiche Employés active'})`);
+      return '';
+    };
+    /** Jeton d'une connexion où la personne a choisi son compte : retenu sur l'appareil. */
+    const interactif = (t: string, src: string): string => {
+      const ok = jetonUtilisable(t, src, errors);
+      if (ok && regles) ecrireComptes(apresConnexionInteractive(lireComptes(), compteDuJeton(ok)));
+      return ok;
+    };
+    // « Changer de compte » : aucune voie automatique, directement la connexion avec choix du compte.
+    if (!changement) {
+      if (externalTokenProvider) {
+        try { token = await externalTokenProvider(forceRefresh); } catch (e) { errors.push(`page parente : ${(e as Error)?.message || e}`); }
+        token = auto(token, 'page parente');
+        if (token) source = 'parent';
+      }
+      // Compte choisi sur cet appareil : son jeton (cache MSAL de la page) passe avant tout le reste.
+      if (!token && regles && comptes.retenu) {
+        token = auto(await getRetenuSilencieux(comptes.retenu, forceRefresh, errors), 'compte retenu');
         if (token) source = 'redirection';
       }
+      // Dans un dialogue Office (redirectLogin), ni NAA ni SSO Office : on passe à la redirection.
+      if (!token && !redirectLogin) {
+        token = auto(await getNaaToken(forceRefresh, errors), 'NAA');
+        if (token) source = 'naa';
+      }
+      // Hôte Teams / Microsoft 365 : SSO Teams, puis (sur geste) la fenêtre de connexion de l'hôte.
+      if (!token && hoteTeams) {
+        token = auto(await getTeamsSsoToken(errors), 'SSO Teams');
+        if (token) source = 'sso';
+      }
+      if (!token && !redirectLogin && !hoteTeams) {
+        token = auto(await getSsoToken(errors), 'SSO Office');
+        if (token) source = 'sso';
+      }
     }
-    if (!token && !redirectLogin && !hoteTeams) {
-      token = jetonUtilisable(await getSsoToken(errors), 'SSO Office', errors);
-      if (token) source = 'sso';
+    if (!token && hoteTeams) {
+      token = interactif(await getTeamsFenetreToken(opts, errors), 'fenêtre de connexion');
+      if (token) source = 'redirection';
     }
     if (!token) {
-      token = jetonUtilisable(await getRedirectToken(forceRefresh, errors), 'redirection', errors);
+      token = interactif(await getRedirectToken(forceRefresh, opts, errors), 'redirection');
       if (token) source = 'redirection';
     }
     if (!token) {
       const detail = errors.join(' | ') || 'aucune voie de connexion';
       setTokenDiag({ source: '', until: 0, lastError: detail, lastErrorAt: Date.now() });
       // 13002 / user_cancelled : la personne a fermé la fenêtre de connexion.
-      const cancelled = /13002|user_cancel/i.test(detail);
-      const err = new AtlasError('session', contexteConnexion
-        ? expliquerEchecConnexion(detail, contexteConnexion)
-        : cancelled
-          ? 'Connexion à ton compte Microsoft annulée : clique sur Réessayer pour te connecter.'
-          : humanMessage('session'), { route: 'jeton', detail });
+      const cancelled = /13002|user_cancel|CancelledByUser/i.test(detail);
+      const ecarte = compteEcarte as { compte: string; raison: 'autre_compte_retenu' | 'compte_refuse' } | null;
+      const message = ecarte && !cancelled
+        ? messageCompteEcarte({ ...ecarte, retenu: comptes.retenu, mobile: estMobile() })
+        : contexteConnexion
+          ? expliquerEchecConnexion(detail, contexteConnexion)
+          : cancelled
+            ? 'Connexion à ton compte Microsoft annulée : clique sur Réessayer pour te connecter.'
+            : humanMessage('session');
+      const err = new AtlasError('session', message, {
+        route: 'jeton', detail,
+        data: ecarte ? { choixCompte: ecarte.raison === 'compte_refuse', compteEcarte: ecarte.compte } : undefined,
+      });
       lastTokenFailure = { at: Date.now(), err };
       throw err;
     }
@@ -480,7 +638,19 @@ export async function workerRequest<T = Record<string, unknown>>(
           // Jeton obtenu mais refusé deux fois : on demande au worker POURQUOI (raison courte).
           const raison = await raisonRefusWorker(frais);
           setTokenDiag({ lastError: `worker 401 : ${raison || '?'} (${resumeJeton(frais)})`, lastErrorAt: Date.now() });
-          const texte = expliquerRaisonWorker(raison) + (raison === 'employe_inactif' && dernierCompteRefuse ? ` Compte reconnu : ${dernierCompteRefuse}.` : '');
+          if (raison === 'employe_inactif') {
+            // Compte sans fiche Employés active (boîte d'équipe ajoutée dans Outlook, 07/10/2026) :
+            // mis de côté sur l'appareil, jeton oublié ; « Choisir mon compte » propose le choix.
+            const compte = compteDuJeton(frais) || normaliserCompte(dernierCompteRefuse);
+            ecrireComptes(apresRefusWorker(lireComptes(), compte));
+            cachedToken = null;
+            cachedUntil = 0;
+            throw new AtlasError('session', messageCompteEcarte({ compte, raison: 'employe_inactif', mobile: estMobile() }), {
+              status: 401, route: label, detail: `HTTP 401 · raison ${raison} · compte ${compte || '?'}`,
+              data: { choixCompte: true, compteEcarte: compte },
+            });
+          }
+          const texte = expliquerRaisonWorker(raison);
           if (texte) throw new AtlasError('session', texte, { status: 401, route: label, detail: `HTTP 401 · raison ${raison}` });
         }
       }

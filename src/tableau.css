@@ -59,6 +59,17 @@ body.tb { background: var(--bg); min-width: 0; font-size: 13.5px; }
 .tb-live i { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 0 var(--success); }
 .tb-live.is-sync i { animation: tb-pulse 1.2s var(--tb-ease) infinite; }
 .tb-live.is-off i { background: var(--text-3); }
+/* Compte connecté (07/10/2026) : « Connecté en tant que … · Changer de compte » */
+.tb-compte { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-3); min-width: 0; max-width: 340px; }
+.tb-compte[hidden] { display: none; }
+.tb-compte-nom { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tb-compte-nom::after { content: '·'; margin-left: 6px; }
+.tb-lien {
+  border: 0; background: transparent; padding: 0; font: inherit; color: var(--text-2); text-decoration: underline;
+  text-underline-offset: 2px; cursor: pointer; white-space: nowrap;
+}
+.tb-lien:hover { color: var(--text); }
+.tb-empty .tb-actions { justify-content: center; }
 @keyframes tb-pulse { 0% { box-shadow: 0 0 0 0 rgba(31, 110, 69, 0.5); } 100% { box-shadow: 0 0 0 7px rgba(31, 110, 69, 0); } }
 .tb-iconbtn {
   display: inline-grid; place-items: center; width: 30px; height: 30px; border: 1px solid transparent; border-radius: var(--r-card);
@@ -317,6 +328,8 @@ body.tb { background: var(--bg); min-width: 0; font-size: 13.5px; }
   .tb-boites button { flex: 1 0 auto; min-height: 36px; }
   .tb-cmdk { order: 4; width: 100%; min-width: 0; min-height: 44px; }
   .tb-live { order: 1; }
+  .tb-compte { order: 2; width: 100%; max-width: none; min-height: 28px; }
+  .tb-lien { min-height: 28px; }
   .tb-stats {
     display: flex; gap: 8px; padding: 10px 12px; overflow-x: auto; scroll-snap-type: x proximity;
     scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
