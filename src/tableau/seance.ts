@@ -19,7 +19,12 @@
  * réponse d'Outlook si la fenêtre parente montre ce mail, sinon texte copié et mail ouvert).
  * Chaque décision (recommandation acceptée ou remplacée) est notée pour l'apprentissage.
  */
-import { fetchSeance, noterDecisionSeance, confierMail, annulerConfier, finSeance, type Seance, type SeanceAction, type SeanceCarte, type SeanceSemaine } from '../api/seance';
+import {
+  fetchSeance, noterDecisionSeance, confierMail, annulerConfier, finSeance, actionGroupe, annulerGroupe, desabonner, poserRetour, retirerRetour,
+  repondreAutonomie, sollicitationsVues,
+  type ConditionRetour, type Seance, type SeanceAction, type SeanceCarte, type SeanceDesabonnement, type SeanceGroupe,
+  type SeancePropositionAutonomie, type SeanceSemaine, type SeanceSollicitations,
+} from '../api/seance';
 import { annulerAction, executerAction, fetchDossierProjet, mettrePlusTard, rangerDansDossier, retirerPlusTard } from '../api/agent';
 import { deposerBrouillon, redigerArgo } from '../api/tableau';
 import { callAtlasWorker } from '../api/worker';
@@ -38,7 +43,17 @@ export interface OptionsSeance {
   onFerme?: () => void;
 }
 
-interface Defaire { carte: SeanceCarte; index: number; recommandee: string | null; faite: string; annuler?: () => Promise<void>; sortie: boolean }
+/** Cartes de l'Assistant inbox (07/10/2026) : regroupements avant les mails ; désabonnements, sollicitations et autonomie après. */
+type Special =
+  | { kind: 'groupe'; g: SeanceGroupe }
+  | { kind: 'desabonnement'; d: SeanceDesabonnement }
+  | { kind: 'sollicitations'; s: SeanceSollicitations }
+  | { kind: 'autonomie'; a: SeancePropositionAutonomie };
+
+interface Defaire {
+  carte?: SeanceCarte; index: number; recommandee: string | null; faite: string; annuler?: () => Promise<void>; sortie: boolean | number;
+  patron?: string; special?: { liste: 'avant' | 'apres'; item: Special };
+}
 
 const texteVersHtml = (t: string) => `<div>${t.split(/\n/).map(l => (l.trim() ? h(l) : '<br>')).join('<br>')}</div>`;
 const jourFr = (iso?: string) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(0, 10).split('-').reverse().join('/') : '');
@@ -91,6 +106,8 @@ export function ouvrirSeance(opts: OptionsSeance): void {
 
   let s: Seance | null = null;
   let cartes: SeanceCarte[] = [];
+  let avant: Special[] = [];
+  let apres: Special[] = [];
   let i = 0;
   let occupe = false;
   let traites = 0;
@@ -105,7 +122,8 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     else animerChiffre(b, s.dansLaBoite);
     $('sc-objectif').textContent = String(s?.objectif ?? 5);
     $('sc-compteur').classList.toggle('is-ok', s?.dansLaBoite != null && s.dansLaBoite <= (s?.objectif ?? 5));
-    $('sc-prog').textContent = cartes.length ? `Carte ${Math.min(i + 1, cartes.length)} sur ${cartes.length}` : '';
+    const restSp = avant.length + apres.length;
+    $('sc-prog').textContent = cartes.length ? `Carte ${Math.min(i + 1, cartes.length)} sur ${cartes.length}${restSp ? ` · ${restSp} regroupement${restSp > 1 ? 's' : ''} et propositions` : ''}` : restSp ? `${restSp} regroupement${restSp > 1 ? 's' : ''} et propositions` : '';
     ($('sc-annuler') as HTMLButtonElement).disabled = !pile.length;
   }
 
@@ -124,13 +142,146 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     if (x.offre) lignes.push(`<div class="tb-seance-ctx-l"><span>Dernière offre</span><b>${h(x.offre.libelle)}</b>${x.offre.montant ? `<em>${h(x.offre.montant)}</em>` : ''}${x.offre.envoyeeLe ? `<em>envoyée le ${h(jourFr(x.offre.envoyeeLe))}</em>` : ''}${x.offre.enAttente ? '<em class="is-warn">en attente de décision</em>' : x.offre.statut ? `<em>${h(x.offre.statut)}</em>` : ''}</div>`);
     lignes.push(`<div class="tb-seance-ctx-l"><span>Impayés</span>${x.impayes == null ? '<em>non disponible dans ATLAS</em>' : x.impayes.length ? x.impayes.map(f => `<b>${h(f.libelle)}</b>${f.montant ? `<em>${h(f.montant)}</em>` : ''}`).join('') : '<em>aucun</em>'}</div>`);
     if (x.dernierEchange) lignes.push(`<div class="tb-seance-ctx-l"><span>Dernier échange</span><b>${x.dernierEchange.sens === 'envoye' ? 'Tu as écrit' : 'Reçu'} ${h(ilYA(x.dernierEchange.at, Date.now()))}</b>${x.dernierEchange.sujet ? `<em>${h(x.dernierEchange.sujet)}</em>` : ''}</div>`);
+    if (x.devis) lignes.push(`<div class="tb-seance-ctx-l"><span>Devis fournisseur</span><b>${h(x.devis.libelle)}</b>${x.devis.expireLe ? `<em class="is-warn">expire le ${h(jourFr(x.devis.expireLe))}</em>` : '<em>ouvert</em>'}</div>`);
     if (x.confie) lignes.push(`<div class="tb-seance-ctx-l"><span>Confié</span><b>à ${h(x.confie.nom)}</b><em>${h(ilYA(x.confie.le, Date.now()))}, revenu sans suite</em></div>`);
     return lignes.join('');
+  }
+
+  function specialCourant(): { liste: 'avant' | 'apres'; item: Special } | null {
+    if (avant.length) return { liste: 'avant', item: avant[0] };
+    if (!cartes[i] && apres.length) return { liste: 'apres', item: apres[0] };
+    return null;
+  }
+
+  /** Boutons d'une carte spéciale : [libellé, action] ; Entrée = le premier. */
+  function boutonsSpecial(sp: Special): Array<{ libelle: string; detail?: string; faire: () => Promise<Partial<Defaire> & { message: string } | null> }> {
+    switch (sp.kind) {
+      case 'groupe': {
+        const g = sp.g;
+        const lancer = (action: 'archiver' | 'marquer-lu' | 'classer', libelle: string, detail?: string) => ({
+          libelle, detail,
+          faire: async () => {
+            const r = await actionGroupe({ action, messageIds: g.messageIds, ...(action === 'classer' && g.dossier ? { dossierId: g.dossier.id } : {}) });
+            if (!r.faits) throw new Error('Aucun mail traité (déjà rangés ?)');
+            const sortis = action === 'marquer-lu' ? 0 : r.faits;
+            return { message: `${r.faits} mail${r.faits > 1 ? 's' : ''} ${action === 'marquer-lu' ? 'marqué' + (r.faits > 1 ? 's' : '') + ' comme lu' + (r.faits > 1 ? 's' : '') : action === 'classer' ? 'classé' + (r.faits > 1 ? 's' : '') : 'archivé' + (r.faits > 1 ? 's' : '')}${r.echecs ? ` (${r.echecs} en échec)` : ''}`, sortie: sortis, annuler: async () => { await annulerGroupe({ actionIds: r.actionIds, lus: r.lus }); } };
+          },
+        });
+        return [
+          ...(g.actions.includes('classer') && g.dossier ? [lancer('classer', 'Classer tout', `Dans ${g.dossier.chemin}`)] : []),
+          ...(g.actions.includes('archiver') ? [lancer('archiver', 'Archiver tout')] : []),
+          lancer('marquer-lu', 'Marquer tout comme lu', 'Les mails restent dans la boîte'),
+        ];
+      }
+      case 'desabonnement': {
+        const d = sp.d;
+        const qui = d.nom || d.expediteur;
+        const principal = d.mode === 'un-clic' ? 'Me désabonner en un clic' : d.mode === 'brouillon' ? 'Préparer le mail de désabonnement' : 'Ouvrir la page de désabonnement';
+        return [
+          {
+            libelle: principal, detail: d.dansLaBoite ? `et archiver les ${d.dansLaBoite} mail${d.dansLaBoite > 1 ? 's' : ''} de ${qui}` : undefined,
+            faire: async () => {
+              const r = await desabonner(d.expediteur, { archiver: true });
+              if (r.brouillon) {
+                const u = `mailto:${encodeURIComponent(r.brouillon.a)}?subject=${encodeURIComponent(r.brouillon.sujet)}&body=${encodeURIComponent(r.brouillon.corps)}`;
+                opts.openLink(u);
+              } else if (r.lien) opts.openLink(r.lien);
+              const ids = r.actionIds || [];
+              const msg = r.statut === 'fait' ? `Désabonné de ${qui}` : r.statut === 'brouillon' ? 'Brouillon ouvert : relis puis envoie-le toi-même' : r.statut === 'echec' ? (r.erreur || 'Désabonnement refusé : page ouverte') : 'Page de désabonnement ouverte';
+              return { message: `${msg}${r.archives ? `, ${r.archives} archivé${r.archives > 1 ? 's' : ''}` : ''}`, sortie: r.archives || 0, ...(ids.length ? { annuler: async () => { await annulerGroupe({ actionIds: ids, lus: [] }); } } : {}) };
+            },
+          },
+          { libelle: `Garder ${qui}`, detail: 'Plus proposé', faire: async () => { await desabonner(d.expediteur, { ignorer: true }); return { message: `${qui} gardé` }; } },
+        ];
+      }
+      case 'sollicitations': {
+        const so = sp.s;
+        return [
+          {
+            libelle: `Tout archiver (${so.mails.length})`,
+            faire: async () => {
+              const r = await actionGroupe({ action: 'archiver', messageIds: so.mails.map(m => m.messageId) });
+              await sollicitationsVues(so.semaine);
+              return { message: `${r.faits} sollicitation${r.faits > 1 ? 's' : ''} archivée${r.faits > 1 ? 's' : ''}`, sortie: r.faits, annuler: async () => { await annulerGroupe({ actionIds: r.actionIds, lus: r.lus }); } };
+            },
+          },
+          { libelle: 'Vu, je les garde', detail: 'Elles restent hors de la séance', faire: async () => { await sollicitationsVues(so.semaine); return { message: 'Sollicitations passées en revue' }; } },
+        ];
+      }
+      case 'autonomie': {
+        const a = sp.a;
+        return [
+          { libelle: 'Oui, fais-le seul', detail: a.libelle, faire: async () => { const r = await repondreAutonomie(a.patron, true); return { message: r.message || 'Noté' }; } },
+          { libelle: 'Non, je garde la main', faire: async () => { await repondreAutonomie(a.patron, false); return { message: 'Noté : ATLAS continuera de proposer' }; } },
+        ];
+      }
+    }
+  }
+
+  function renderSpecial(cur: { liste: 'avant' | 'apres'; item: Special }): void {
+    const sp = cur.item;
+    const boutons = boutonsSpecial(sp);
+    let titre = '', corps = '';
+    if (sp.kind === 'groupe') {
+      titre = sp.g.libelle;
+      corps = `<p class="tb-seance-resume">Des mails semblables : une seule décision pour tous. Chaque action s'annule (⌘Z).</p><ul class="tb-seance-liste">${sp.g.apercu.map(m => `<li>${h(m.subject || '(sans objet)')}<span>${h(ilYA(m.receivedAt, Date.now()))}</span></li>`).join('')}${sp.g.messageIds.length > sp.g.apercu.length ? `<li class="tb-note">et ${sp.g.messageIds.length - sp.g.apercu.length} autre${sp.g.messageIds.length - sp.g.apercu.length > 1 ? 's' : ''}</li>` : ''}</ul>`;
+    } else if (sp.kind === 'desabonnement') {
+      titre = `Te désabonner de ${sp.d.nom || sp.d.expediteur} ?`;
+      corps = `<p class="tb-seance-resume">${sp.d.recus30j} envoi${sp.d.recus30j > 1 ? 's' : ''} en 30 jours, aucun ouvert.${sp.d.mode === 'brouillon' ? ' Cet expéditeur demande un mail : ATLAS le prépare, tu l\'envoies toi-même.' : sp.d.mode === 'lien' ? ' Cet expéditeur passe par une page web : elle s\'ouvre, tu confirmes.' : ' Désabonnement direct, sans ouvrir de page.'}</p>`;
+    } else if (sp.kind === 'sollicitations') {
+      titre = `${sp.s.mails.length} sollicitation${sp.s.mails.length > 1 ? 's' : ''} commerciale${sp.s.mails.length > 1 ? 's' : ''} cette semaine`;
+      corps = `<p class="tb-seance-resume">Démarchages d'inconnus, sortis de ta séance. Un coup d'œil, puis on range.</p><ul class="tb-seance-liste">${sp.s.mails.slice(0, 8).map(m => `<li><b>${h(m.from?.name || m.from?.email)}</b> ${h(m.subject || '(sans objet)')}<span>${h(m.raisons.slice(0, 2).join(' · '))}</span></li>`).join('')}</ul>`;
+    } else {
+      titre = 'Je le fais seul désormais ?';
+      corps = `<p class="tb-seance-resume">Tu as choisi « ${h(sp.a.libelle)} » ${sp.a.acceptees} fois d'affilée.${s?.mode !== 'actif' ? ' Tant que l\'agent observe, rien ne bouge : ce sera prêt pour la suite.' : ''}</p>`;
+    }
+    $('sc-main').innerHTML = `
+      <article class="tb-seance-carte is-special" aria-label="${h(titre)}">
+        <h2 class="tb-seance-objet">${h(titre)}</h2>
+        ${corps}
+        <div class="tb-seance-touches">
+          ${boutons.map((b, k) => `<button type="button" class="tb-btn${k === 0 ? ' is-primary tb-seance-reco' : ''}" data-sp="${k}"><span class="tb-kbd">${k === 0 ? 'Entrée' : k + 1}</span><span><b>${h(b.libelle)}</b>${b.detail ? `<small>${h(b.detail)}</small>` : ''}</span></button>`).join('')}
+          <button type="button" class="tb-btn is-ghost" data-k="Escape"><span class="tb-kbd">Échap</span>Passer</button>
+        </div>
+      </article>`;
+    $('sc-main').querySelectorAll<HTMLButtonElement>('[data-sp]').forEach(b => b.addEventListener('click', () => void faireSpecial(cur, Number(b.dataset.sp))));
+    $('sc-main').querySelectorAll<HTMLButtonElement>('[data-k]').forEach(b => b.addEventListener('click', () => touche(b.dataset.k!)));
+    ($('sc-main').querySelector('[data-sp="0"]') as HTMLElement | null)?.focus();
+  }
+
+  function retirerSpecial(cur: { liste: 'avant' | 'apres'; item: Special }): void {
+    if (cur.liste === 'avant') avant = avant.filter(x => x !== cur.item); else apres = apres.filter(x => x !== cur.item);
+  }
+
+  async function faireSpecial(cur: { liste: 'avant' | 'apres'; item: Special }, k: number): Promise<void> {
+    if (occupe) return;
+    const b = boutonsSpecial(cur.item)[k];
+    if (!b) return;
+    occupe = true;
+    root.classList.add('is-busy');
+    try {
+      const r = await b.faire();
+      if (!r) return;
+      const sortis = typeof r.sortie === 'number' ? r.sortie : 0;
+      if (sortis && s?.dansLaBoite != null) s.dansLaBoite = Math.max(0, s.dansLaBoite - sortis);
+      pile.push({ index: i, recommandee: null, faite: `special:${cur.item.kind}`, annuler: r.annuler, sortie: sortis, special: cur });
+      traites += cur.item.kind === 'groupe' ? cur.item.g.messageIds.length : 1;
+      retirerSpecial(cur);
+      toast(r.message, 'success', r.annuler ? () => void defaire() : undefined);
+      renderCarte();
+    } catch (e) {
+      toast(humanError(e), 'error');
+    } finally {
+      occupe = false;
+      root.classList.remove('is-busy');
+    }
   }
 
   function renderCarte(): void {
     majCompteur();
     const main = $('sc-main');
+    const sp = specialCourant();
+    if (sp) { renderSpecial(sp); return; }
     const c = cartes[i];
     if (!c) { renderFin(); return; }
     const rec = c.recommandee;
@@ -141,7 +292,7 @@ export function ouvrirSeance(opts: OptionsSeance): void {
         <div class="tb-seance-de"><b>${h(c.from?.name || c.from?.email || '')}</b><span>${h(c.from?.email || '')}</span><span class="tb-when">${h(ilYA(c.receivedAt, Date.now()))}</span></div>
         <h2 class="tb-seance-objet">${h(c.subject || '(sans objet)')}</h2>
         <p class="tb-seance-resume">${h(c.resume || '')}</p>
-        ${c.raisons.length ? `<div class="tb-chips is-gauche">${c.raisons.map(r => `<span class="tb-chip${/Client|Offre|Projet/.test(r) ? ' is-argo' : ''}">${h(r)}</span>`).join('')}</div>` : ''}
+        ${c.raisons.length ? `<div class="tb-chips is-gauche">${c.raisons.map(r => `<span class="tb-chip${/Client|Offre|Projet|Prospect|Devis/.test(r) ? ' is-argo' : ''}">${h(r)}</span>`).join('')}</div>` : ''}
         ${c.brouillon && !risque ? `<details class="tb-seance-brouillon"${rec?.type === 'repondre' ? ' open' : ''}><summary>${icon('reply', 14)}Brouillon prêt : ${h(c.brouillon.resumeIntention || 'réponse préparée')}</summary><pre>${h(c.brouillon.texte)}</pre>${(c.brouillon.alertes || []).map(a => `<p class="tb-note${a.gravite === 'bloquant' ? ' is-err' : ''}">${h(a.message)}</p>`).join('')}</details>` : ''}
         ${rec ? `<button type="button" class="tb-btn is-primary tb-seance-reco" id="sc-reco"><span class="tb-kbd">Entrée</span><span><b>${h(rec.libelle)}</b>${rec.detail ? `<small>${h(rec.detail)}</small>` : ''}</span></button>${c.appris ? `<p class="tb-note">${h(c.appris)}</p>` : ''}` : ''}
         <div class="tb-seance-touches">
@@ -291,8 +442,8 @@ export function ouvrirSeance(opts: OptionsSeance): void {
           break;
         }
       }
-      noterDecisionSeance(c.recommandee?.cle ?? null, a.cle);
-      pile.push({ carte: c, index: i, recommandee: c.recommandee?.cle ?? null, faite: a.cle, annuler, sortie });
+      noterDecisionSeance(c.recommandee?.cle ?? null, a.cle, false, c.patron);
+      pile.push({ carte: c, index: i, recommandee: c.recommandee?.cle ?? null, faite: a.cle, annuler, sortie, ...(c.patron ? { patron: c.patron } : {}) });
       traites++;
       if (message) toast(message, 'success', () => void defaire());
       suivante(sortie);
@@ -310,8 +461,18 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     occupe = true;
     try {
       if (d.annuler) await d.annuler();
-      if (d.faite !== 'passer') { noterDecisionSeance(d.recommandee, d.faite, true); traites = Math.max(0, traites - 1); }
-      if (d.sortie && s?.dansLaBoite != null) s.dansLaBoite++;
+      const n = typeof d.sortie === 'number' ? d.sortie : d.sortie ? 1 : 0;
+      if (n && s?.dansLaBoite != null) s.dansLaBoite += n;
+      if (d.special) {
+        // Carte spéciale : elle revient en tête de sa liste.
+        if (d.special.liste === 'avant') avant = [d.special.item, ...avant]; else apres = [d.special.item, ...apres];
+        if (d.faite !== 'passer') traites = Math.max(0, traites - (d.special.item.kind === 'groupe' ? d.special.item.g.messageIds.length : 1));
+        if (d.special.liste === 'apres') i = Math.min(i, cartes.length);
+        toast('Action annulée', 'info');
+        return;
+      }
+      if (!d.carte) return;
+      if (d.faite !== 'passer') { noterDecisionSeance(d.recommandee, d.faite, true, d.patron); traites = Math.max(0, traites - 1); }
       // La carte revient là où elle était.
       cartes = cartes.filter(x => x !== d.carte);
       i = Math.min(d.index, cartes.length);
@@ -332,9 +493,49 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     if (k != null) await faire(c, alts[k]);
   }
 
+  /** « Fais-le revenir quand… » : conditions possibles d'après le contexte du mail (projet, devis fournisseur). */
+  function conditionsRetour(c: SeanceCarte): Array<{ libelle: string; detail?: string; condition: ConditionRetour }> {
+    const out: Array<{ libelle: string; detail?: string; condition: ConditionRetour }> = [];
+    const p = c.contexte.projet;
+    if (p?.id && p.echeance) out.push({ libelle: 'À J-7 de l\'événement', detail: `${p.libelle}${p.dates ? ` · ${p.dates}` : ''}`, condition: { type: 'evenement-j7', projetId: p.id, libelle: p.libelle } });
+    if (p?.id) out.push({ libelle: 'Quand le projet passe à l\'étape suivante', detail: `${p.libelle}${p.statut ? ` · aujourd'hui « ${p.statut} »` : ''}`, condition: { type: 'etape-projet', projetId: p.id, statutInitial: p.statut || '', libelle: p.libelle } });
+    const d = c.contexte.devis;
+    if (d?.id && d.expireLe) out.push({ libelle: 'Avant l\'expiration du devis', detail: `${d.libelle} · expire le ${jourFr(d.expireLe)}`, condition: { type: 'expiration-devis', devisId: d.id, libelle: d.libelle } });
+    return out;
+  }
+
+  async function revenirQuand(c: SeanceCarte, condition: ConditionRetour, libelle: string): Promise<void> {
+    if (occupe) return;
+    occupe = true;
+    root.classList.add('is-busy');
+    try {
+      const r = await poserRetour(c.messageId, c.mailbox, condition);
+      const annuler = async () => { await retirerRetour(c.messageId, c.mailbox); };
+      noterDecisionSeance(c.recommandee?.cle ?? null, 'plus-tard', false, c.patron);
+      pile.push({ carte: c, index: i, recommandee: c.recommandee?.cle ?? null, faite: 'plus-tard', annuler, sortie: false, ...(c.patron ? { patron: c.patron } : {}) });
+      traites++;
+      toast(`De côté : revient ${libelle.charAt(0).toLowerCase()}${libelle.slice(1)}${r.attente ? ` (${r.attente.toLowerCase()})` : ''}`, 'success', () => void defaire());
+      suivante(false);
+    } catch (e) {
+      toast(humanError(e), 'error');
+    } finally {
+      occupe = false;
+      root.classList.remove('is-busy');
+    }
+  }
+
   function touche(k: string): void {
+    if (occupe) return;
+    const sp = specialCourant();
+    if (sp) {
+      if (k === 'Escape') { pile.push({ index: i, recommandee: null, faite: 'passer', sortie: false, special: sp }); retirerSpecial(sp); renderCarte(); return; }
+      if (k === 'Enter') { void faireSpecial(sp, 0); return; }
+      const n = Number(k);
+      if (n >= 2 && n <= 4) void faireSpecial(sp, n - 1);
+      return;
+    }
     const c = cartes[i];
-    if (!c || occupe) return;
+    if (!c) return;
     if (k === 'Escape') {
       pile.push({ carte: c, index: i, recommandee: null, faite: 'passer', sortie: false });
       suivante(false);
@@ -349,8 +550,10 @@ export function ouvrirSeance(opts: OptionsSeance): void {
       return;
     }
     if (k === '3') {
-      void menu('Plus tard', [{ libelle: 'Demain' }, { libelle: 'Lundi' }]).then(n => {
+      const conds = conditionsRetour(c);
+      void menu('Fais-le revenir…', [{ libelle: 'Demain' }, { libelle: 'Lundi' }, ...conds.map(x => ({ libelle: x.libelle, detail: x.detail }))]).then(n => {
         if (n == null) return;
+        if (n >= 2) { void revenirQuand(c, conds[n - 2].condition, conds[n - 2].libelle); return; }
         const a = [c.recommandee, ...c.alternatives].find(x => x?.type === 'plus-tard');
         if (a) void faire(c, a, n === 0 ? 'demain' : 'lundi');
       });
@@ -367,7 +570,7 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (['Enter', 'Escape', '1', '2', '3', '4'].includes(e.key)) {
       // Entrée sur un bouton de la carte : le clic s'en charge.
-      if (e.key === 'Enter' && cible instanceof HTMLButtonElement && cible.id !== 'sc-reco') return;
+      if (e.key === 'Enter' && cible instanceof HTMLButtonElement && cible.id !== 'sc-reco' && cible.dataset.sp !== '0') return;
       e.preventDefault();
       e.stopPropagation();
       touche(e.key);
@@ -392,8 +595,17 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     try {
       s = await fetchSeance(frais);
       cartes = s.cartes || [];
+      avant = (s.groupes || []).map(g => ({ kind: 'groupe' as const, g }));
+      apres = [
+        ...(s.desabonnements || []).map(d => ({ kind: 'desabonnement' as const, d })),
+        ...(s.sollicitations?.mails.length ? [{ kind: 'sollicitations' as const, s: s.sollicitations }] : []),
+        ...(s.autonomie || []).map(a => ({ kind: 'autonomie' as const, a })),
+      ];
       i = 0;
       $('sc-pied').innerHTML = renderStats(s.stats || []);
+      const conc = s.concentration;
+      if (conc?.actif && conc.retenus) $('sc-pied').insertAdjacentHTML('beforeend', `<span>Concentration : ${conc.retenus} mail${conc.retenus > 1 ? 's' : ''} non urgent${conc.retenus > 1 ? 's' : ''} attend${conc.retenus > 1 ? 'ent' : ''} ${h(conc.libelle || 'le prochain créneau')}</span>`);
+      if (s.sollicitationsHorsSeance && !s.sollicitations) $('sc-pied').insertAdjacentHTML('beforeend', `<span>${s.sollicitationsHorsSeance} sollicitation${s.sollicitationsHorsSeance > 1 ? 's' : ''} commerciale${s.sollicitationsHorsSeance > 1 ? 's' : ''} hors séance</span>`);
       if (s.mode !== 'actif') $('sc-pied').insertAdjacentHTML('beforeend', '<span class="tb-note">L\'agent observe : rien n\'est fait sans ta touche.</span>');
       renderCarte();
     } catch (e) {

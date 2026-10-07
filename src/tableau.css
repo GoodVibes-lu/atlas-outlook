@@ -436,6 +436,18 @@ body.tb-tactile .tb-dock, body.tb-tactile .tb-peek { display: none !important; }
 .tb-seance-pied { display: flex; flex-wrap: wrap; gap: 14px; justify-content: center; padding: 10px 20px; font-size: 12px; color: var(--text-2); background: var(--surface); box-shadow: var(--tb-depth-1); }
 .tb-seance-fin { grid-column: 1 / -1; max-width: 560px; margin: 8vh auto 0; }
 .tb-seance-menu .tb-presets { grid-template-columns: minmax(0, 1fr); }
+/* Assistant inbox (07/10/2026) : regroupements, désabonnement, sollicitations, autonomie. */
+.tb-seance-carte.is-special { grid-column: 1 / -1; max-width: 720px; width: 100%; margin: 0 auto; }
+.tb-seance-liste { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tb-seance-liste li { display: flex; gap: 8px; align-items: baseline; font-size: 13px; padding: 6px 10px; border-radius: var(--r-card); background: var(--surface-sunk); }
+.tb-seance-liste li span { margin-left: auto; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.tb-seance-touches .tb-btn span:last-child { display: inline-flex; flex-direction: column; text-align: left; }
+.tb-seance-touches .tb-btn small { font-size: 11px; font-weight: 400; opacity: 0.8; }
+.tb-delais-mois { margin-top: 10px; }
+.tb-delais-mois table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.tb-delais-mois th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-3); padding: 4px 6px; }
+.tb-delais-mois td { padding: 5px 6px; border-top: 1px solid var(--border); }
+.tb-delais-mois td.is-warn { color: var(--warning); font-weight: 600; }
 .tb-seance-menu .tb-btn { display: flex; align-items: center; gap: 8px; text-align: left; justify-content: flex-start; }
 @media (max-width: 760px) {
   .tb-seance-main { grid-template-columns: minmax(0, 1fr); padding: 14px 16px; }

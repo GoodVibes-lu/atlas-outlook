@@ -16,6 +16,7 @@ import { abandonnerEngagements, fetchEngagements, fetchRdv, fetchReactivite, mar
 import { renderQuestion, renderRattrapage } from '../components/agent-outils';
 import { renderMailList, renderJournal } from '../components/agent-lists';
 import { humanError } from '../api/net';
+import { fetchDelaisClients } from '../api/seance';
 import { icon } from '../ui/icons';
 import { dureeHeures, prenomDe, quandLisible, retardEngagement } from './logique';
 import { confirmer, h, toast } from './ui';
@@ -136,6 +137,20 @@ async function engagements(host: HTMLElement, ctx: Ctx): Promise<void> {
   }
 }
 
+/** Assistant inbox (backlog recUonEEqZHDPF3E4) : délai réel de réponse par client et par mois, cible 4 h ouvrées. */
+async function delaisMensuels(det: HTMLDetailsElement): Promise<void> {
+  const corps = det.querySelector('div')!;
+  try {
+    const d = await fetchDelaisClients();
+    if (!d.mois.length) { corps.innerHTML = '<p class="tb-note">Pas encore de mail client mesuré.</p>'; return; }
+    const nomMois = (m: string) => new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${m}-15T12:00:00Z`));
+    corps.innerHTML = d.mois.slice(0, 3).map(m => `<p class="tb-note"><b>${h(nomMois(m.mois))}</b> · objectif ${d.cibleHeures} h ouvrées</p>
+      <table><thead><tr><th>Client</th><th>Moyenne</th><th>Médiane</th><th>Répondus</th><th>Hors délai</th></tr></thead><tbody>
+      ${m.clients.slice(0, 10).map(c => `<tr><td>${h(c.client)}</td><td>${h(dureeHeures(c.moyenneHeures))}</td><td>${h(dureeHeures(c.medianeHeures))}</td><td>${c.repondus}</td><td class="${c.horsDelai ? 'is-warn' : ''}">${c.horsDelai}${c.sansReponse ? ` (dont ${c.sansReponse} sans réponse)` : ''}</td></tr>`).join('')}
+      </tbody></table>`).join('');
+  } catch (e) { corps.innerHTML = `<p class="tb-note">${h(humanError(e))}</p>`; }
+}
+
 async function reactivite(host: HTMLElement, ctx: Ctx): Promise<void> {
   try {
     const r = await fetchReactivite();
@@ -147,8 +162,11 @@ async function reactivite(host: HTMLElement, ctx: Ctx): Promise<void> {
       </tbody></table>
       ${retards ? `<div>${r.personnes.flatMap(p => p.enRetard.slice(0, 4).map(x => `<div class="tb-eng"><p><b>${h(x.client)}</b> · ${h(x.subject)}<br><small>${h(prenomDe(x.mailbox))} · ${h(dureeHeures(x.heures))} ouvrées · responsable ${h(prenomDe(x.responsable))}</small></p>${x.webLink ? `<button type="button" class="tb-btn is-ghost" data-l="${h(x.webLink)}">${icon('external', 14)}</button>` : ''}</div>`)).join('')}</div>` : ''}
       ${r.clients.length ? `<table class="tb-react"><thead><tr><th>Client</th><th>Délai moyen</th><th>Mails</th></tr></thead><tbody>${r.clients.slice(0, 6).map(c => `<tr class="${c.enRetard ? 'is-late' : ''}"><td>${h(c.client)}</td><td>${h(dureeHeures(c.moyenneHeures))}</td><td>${c.mails}</td></tr>`).join('')}</tbody></table>` : ''}
-      <p class="tb-note">Heures ouvrées de chacun (horaires, congés, fériés LU) ; le responsable du client est prévenu une fois par mail.</p>`;
+      <p class="tb-note">Heures ouvrées de chacun (horaires, congés, fériés LU) ; le responsable du client est prévenu une fois par mail.</p>
+      <details class="tb-delais-mois" id="tb-delais-mois"><summary>Délai réel de réponse par client, mois par mois</summary><div class="tb-note">Chargement…</div></details>`;
     host.querySelectorAll<HTMLButtonElement>('[data-l]').forEach(b => b.addEventListener('click', () => ctx.openLink(b.dataset.l!)));
+    const det = host.querySelector<HTMLDetailsElement>('#tb-delais-mois');
+    det?.addEventListener('toggle', () => { if (det.open && !det.dataset.lu) { det.dataset.lu = '1'; void delaisMensuels(det); } });
   } catch (e) {
     host.innerHTML = `<div class="tb-h">Réactivité aux clients</div><p class="tb-note">${h(humanError(e))}</p>`;
   }

@@ -818,3 +818,9 @@ body.tdb { background: var(--bg); }
 .secu-ligne { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
 .secu-ok { display: flex; gap: 6px; align-items: center; font-size: 12px; padding: 8px 0; }
 @media (prefers-color-scheme: dark) { .secu-bandeau.is-verifier { border-left-color: #f5a35c; } .secu-bandeau.is-verifier .secu-titre { color: #f5a35c; } }
+
+/* Assistant inbox (07/10/2026) : réglages (concentration, règles en français, tâches confiées). */
+.checkbox-row { display: flex; align-items: center; gap: 8px; }
+.as-regle { padding: 8px 10px; margin-top: 8px; border-radius: 8px; background: var(--surface-sunk, rgba(0, 0, 0, 0.04)); }
+.as-regle p { margin: 0 0 6px; font-size: 12.5px; line-height: 1.45; }
+.as-regle small { color: var(--text-3, #777); }
