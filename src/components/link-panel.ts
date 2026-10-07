@@ -2,19 +2,17 @@
  * Link Panel — Link current email to a projet/tiers/contact
  */
 
-import { getLinkedConversationIds, getAllLinkedEmailIds, linkEmailToProject, linkEmailToContact, getAllProjets, resolveClientIdInProjetsBase, getFolderMapping, saveFolderMapping } from '../api/airtable';
+import { getLinkedConversationIds, getAllLinkedEmailIds, linkEmailToProject, linkEmailToContact, getAllProjets, resolveClientIdInProjetsBase } from '../api/airtable';
 import { lireMailPourLiaison } from '../api/mail-liaison';
-import { fetchDossierProjet, rangerDansDossier } from '../api/agent';
+import { renderClasserOutlook } from './agent-dossiers';
 import { fetchProjetDuMail } from '../api/parite';
-import { convertToRestId, moveMessageToFolder, ensureFolderPath, resolveFolderPath, listAllMailFolders } from '../api/graph';
-import { dossiersDeRangement, trouverDossierProjet, cheminDossierProjetPropose } from '../shared/mail-folder-tree';
+import { convertToRestId } from '../api/graph';
 import { summarizeEmail } from '../api/argo';
 import { SearchPicker } from './search-picker';
-import type { SearchResult, MailMessageFull, Projet } from '../types';
+import type { SearchResult } from '../types';
 import { showToast } from '../taskpane';
 import { escapeHtml } from '../utils/html';
 import { loadingHtml, inlineLoadingHtml, emptyHtml, errorHtml, renderError } from '../ui/states';
-import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
 
 interface EmailInfo {
@@ -166,14 +164,7 @@ export class LinkPanel {
           : this.emailInfo.isAlreadyLinked ? `<p class="status-linked" style="margin-top:10px;">${icon('check-circle', 14)}Déjà lié dans ATLAS</p>` : ''}
       `;
       // Mail déjà lié à un projet : « Classer » dans le dossier Outlook du projet, comme l'Inbox ATLAS.
-      if (this.projetLie && internetMessageId) {
-        const statusEl = document.getElementById('link-status');
-        if (statusEl) {
-          statusEl.style.display = 'block';
-          statusEl.innerHTML = '';
-          void this.offerFolderFilingViaAtlas({ type: 'projet', id: this.projetLie.id, label: this.projetLie.libelle, detail: '' } as SearchResult, internetMessageId);
-        }
-      }
+      if (this.projetLie && internetMessageId) this.afficherClassement(internetMessageId, this.projetLie);
 
       // Auto-detect project from subject (#NNN)
       await this.autoDetect();
@@ -306,7 +297,6 @@ export class LinkPanel {
 
     try {
       const lu = await lireMailPourLiaison(this.emailInfo.itemId, this.emailInfo.internetMessageId);
-      const { token, restId } = lu;
       const fullMessage = lu.message;
 
       // Determine direction
@@ -337,11 +327,9 @@ export class LinkPanel {
       document.getElementById('auto-suggestions')!.style.display = 'none';
 
       // Offer to file in Outlook folder if mapping exists
-      // Rangement par ATLAS (mêmes règles que l'Inbox : dossier du projet n'importe où, sinon création) ;
-      // repli sur le jeton de boîte du complément si la boîte n'est pas suivie par l'agent.
+      // Classement dans Outlook, comme l'Inbox ATLAS après une liaison.
       if (result.type === 'projet') this.projetLie = { id: result.id, libelle: result.label };
-      const parAtlas = await this.offerFolderFilingViaAtlas(result, fullMessage.internetMessageId || this.emailInfo.internetMessageId || '');
-      if (!parAtlas && !lu.viaAtlas) await this.offerFolderFiling(result, restId, token);
+      this.afficherClassement(fullMessage.internetMessageId || this.emailInfo.internetMessageId || '', this.projetLie || undefined);
 
     } catch (err) {
       statusEl.innerHTML = errorHtml(err, { title: 'Liaison impossible', retry: false, compact: true });
@@ -352,203 +340,22 @@ export class LinkPanel {
   // ── Folder Filing ──
 
   /**
-   * Rangement par le worker (07/10/2026) : quand Outlook ne donne pas de jeton de boîte au complément,
-   * le dossier du projet est cherché et le mail rangé par ATLAS (mêmes routes que le tableau de bord :
-   * dossier trouvé n'importe où dans l'arbre, appris, création des niveaux manquants, annulable).
+   * Classement dans Outlook (07/10/2026) : la même carte que l'onglet « Ce mail » (agent-dossiers.ts ›
+   * renderClasserOutlook) : dossier du projet en un clic, sinon création au chemin d'ATLAS, ou un autre
+   * dossier par recherche. Le dossier du projet est retenu pour ATLAS (rien à ressaisir dans l'Inbox).
    */
-  private async offerFolderFilingViaAtlas(result: SearchResult, internetMessageId: string): Promise<boolean> {
-    if (!internetMessageId) return false;
-    const statusEl = document.getElementById('link-status')!;
-    try {
-      const projetId = result.type === 'projet' ? result.id : '';
-      const d = projetId ? await fetchDossierProjet(projetId, undefined, internetMessageId) : { existant: null, propose: `Clients/${result.label}`, verrou: false, dejaRange: false };
-      if (d.existant && d.dejaRange) {
-        statusEl.innerHTML += `<p class="status-linked" style="margin-top:10px;">${icon('folder', 14)}Classé dans ${this.escapeHtml(d.existant.chemin)}</p>`;
-        return true;
-      }
-      if (d.existant) {
-        statusEl.innerHTML += `
-          <div class="card folder-card is-known" style="margin-top:10px;">
-            <div class="folder-card-icon">${icon('folder', 18)}</div>
-            <div class="folder-card-body"><span class="eyebrow">Dossier du projet</span><p class="folder-card-title">${this.escapeHtml(d.existant.chemin)}</p>
-            <div class="btn-row">
-              <button class="btn btn-primary btn-sm" id="move-atlas-btn">Déplacer dans le dossier</button>
-            </div></div>
-          </div>`;
-        document.getElementById('move-atlas-btn')?.addEventListener('click', async () => {
-          try {
-            await rangerDansDossier({ messageId: internetMessageId, dossierId: d.existant!.id, ...(projetId ? { projetId } : {}) });
-            showToast(`Email déplacé dans ${d.existant!.chemin}`, 'success');
-            document.getElementById('move-atlas-btn')!.closest('div')!.parentElement!.innerHTML =
-              `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans le dossier</p>`;
-          } catch (err) { showToast(`${humanError(err)}`, 'error'); }
-        });
-        return true;
-      }
-      if (!d.propose) return false;
-      statusEl.innerHTML += `
-        <div class="card stack-sm" style="margin-top:10px;">
-          <label class="form-label" for="folder-path-atlas">Ranger dans un nouveau dossier Outlook ?</label>
-          <input type="text" class="form-input" id="folder-path-atlas" value="${this.escapeAttr(d.propose)}" />
-          <div class="btn-row">
-            <button class="btn btn-primary btn-sm" id="create-atlas-btn">Créer et déplacer</button>
-            <button class="btn btn-ghost btn-sm" id="skip-atlas-btn">Ignorer</button>
-          </div>
-        </div>`;
-      document.getElementById('create-atlas-btn')?.addEventListener('click', async () => {
-        const chemin = (document.getElementById('folder-path-atlas') as HTMLInputElement).value.trim();
-        if (!chemin) return;
-        const btn = document.getElementById('create-atlas-btn') as HTMLButtonElement;
-        btn.disabled = true;
-        btn.textContent = 'Création...';
-        try {
-          const r = await rangerDansDossier({ messageId: internetMessageId, creer: { chemin, ...(projetId ? { projetId } : {}) } });
-          showToast('Dossier créé et email déplacé', 'success');
-          btn.closest('div')!.parentElement!.innerHTML =
-            `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans ${this.escapeHtml(r.dossier.chemin || chemin)}</p>`;
-        } catch (err) {
-          btn.disabled = false;
-          btn.textContent = 'Créer et déplacer';
-          showToast(`${humanError(err)}`, 'error');
-        }
-      });
-      document.getElementById('skip-atlas-btn')?.addEventListener('click', () => {
-        document.getElementById('create-atlas-btn')!.closest('div')!.parentElement!.remove();
-      });
-      return true;
-    } catch (err) {
-      // Boîte non suivie par l'agent (403) : le complément essaie avec son propre jeton. Sinon, dit pourquoi.
-      if ((err as any)?.status === 403) return false;
-      statusEl.innerHTML += `<p class="help" style="margin-top:10px;">Classement dans Outlook impossible pour le moment : ${this.escapeHtml(humanError(err))}</p>`;
-      return true;
+  private afficherClassement(internetMessageId: string, projet?: { id: string; libelle: string }): void {
+    const statusEl = document.getElementById('link-status');
+    if (!statusEl || !internetMessageId) return;
+    statusEl.style.display = 'block';
+    let zone = document.getElementById('link-classer');
+    if (!zone) {
+      zone = document.createElement('div');
+      zone.id = 'link-classer';
+      zone.style.marginTop = '10px';
+      statusEl.appendChild(zone);
     }
-  }
-
-  private async offerFolderFiling(result: SearchResult, messageId: string, token: string): Promise<void> {
-    const userEmail = localStorage.getItem('atlas_addin_user_email') || Office.context?.mailbox?.userProfile?.emailAddress || '';
-    if (!userEmail) return;
-
-    const statusEl = document.getElementById('link-status')!;
-
-    try {
-      // Check if user has a folder mapping for this entity
-      const mapping = await getFolderMapping(userEmail, result.type === 'projet' ? 'projet' : 'client', result.id);
-
-      if (mapping && mapping.folderId) {
-        // User has an existing folder — offer to move
-        statusEl.innerHTML += `
-          <div class="card folder-card is-known" style="margin-top:10px;">
-            <div class="folder-card-icon">${icon('folder', 18)}</div>
-            <div class="folder-card-body"><span class="eyebrow">Dossier habituel</span><p class="folder-card-title">${this.escapeHtml(mapping.folderPath)}</p>
-            <div class="btn-row">
-              <button class="btn btn-primary btn-sm" id="move-to-folder-btn">Déplacer dans le dossier</button>
-              <button class="btn btn-ghost btn-sm" id="skip-folder-btn">Ignorer</button>
-            </div></div>
-          </div>
-        `;
-
-        document.getElementById('move-to-folder-btn')?.addEventListener('click', async () => {
-          try {
-            // Verify folder still exists
-            let folderId = mapping.folderId;
-            const resolved = await resolveFolderPath(token, mapping.folderPath);
-            if (resolved) {
-              folderId = resolved;
-            } else {
-              // Folder was deleted — recreate it
-              folderId = await ensureFolderPath(token, mapping.folderPath);
-              await saveFolderMapping(userEmail, mapping.scope, result.id, mapping.folderPath, folderId);
-            }
-
-            await moveMessageToFolder(token, messageId, folderId);
-            showToast(`Email déplacé dans ${mapping.folderPath}`, 'success');
-            document.getElementById('move-to-folder-btn')!.closest('div')!.parentElement!.innerHTML =
-              `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans le dossier</p>`;
-          } catch (err) {
-            showToast(`${humanError(err)}`, 'error');
-          }
-        });
-
-        document.getElementById('skip-folder-btn')?.addEventListener('click', () => {
-          document.getElementById('move-to-folder-btn')!.closest('div')!.parentElement!.remove();
-        });
-      } else {
-        // Pas de dossier appris (07/10/2026, parité Inbox ATLAS) : dossier du projet cherché dans TOUTE
-        // l'arborescence (n° de projet d'abord, puis nom) ; sinon chemin proposé à la même place et avec
-        // le même nom que l'Inbox ATLAS (« Clients/<Client>/#755 Nom »).
-        let suggestedPath = `Clients/${result.label}`;
-        if (result.type === 'projet') {
-          const arbre = dossiersDeRangement(await listAllMailFolders(token));
-          const p = (await getAllProjets().catch(() => [] as Projet[])).find(x => x.id === result.id);
-          const projet = { numero: p?.noProjet, nom: p?.denomination || result.label, clientNom: p?.client || result.detail || '' };
-          const trouve = trouverDossierProjet(arbre, projet);
-          if (trouve) {
-            statusEl.innerHTML += `
-              <div class="card folder-card is-known" style="margin-top:10px;">
-                <div class="folder-card-icon">${icon('folder', 18)}</div>
-                <div class="folder-card-body"><span class="eyebrow">Dossier du projet</span><p class="folder-card-title">${this.escapeHtml(trouve.dossier.chemin)}</p>
-                <div class="btn-row">
-                  <button class="btn btn-primary btn-sm" id="move-found-btn">Déplacer dans le dossier</button>
-                </div></div>
-              </div>`;
-            document.getElementById('move-found-btn')?.addEventListener('click', async () => {
-              try {
-                await moveMessageToFolder(token, messageId, trouve.dossier.id);
-                await saveFolderMapping(userEmail, 'projet', result.id, trouve.dossier.chemin, trouve.dossier.id).catch(() => undefined);
-                showToast(`Email déplacé dans ${trouve.dossier.chemin}`, 'success');
-                document.getElementById('move-found-btn')!.closest('div')!.parentElement!.innerHTML =
-                  `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans le dossier</p>`;
-              } catch (err) { showToast(`${humanError(err)}`, 'error'); }
-            });
-            return;
-          }
-          suggestedPath = cheminDossierProjetPropose(projet, arbre);
-        }
-
-        statusEl.innerHTML += `
-          <div class="card stack-sm" style="margin-top:10px;">
-            <label class="form-label" for="folder-path-input">Ranger dans un nouveau dossier Outlook ?</label>
-            <input type="text" class="form-input" id="folder-path-input" value="${this.escapeAttr(suggestedPath)}" />
-            <div class="btn-row">
-              <button class="btn btn-primary btn-sm" id="create-folder-btn">Créer et déplacer</button>
-              <button class="btn btn-ghost btn-sm" id="skip-create-btn">Ignorer</button>
-            </div>
-          </div>
-        `;
-
-        document.getElementById('create-folder-btn')?.addEventListener('click', async () => {
-          const pathInput = document.getElementById('folder-path-input') as HTMLInputElement;
-          const folderPath = pathInput.value.trim();
-          if (!folderPath) return;
-
-          try {
-            const btn = document.getElementById('create-folder-btn') as HTMLButtonElement;
-            btn.disabled = true;
-            btn.textContent = 'Création...';
-
-            const folderId = await ensureFolderPath(token, folderPath);
-            await moveMessageToFolder(token, messageId, folderId);
-            await saveFolderMapping(userEmail, result.type === 'projet' ? 'projet' : 'client', result.id, folderPath, folderId);
-
-            showToast(`Dossier créé et email déplacé`, 'success');
-            btn.closest('div')!.parentElement!.innerHTML =
-              `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans ${this.escapeHtml(folderPath)}</p>`;
-          } catch (err) {
-            showToast(`${humanError(err)}`, 'error');
-          }
-        });
-
-        document.getElementById('skip-create-btn')?.addEventListener('click', () => {
-          document.getElementById('create-folder-btn')!.closest('div')!.parentElement!.remove();
-        });
-      }
-    } catch {
-      // Non-blocking — folder filing is optional
-    }
-  }
-
-  private escapeAttr(str: string): string {
-    return escapeHtml(str);
+    renderClasserOutlook(zone, { messageId: internetMessageId, mailbox: '', onInfo: showToast, ...(projet ? { projetId: projet.id, projetLibelle: projet.libelle } : {}) });
   }
 
   // ── Office.js helpers ──

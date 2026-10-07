@@ -11,9 +11,8 @@
  *    signaux, pièce jointe choisie, dépôt par l'action « devis-fournisseur » (journal, Annuler),
  *    puis remerciement ARGO repris dans la réponse (jamais envoyé seul).
  *
- * Écritures : par le worker (double verrou de la boîte). Verrou fermé : si la boîte est celle de la
- * personne, repli avec SON jeton Outlook (`delegue`), exactement comme l'Inbox ATLAS ; sinon le
- * refus est dit. Erreurs toujours affichées, jamais avalées.
+ * Écritures : par le worker, sur le clic de la personne dans SA boîte (graph.ts › rangementClicAutorise) ;
+ * ailleurs, le refus du worker est dit tel quel. Erreurs toujours affichées, jamais avalées.
  */
 import {
   fetchDossiers, fetchDossierProjet, rangerDansDossier, fetchOffreFournisseur, preparerRemerciementOffre, executerAction,
@@ -21,7 +20,7 @@ import {
 } from '../api/agent';
 import { getAllProjets } from '../api/airtable';
 import { renderImportDossier, renderContactDevis } from './agent-parite';
-import { ensureFolderPath, moveMessageToFolder } from '../api/graph';
+import { fetchProjetDuMail } from '../api/parite';
 import { escapeHtml } from '../utils/html';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
@@ -32,33 +31,25 @@ export interface CtxDossiers {
   messageId: string;
   mailbox: string;
   onInfo?: InfoFn;
-  /** Repli « jeton de la personne » (sa boîte seulement) quand l'agent ne peut pas écrire. */
+  /** Ancien repli « jeton de la personne » : plus utilisé pour ranger (Microsoft ne donne plus ce jeton). */
   delegue?: () => Promise<{ token: string; restId: string } | null>;
 }
 
 const erreur = (quoi: string, e: unknown) => `<p class="agent-error" role="alert">${escapeHtml(quoi)} : ${escapeHtml(humanError(e))}</p>`;
 
 /**
- * Range le mail (dossier existant ou chemin à créer) : worker d'abord ; verrou fermé → repli avec le
- * jeton de la personne si permis. Renvoie le chemin final et l'action à annuler (worker seulement).
+ * Range le mail (dossier existant ou chemin à créer) par le worker, sur le clic de la personne (sa
+ * boîte : graph.ts › rangementClicAutorise). Plus de repli par le jeton Outlook du complément :
+ * Microsoft ne le donne plus (il échouait avec un faux « rouvre ta session »). Renvoie le chemin
+ * final et l'action à annuler.
  */
 export async function rangerMail(ctx: CtxDossiers, cible: { dossier?: DossierOutlook; creer?: { chemin: string; projetId?: string; mandatId?: string }; projetId?: string }): Promise<{ chemin: string; cree: boolean; actionId?: string; parOutlook?: boolean; dossierId?: string }> {
-  try {
-    const r = await rangerDansDossier({
-      messageId: ctx.messageId, ...(ctx.mailbox ? { mailbox: ctx.mailbox } : {}),
-      ...(cible.dossier ? { dossierId: cible.dossier.id } : {}), ...(cible.creer ? { creer: cible.creer } : {}),
-      ...(cible.projetId ? { projetId: cible.projetId } : {}),
-    });
-    return { chemin: r.dossier.chemin, cree: r.cree, ...(r.dossier.id ? { dossierId: r.dossier.id } : {}), ...(r.actionId ? { actionId: r.actionId } : {}) };
-  } catch (e) {
-    if (!estVerrouFerme(e) || !ctx.delegue) throw e;
-    const d = await ctx.delegue();
-    if (!d) throw e;
-    const chemin = cible.creer?.chemin || cible.dossier?.chemin || '';
-    const id = cible.creer ? await ensureFolderPath(d.token, cible.creer.chemin) : cible.dossier!.id;
-    await moveMessageToFolder(d.token, d.restId, id);
-    return { chemin, cree: !!cible.creer, parOutlook: true, dossierId: id };
-  }
+  const r = await rangerDansDossier({
+    messageId: ctx.messageId, ...(ctx.mailbox ? { mailbox: ctx.mailbox } : {}),
+    ...(cible.dossier ? { dossierId: cible.dossier.id } : {}), ...(cible.creer ? { creer: cible.creer } : {}),
+    ...(cible.projetId ? { projetId: cible.projetId } : {}),
+  });
+  return { chemin: r.dossier.chemin, cree: r.cree, ...(r.dossier.id ? { dossierId: r.dossier.id } : {}), ...(r.actionId ? { actionId: r.actionId } : {}) };
 }
 
 function faitHtml(r: { chemin: string; cree: boolean; actionId?: string }): string {
@@ -121,7 +112,7 @@ export async function renderDossierProjet(host: HTMLElement, ctx: CtxDossiers & 
     } catch (e) {
       btn.disabled = false; btn.textContent = lib;
       res.hidden = false;
-      res.innerHTML = estVerrouFerme(e) ? '<p class="agent-error" role="alert">L\'agent n\'écrit pas encore dans cette boîte (double verrou fermé) : rien n\'a été créé ni déplacé.</p>' : erreur('Rangement impossible', e);
+      res.innerHTML = `<p class="agent-error" role="alert">Rangement impossible : ${escapeHtml(texteErreur(e))}</p>`;
     }
   };
   host.querySelector<HTMLButtonElement>('[data-ranger]')?.addEventListener('click', e => void go(e.currentTarget as HTMLButtonElement, { dossier: existant!, ...(ctx.projetId ? { projetId: ctx.projetId } : {}) }));
@@ -132,86 +123,132 @@ export async function renderDossierProjet(host: HTMLElement, ctx: CtxDossiers & 
   });
 }
 
-// ── Classer dans Outlook (arbre complet + nouveau dossier) ─────────────────────
+// ── Classer ce mail (une seule carte, 07/10/2026) ──────────────────────────────
+//
+// Retour de Charles : l'ancien bloc (liste de 80 dossiers, « Dossier choisi : aucun (racine) »,
+// « Ranger ici » grisé, « Nouveau dossier… » qui créait à la racine) n'était pas utilisable. Ici :
+//   1. le BON dossier d'abord : celui du projet du mail (appris dans ATLAS, sinon trouvé dans tout
+//      l'arbre), en un clic ; pas de dossier ? le chemin d'ATLAS « Clients/<Client>/#871 Nom »,
+//      « Créer et classer » en un clic (modifiable) ;
+//   2. un autre dossier : une seule zone, on tape, les dossiers correspondants s'affichent, un clic
+//      classe ; ce qu'on tape peut aussi devenir un nouveau dossier (« A/B/C » = niveaux) ;
+//   3. après : « Classé dans … » avec « Annuler ». Le dossier du projet est retenu pour ATLAS (même
+//      table que le widget Inbox) : rien à ressaisir dans ATLAS.
 
-export function renderClasserOutlook(host: HTMLElement, ctx: CtxDossiers): void {
+export interface CtxClasser extends CtxDossiers {
+  /** Projet du mail s'il est déjà connu (sinon lu : fil lié dans ATLAS, ou appris par l'agent). */
+  projetId?: string;
+  projetLibelle?: string;
+}
+
+/** Message d'un refus du worker (texte du serveur s'il en donne un), sinon message lisible. */
+function texteErreur(e: unknown): string {
+  const d = (e as any)?.data;
+  return estVerrouFerme(e) && typeof d?.error === 'string' ? d.error : humanError(e);
+}
+
+export function renderClasserOutlook(host: HTMLElement, ctx: CtxClasser): void {
   host.hidden = false;
   host.innerHTML = `
-    <div class="agent-section-title">Classer dans Outlook</div>
-    <button type="button" class="btn btn-secondary btn-block agent-btn" data-ouvrir>${icon('folder', 14)}Choisir un dossier…</button>
-    <div data-zone hidden>
-      <input type="search" class="agent-input" data-recherche placeholder="Rechercher dans tous les dossiers (ex. 755 gala)" aria-label="Rechercher un dossier Outlook">
+    <div class="agent-section-title">Classer ce mail</div>
+    <div class="agent-carte">
+      <div data-suggestion><div class="agent-loading"><div class="spinner"></div><span>Dossier du projet…</span></div></div>
+      <label class="agent-muted" for="cl-q-${ctx.messageId.length}">Autre dossier</label>
+      <input type="search" class="agent-input" id="cl-q-${ctx.messageId.length}" data-recherche autocomplete="off"
+        placeholder="Tape un nom ou un n° de projet (ex. 871, DealsUp)" aria-label="Chercher un dossier Outlook">
       <div data-liste></div>
-      <div class="agent-muted">Dossier choisi : <span data-choisi>aucun (racine de la boîte)</span></div>
-      <div class="btn-row">
-        <button type="button" class="btn btn-primary agent-btn" data-ranger disabled>Ranger ici</button>
-        <button type="button" class="btn btn-secondary agent-btn" data-nouveau>Nouveau dossier…</button>
-      </div>
-      <div data-nouveau-zone hidden>
-        <input type="text" class="agent-input" data-nom placeholder="Nom du nouveau dossier" maxlength="120" aria-label="Nom du nouveau dossier">
-        <button type="button" class="btn btn-primary btn-block agent-btn" data-creer>Créer et ranger</button>
-      </div>
-    </div>
-    <div data-res hidden></div>`;
-  const zone = host.querySelector<HTMLElement>('[data-zone]')!;
+      <div data-res hidden></div>
+    </div>`;
+  const sugg = host.querySelector<HTMLElement>('[data-suggestion]')!;
   const liste = host.querySelector<HTMLElement>('[data-liste]')!;
-  const choisiEl = host.querySelector<HTMLElement>('[data-choisi]')!;
   const res = host.querySelector<HTMLElement>('[data-res]')!;
-  const btnRanger = host.querySelector<HTMLButtonElement>('[data-ranger]')!;
-  let choisi: DossierOutlook | null = null;
+  const recherche = host.querySelector<HTMLInputElement>('[data-recherche]')!;
+  let projet: { id: string; libelle: string } | null = ctx.projetId ? { id: ctx.projetId, libelle: ctx.projetLibelle || '' } : null;
+  let occupe = false;
+
+  const classer = async (cible: Parameters<typeof rangerMail>[1], btn?: HTMLButtonElement) => {
+    if (occupe) return;
+    occupe = true;
+    const lib = btn?.textContent || '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Classement…'; }
+    res.hidden = true;
+    try {
+      const r = await rangerMail(ctx, cible);
+      host.querySelector('.agent-carte')!.innerHTML = `${faitHtml(r)}<div data-import hidden></div>`;
+      brancherAnnuler(host, r.actionId, ctx.onInfo);
+      ctx.onInfo?.(`Classé dans ${r.chemin}`, 'success');
+      // Mails déjà présents dans le dossier du projet : proposés à l'import dans le projet (comme ATLAS).
+      const zi = host.querySelector<HTMLElement>('[data-import]');
+      if (zi && cible.projetId && r.dossierId) renderImportDossier(zi, { ...ctx, projetId: cible.projetId, dossier: { id: r.dossierId, chemin: r.chemin } });
+    } catch (e) {
+      if (btn) { btn.disabled = false; btn.textContent = lib; }
+      res.hidden = false;
+      res.innerHTML = `<p class="agent-error" role="alert">Classement impossible : ${escapeHtml(texteErreur(e))}</p>`;
+    } finally { occupe = false; }
+  };
+
+  // 1. Dossier du projet
+  const suggestion = async () => {
+    try {
+      if (!projet) projet = await fetchProjetDuMail(ctx.messageId, ctx.mailbox || undefined).catch(() => null);
+      if (!host.isConnected) return;
+      if (!projet) { sugg.innerHTML = '<p class="agent-muted">Mail lié à aucun projet : choisis le dossier ci-dessous.</p>'; return; }
+      const d = await fetchDossierProjet(projet.id, ctx.mailbox || undefined, ctx.messageId);
+      if (!host.isConnected) return;
+      const titre = `<div class="agent-carte-titre">${icon('folder', 14)} Projet ${escapeHtml(projet.libelle)}</div>`;
+      if (d.existant && d.dejaRange) {
+        sugg.innerHTML = `${titre}<p class="status-linked">${icon('check-circle', 14)}Déjà classé dans « ${escapeHtml(d.existant.chemin)} »</p>`;
+        return;
+      }
+      if (d.existant) {
+        sugg.innerHTML = `${titre}<div class="agent-carte-apercu">« ${escapeHtml(d.existant.chemin)} »</div>
+          <button type="button" class="btn btn-primary btn-block agent-btn" data-go>Classer dans ce dossier</button>`;
+        sugg.querySelector<HTMLButtonElement>('[data-go]')!.addEventListener('click', ev =>
+          void classer({ dossier: d.existant!, projetId: projet!.id }, ev.currentTarget as HTMLButtonElement));
+        return;
+      }
+      const chemin = d.propose || '';
+      sugg.innerHTML = `${titre}<div class="agent-muted">Pas encore de dossier Outlook pour ce projet. Il sera créé ici :</div>
+        <input type="text" class="agent-input" data-chemin value="${escapeHtml(chemin)}" maxlength="600" aria-label="Dossier à créer">
+        <button type="button" class="btn btn-primary btn-block agent-btn" data-go>Créer le dossier et classer</button>`;
+      sugg.querySelector<HTMLButtonElement>('[data-go]')!.addEventListener('click', ev => {
+        const c = (sugg.querySelector<HTMLInputElement>('[data-chemin]')?.value || '').trim();
+        if (!c) { res.hidden = false; res.innerHTML = '<p class="agent-error" role="alert">Indique le dossier à créer.</p>'; return; }
+        void classer({ creer: { chemin: c, projetId: projet!.id }, projetId: projet!.id }, ev.currentTarget as HTMLButtonElement);
+      });
+    } catch (e) {
+      if (host.isConnected) sugg.innerHTML = `<p class="agent-error" role="alert">Dossier du projet indisponible : ${escapeHtml(texteErreur(e))}</p>`;
+    }
+  };
+  void suggestion();
+
+  // 2. Autre dossier : recherche dans tout l'arbre, un clic = classé ; ce qui est tapé peut devenir un dossier.
   let minuterie: ReturnType<typeof setTimeout> | undefined;
   let n = 0;
   const afficher = async (q: string) => {
     const k = ++n;
-    liste.innerHTML = '<div class="agent-loading"><div class="spinner"></div><span>Dossiers Outlook…</span></div>';
+    if (!q) { liste.innerHTML = ''; return; }
+    liste.innerHTML = '<div class="agent-loading"><div class="spinner"></div><span>Recherche…</span></div>';
     try {
-      const ds = await fetchDossiers(ctx.mailbox || undefined, q || undefined);
+      const ds = (await fetchDossiers(ctx.mailbox || undefined, q)).slice(0, 8);
       if (k !== n || !liste.isConnected) return;
-      liste.innerHTML = ds.length
-        ? `<ul class="agent-faites">${ds.map((d, i) => `<li><button type="button" class="agent-link" data-k="${i}">${escapeHtml(d.chemin)}</button></li>`).join('')}</ul>`
-        : '<div class="agent-muted">Aucun dossier ne correspond.</div>';
+      const cheminTape = q.split('/').map(x => x.trim()).filter(Boolean).join('/');
+      const exact = ds.some(d => d.chemin.toLowerCase() === cheminTape.toLowerCase() || d.chemin.toLowerCase().endsWith(`/${cheminTape.toLowerCase()}`));
+      liste.innerHTML = `<ul class="agent-faites">
+        ${ds.map((d, i) => `<li><button type="button" class="agent-link" data-k="${i}" title="Classer dans ce dossier">${icon('folder', 12)} ${escapeHtml(d.chemin)}</button></li>`).join('')}
+        ${cheminTape && !exact ? `<li><button type="button" class="agent-link" data-nouveau>${icon('plus', 12)} Créer « ${escapeHtml(cheminTape)} » et classer</button></li>` : ''}
+      </ul>${ds.length ? '' : '<div class="agent-muted">Aucun dossier ne correspond.</div>'}`;
       liste.querySelectorAll<HTMLButtonElement>('[data-k]').forEach(b => b.addEventListener('click', () => {
-        choisi = ds[Number(b.dataset.k)] || null;
-        choisiEl.textContent = choisi?.chemin || 'aucun (racine de la boîte)';
-        btnRanger.disabled = !choisi;
+        const d = ds[Number(b.dataset.k)];
+        if (d) void classer({ dossier: d });
       }));
-    } catch (e) { if (k === n) liste.innerHTML = erreur('Dossiers Outlook indisponibles', e); }
+      liste.querySelector<HTMLButtonElement>('[data-nouveau]')?.addEventListener('click', () => void classer({ creer: { chemin: cheminTape } }));
+    } catch (e) { if (k === n) liste.innerHTML = `<p class="agent-error" role="alert">Dossiers Outlook indisponibles : ${escapeHtml(texteErreur(e))}</p>`; }
   };
-  host.querySelector<HTMLButtonElement>('[data-ouvrir]')!.addEventListener('click', () => {
-    zone.hidden = !zone.hidden;
-    if (!zone.hidden) { void afficher(''); host.querySelector<HTMLInputElement>('[data-recherche]')?.focus(); }
-  });
-  host.querySelector<HTMLInputElement>('[data-recherche]')!.addEventListener('input', ev => {
+  recherche.addEventListener('input', () => {
     if (minuterie) clearTimeout(minuterie);
-    const v = (ev.target as HTMLInputElement).value.trim();
+    const v = recherche.value.trim();
     minuterie = setTimeout(() => void afficher(v), 250);
-  });
-  host.querySelector<HTMLButtonElement>('[data-nouveau]')!.addEventListener('click', () => {
-    const z = host.querySelector<HTMLElement>('[data-nouveau-zone]')!;
-    z.hidden = !z.hidden;
-    if (!z.hidden) host.querySelector<HTMLInputElement>('[data-nom]')?.focus();
-  });
-  const go = async (btn: HTMLButtonElement, cible: Parameters<typeof rangerMail>[1]) => {
-    btn.disabled = true;
-    res.hidden = true;
-    try {
-      const r = await rangerMail(ctx, cible);
-      zone.hidden = true;
-      res.hidden = false;
-      res.innerHTML = faitHtml(r);
-      brancherAnnuler(res, r.actionId, ctx.onInfo);
-      ctx.onInfo?.(`Rangé dans ${r.chemin}`, 'success');
-    } catch (e) {
-      btn.disabled = false;
-      res.hidden = false;
-      res.innerHTML = estVerrouFerme(e) ? '<p class="agent-error" role="alert">L\'agent n\'écrit pas encore dans cette boîte (double verrou fermé) : rien n\'a été créé ni déplacé.</p>' : erreur('Classement impossible', e);
-    }
-  };
-  btnRanger.addEventListener('click', () => { if (choisi) void go(btnRanger, { dossier: choisi }); });
-  host.querySelector<HTMLButtonElement>('[data-creer]')!.addEventListener('click', ev => {
-    const nom = (host.querySelector<HTMLInputElement>('[data-nom]')?.value || '').replace(/[\\/]/g, '-').trim();
-    if (!nom) { res.hidden = false; res.innerHTML = '<p class="agent-error" role="alert">Indique le nom du dossier.</p>'; return; }
-    void go(ev.currentTarget as HTMLButtonElement, { creer: { chemin: choisi ? `${choisi.chemin}/${nom}` : nom } });
   });
 }
 
