@@ -12,7 +12,7 @@ import {
   type CreateProjetInput,
   type Employe,
 } from '../api/airtable';
-import { getGraphToken, getMessageForLinking, convertToRestId } from '../api/graph';
+import { lireMailPourLiaison } from '../api/mail-liaison';
 import { analyzeEmailForProjet } from '../api/argo';
 import { showToast } from '../taskpane';
 import type { Tier } from '../types';
@@ -538,9 +538,7 @@ export class CreateProjectPanel {
       const item = Office.context.mailbox.item;
       if (!item || !item.itemId) return;
 
-      const token = await getGraphToken();
-      const restId = convertToRestId(item.itemId);
-      const fullMessage = await getMessageForLinking(token, restId);
+      const fullMessage = (await lireMailPourLiaison(item.itemId, (item as any).internetMessageId)).message;
 
       // Determine direction
       const userEmail = localStorage.getItem('atlas_addin_user_email') || Office.context?.mailbox?.userProfile?.emailAddress || '';

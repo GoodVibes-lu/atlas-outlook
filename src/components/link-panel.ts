@@ -3,7 +3,9 @@
  */
 
 import { getLinkedConversationIds, getAllLinkedEmailIds, linkEmailToProject, linkEmailToContact, getAllProjets, resolveClientIdInProjetsBase, getFolderMapping, saveFolderMapping } from '../api/airtable';
-import { getGraphToken, getMessageForLinking, convertToRestId, moveMessageToFolder, ensureFolderPath, resolveFolderPath, listAllMailFolders } from '../api/graph';
+import { lireMailPourLiaison } from '../api/mail-liaison';
+import { fetchDossierProjet, rangerDansDossier } from '../api/agent';
+import { convertToRestId, moveMessageToFolder, ensureFolderPath, resolveFolderPath, listAllMailFolders } from '../api/graph';
 import { dossiersDeRangement, trouverDossierProjet, cheminDossierProjetPropose } from '../shared/mail-folder-tree';
 import { summarizeEmail } from '../api/argo';
 import { SearchPicker } from './search-picker';
@@ -282,9 +284,9 @@ export class LinkPanel {
     statusEl.innerHTML = inlineLoadingHtml('Liaison en cours…');
 
     try {
-      const token = await getGraphToken();
-      const restId = convertToRestId(this.emailInfo.itemId);
-      const fullMessage = await getMessageForLinking(token, restId);
+      const lu = await lireMailPourLiaison(this.emailInfo.itemId, this.emailInfo.internetMessageId);
+      const { token, restId } = lu;
+      const fullMessage = lu.message;
 
       // Determine direction
       const userEmail = localStorage.getItem('atlas_addin_user_email') || Office.context?.mailbox?.userProfile?.emailAddress || '';
@@ -314,7 +316,8 @@ export class LinkPanel {
       document.getElementById('auto-suggestions')!.style.display = 'none';
 
       // Offer to file in Outlook folder if mapping exists
-      await this.offerFolderFiling(result, restId, token);
+      if (lu.viaAtlas) await this.offerFolderFilingViaAtlas(result, fullMessage.internetMessageId || this.emailInfo.internetMessageId || '');
+      else await this.offerFolderFiling(result, restId, token);
 
     } catch (err) {
       statusEl.innerHTML = errorHtml(err, { title: 'Liaison impossible', retry: false, compact: true });
@@ -323,6 +326,71 @@ export class LinkPanel {
   }
 
   // ── Folder Filing ──
+
+  /**
+   * Rangement par le worker (07/10/2026) : quand Outlook ne donne pas de jeton de boîte au complément,
+   * le dossier du projet est cherché et le mail rangé par ATLAS (mêmes routes que le tableau de bord :
+   * dossier trouvé n'importe où dans l'arbre, appris, création des niveaux manquants, annulable).
+   */
+  private async offerFolderFilingViaAtlas(result: SearchResult, internetMessageId: string): Promise<void> {
+    if (!internetMessageId) return;
+    const statusEl = document.getElementById('link-status')!;
+    try {
+      const projetId = result.type === 'projet' ? result.id : '';
+      const d = projetId ? await fetchDossierProjet(projetId) : { existant: null, propose: `Clients/${result.label}`, verrou: false };
+      if (d.existant) {
+        statusEl.innerHTML += `
+          <div class="card folder-card is-known" style="margin-top:10px;">
+            <div class="folder-card-icon">${icon('folder', 18)}</div>
+            <div class="folder-card-body"><span class="eyebrow">Dossier du projet</span><p class="folder-card-title">${this.escapeHtml(d.existant.chemin)}</p>
+            <div class="btn-row">
+              <button class="btn btn-primary btn-sm" id="move-atlas-btn">Déplacer dans le dossier</button>
+            </div></div>
+          </div>`;
+        document.getElementById('move-atlas-btn')?.addEventListener('click', async () => {
+          try {
+            await rangerDansDossier({ messageId: internetMessageId, dossierId: d.existant!.id, ...(projetId ? { projetId } : {}) });
+            showToast(`Email déplacé dans ${d.existant!.chemin}`, 'success');
+            document.getElementById('move-atlas-btn')!.closest('div')!.parentElement!.innerHTML =
+              `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans le dossier</p>`;
+          } catch (err) { showToast(`${humanError(err)}`, 'error'); }
+        });
+        return;
+      }
+      if (!d.propose) return;
+      statusEl.innerHTML += `
+        <div class="card stack-sm" style="margin-top:10px;">
+          <label class="form-label" for="folder-path-atlas">Ranger dans un nouveau dossier Outlook ?</label>
+          <input type="text" class="form-input" id="folder-path-atlas" value="${this.escapeAttr(d.propose)}" />
+          <div class="btn-row">
+            <button class="btn btn-primary btn-sm" id="create-atlas-btn">Créer et déplacer</button>
+            <button class="btn btn-ghost btn-sm" id="skip-atlas-btn">Ignorer</button>
+          </div>
+        </div>`;
+      document.getElementById('create-atlas-btn')?.addEventListener('click', async () => {
+        const chemin = (document.getElementById('folder-path-atlas') as HTMLInputElement).value.trim();
+        if (!chemin) return;
+        const btn = document.getElementById('create-atlas-btn') as HTMLButtonElement;
+        btn.disabled = true;
+        btn.textContent = 'Création...';
+        try {
+          const r = await rangerDansDossier({ messageId: internetMessageId, creer: { chemin, ...(projetId ? { projetId } : {}) } });
+          showToast('Dossier créé et email déplacé', 'success');
+          btn.closest('div')!.parentElement!.innerHTML =
+            `<p class="status-linked">${icon('check-circle', 14)}Mail rangé dans ${this.escapeHtml(r.dossier.chemin || chemin)}</p>`;
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = 'Créer et déplacer';
+          showToast(`${humanError(err)}`, 'error');
+        }
+      });
+      document.getElementById('skip-atlas-btn')?.addEventListener('click', () => {
+        document.getElementById('create-atlas-btn')!.closest('div')!.parentElement!.remove();
+      });
+    } catch {
+      // Non bloquant : le rangement reste facultatif
+    }
+  }
 
   private async offerFolderFiling(result: SearchResult, messageId: string, token: string): Promise<void> {
     const userEmail = localStorage.getItem('atlas_addin_user_email') || Office.context?.mailbox?.userProfile?.emailAddress || '';

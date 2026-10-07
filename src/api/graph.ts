@@ -162,6 +162,25 @@ export async function getMessageForLinking(token: string, messageId: string): Pr
 
   const m = await graphFetch<any>(`/me/messages/${messageId}?${params}`, token);
 
+  // Fetch attachments
+  let attachments: MailAttachment[] = [];
+  if (m.hasAttachments) {
+    try {
+      const attData = await graphFetch<{ value: any[] }>(`/me/messages/${messageId}/attachments?$select=id,name,size,contentType,isInline`, token);
+      attachments = (attData.value || []).map((a: any) => ({
+        id: a.id,
+        name: a.name || '',
+        size: a.size || 0,
+        contentType: a.contentType || '',
+        isInline: a.isInline || false,
+      }));
+    } catch { /* non-blocking */ }
+  }
+  return messageVersLiaison(m, attachments);
+}
+
+/** MailMessageFull d'un message Graph / Outlook REST (lu ici, ou par le worker : api/mail-liaison.ts). */
+export function messageVersLiaison(m: any, attachments: MailAttachment[]): MailMessageFull {
   const content: string = m?.body?.content ?? '';
   const contentType: string = m?.body?.contentType ?? 'text';
 
@@ -189,21 +208,6 @@ export async function getMessageForLinking(token: string, messageId: string): Pr
       .replace(/&#39;/g, "'")
       .replace(/\n{3,}/g, '\n\n')
       .trim();
-  }
-
-  // Fetch attachments
-  let attachments: MailAttachment[] = [];
-  if (m.hasAttachments) {
-    try {
-      const attData = await graphFetch<{ value: any[] }>(`/me/messages/${messageId}/attachments?$select=id,name,size,contentType,isInline`, token);
-      attachments = (attData.value || []).map((a: any) => ({
-        id: a.id,
-        name: a.name || '',
-        size: a.size || 0,
-        contentType: a.contentType || '',
-        isInline: a.isInline || false,
-      }));
-    } catch { /* non-blocking */ }
   }
 
   return {
