@@ -324,6 +324,7 @@ export function renderCreerTiers(host: HTMLElement, ctx: CtxDossiers & { prefill
             ${r.lien ? `<span class="agent-fait-btns"><button type="button" class="btn btn-secondary agent-btn" data-ouvrir>Ouvrir dans ATLAS</button></span>` : ''}</div>`;
           host.querySelector<HTMLButtonElement>('[data-ouvrir]')?.addEventListener('click', () => { try { Office.context.ui.openBrowserWindow(r.lien); } catch { window.open(r.lien, '_blank', 'noopener'); } });
           ctx.onInfo?.(`Tiers créé : ${r.nom}`, 'success');
+          try { document.dispatchEvent(new CustomEvent('atlas:tiers-cree')); } catch { /* rafraîchissement facultatif */ }
         } catch (e) {
           b.disabled = false; b.textContent = 'Créer le tiers';
           const d = donneesErreur(e);

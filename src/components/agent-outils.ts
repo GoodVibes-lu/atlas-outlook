@@ -246,6 +246,12 @@ function faitesHtml(faites: ActionFaite[]): string {
  */
 export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: string; mailbox: string; onInfo?: InfoFn; delegue?: CtxDossiers['delegue'] }): Promise<void> {
   if (!ctx.messageId) { host.hidden = true; return; }
+  // Un tiers vient d'être créé : les propositions (contact « sans tiers ») sont recalculées.
+  const surTiersCree = () => {
+    document.removeEventListener('atlas:tiers-cree', surTiersCree);
+    if (host.isConnected) void renderActionsMetier(host, ctx);
+  };
+  document.addEventListener('atlas:tiers-cree', surTiersCree);
   host.hidden = false;
   host.innerHTML = `
     <div class="agent-section-title">Que faire de ce mail ?</div>
