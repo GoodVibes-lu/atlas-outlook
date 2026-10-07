@@ -480,7 +480,7 @@ export async function workerRequest<T = Record<string, unknown>>(
           // Jeton obtenu mais refusé deux fois : on demande au worker POURQUOI (raison courte).
           const raison = await raisonRefusWorker(frais);
           setTokenDiag({ lastError: `worker 401 : ${raison || '?'} (${resumeJeton(frais)})`, lastErrorAt: Date.now() });
-          const texte = expliquerRaisonWorker(raison);
+          const texte = expliquerRaisonWorker(raison) + (raison === 'employe_inactif' && dernierCompteRefuse ? ` Compte reconnu : ${dernierCompteRefuse}.` : '');
           if (texte) throw new AtlasError('session', texte, { status: 401, route: label, detail: `HTTP 401 · raison ${raison}` });
         }
       }
@@ -511,9 +511,12 @@ async function raisonRefusWorker(token: string): Promise<string> {
     }, { service: 'atlas', label: 'agent/jeton', timeoutMs: 15_000 });
     if (r.ok) return '';
     const data: any = await r.json().catch(() => ({}));
+    if (typeof data?.compte === 'string' && data.compte) dernierCompteRefuse = data.compte;
     return typeof data?.raison === 'string' ? data.raison : '';
   } catch { return ''; }
 }
+/** Compte reconnu par le worker lors du dernier refus (diagnostic affiché). */
+let dernierCompteRefuse = '';
 
 /** Lectures de la liste blanche `/api/plugin/atlas/*` (retentées sur coupure réseau). */
 const ATLAS_READS = new Set([
