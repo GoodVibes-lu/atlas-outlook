@@ -19,10 +19,10 @@
  */
 import { fetchTableau, fetchVersion, type Tableau, type TableauMail, type DigestNewsletter } from '../api/tableau';
 import { mettrePlusTard, retirerPlusTard, prendreMail, relacherMail } from '../api/agent';
-import { callAtlasWorker } from '../api/worker';
+import { autoriserConnexionInteractive, callAtlasWorker } from '../api/worker';
 import { getAllProjets, getAllContacts } from '../api/airtable';
 import { openAgentMail } from '../components/agent-lists';
-import { humanError } from '../api/net';
+import { AtlasError, humanError } from '../api/net';
 import { icon } from '../ui/icons';
 import { deplacer, ilYA, initiales, nouveautes, quandLisible, presetsMoments, prenomDe, basculerSelection, selectionPlage, selectionValide, resumeLot, sousTitreEnAttente } from './logique';
 import { h, toast, animerChiffre, choisirMoment, ouvrirCouche, mouvementReduit } from './ui';
@@ -241,7 +241,16 @@ async function choisirContact(): Promise<{ id: string; libelle: string; tiers?: 
 
 // ── Application ────────────────────────────────────────────────────────────────────
 
+/**
+ * Écran tactile sans souris (Outlook iPhone / Android, tablette) : pas de glisser-déposer (le dock
+ * n'a pas de sens au doigt), pas d'aperçu au survol, pas d'aides clavier (07/10/2026).
+ */
+export function ecranTactile(): boolean {
+  try { return window.matchMedia('(hover: none) and (pointer: coarse)').matches; } catch { return false; }
+}
+
 export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: string) => void }): void {
+  const tactile = ecranTactile();
   let boiteMemo = 'toutes';
   try { boiteMemo = localStorage.getItem('atlas.tdb.boite') || 'toutes'; } catch { /* stockage indisponible */ }
   const etat: Etat = { boite: boiteMemo, section: 'priorites', t: null, sel: null, vus: [], derniereSync: 0, enLigne: true, lot: [], ancre: null };
@@ -250,6 +259,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   ctx = { etat, openLink: opts.openLink, rafraichir, choisir, actions };
 
   document.body.classList.add('tb');
+  document.body.classList.toggle('tb-tactile', tactile);
   root.innerHTML = `
     <div class="tb-app" id="tb-app">
       <header class="tb-top">
@@ -258,7 +268,8 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
         <span class="tb-spacer"></span>
         <button type="button" class="tb-cmdk" id="tb-cmdk" aria-label="Rechercher ou agir">${icon('search', 14)}<span>Rechercher, agir…</span><span class="tb-spacer"></span><span class="tb-kbd">⌘K</span></button>
         <span class="tb-live" id="tb-live" aria-live="polite"><i></i><span>connexion…</span></span>
-        <button type="button" class="tb-iconbtn" id="tb-aide" title="Raccourcis (?)" aria-label="Raccourcis clavier">${icon('question', 16)}</button>
+        <button type="button" class="tb-iconbtn tb-seul-etroit" id="tb-jour" title="Aujourd'hui" aria-label="Aujourd'hui : rendez-vous, engagements, réactivité">${icon('clock', 16)}</button>
+        <button type="button" class="tb-iconbtn tb-clavier" id="tb-aide" title="Raccourcis (?)" aria-label="Raccourcis clavier">${icon('question', 16)}</button>
         <button type="button" class="tb-iconbtn" id="tb-refresh" title="Actualiser" aria-label="Actualiser">${icon('refresh', 16)}</button>
       </header>
       <nav class="tb-stats" id="tb-stats" role="tablist" aria-label="Sections"></nav>
@@ -271,6 +282,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
         </section>
         <aside class="tb-col is-right tb-scroll" id="tb-right"></aside>
       </main>
+      <button type="button" class="tb-btn tb-retour" id="tb-retour" aria-label="Retour à la liste">${icon('chevron-right', 14)}<span>Retour</span></button>
     </div>
     <div class="tb-dock" id="tb-dock" aria-hidden="true"></div>
     <div class="tb-peek" id="tb-peek" aria-hidden="true"></div>`;
@@ -324,7 +336,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       <div class="tb-panel"><div class="tb-h">Sections</div><nav class="tb-nav">${sectionsVisibles(t).map(s => `<button type="button" data-s="${s.id}" aria-current="${s.id === etat.section}">${h(s.libelle)}<span class="n">${t ? compteDe(t, s.id) : ''}</span></button>`).join('')}</nav></div>
       ${qui.length ? `<div class="tb-panel"><div class="tb-h">Qui traite quoi</div><div class="tb-mini">${qui.map(q => `<div class="tb-mini-row"><span>${h(q.nom)}</span><span class="tb-bar"><i style="width:${Math.round((q.mails / max) * 100)}%"></i></span><span class="mono">${q.mails}</span></div>`).join('')}</div></div>` : ''}
       ${t?.programmes.length ? `<div class="tb-panel"><div class="tb-h">Envois programmés<span class="tb-h-n">${t.programmes.length}</span></div><div class="tb-mini">${t.programmes.slice(0, 6).map(p => `<div class="tb-mini-row" title="${h(p.a.join(', '))}">${icon('clock', 13)}<span>${h(p.sujet || '(sans objet)')}</span><span class="tb-when">${h(quandLisible(p.quand, Date.now()))}</span></div>`).join('')}</div></div>` : ''}
-      <div class="tb-panel"><div class="tb-h">Glisser un mail vers</div><p class="tb-note">« Je prends », une date ou un projet : le dock apparaît en bas pendant le glisser.</p></div>`;
+      <div class="tb-panel tb-clavier"><div class="tb-h">Glisser un mail vers</div><p class="tb-note">« Je prends », une date ou un projet : le dock apparaît en bas pendant le glisser.</p></div>`;
     host.querySelectorAll<HTMLButtonElement>('[data-s]').forEach(b => b.addEventListener('click', () => allerSection(b.dataset.s as Section)));
   }
 
@@ -392,7 +404,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     } finally { renderLot(); }
   }
 
-  const videHtml = (texte: string) => `<div class="tb-empty"><span class="tb-empty-mark">${icon('check', 20)}</span><strong>C'est vide, et c'est bien</strong><span>${h(texte)}</span><span class="tb-note">Appuie sur <span class="tb-kbd">⌘K</span> pour poser une question à ta boîte ou rattraper ce que tu as manqué.</span></div>`;
+  const videHtml = (texte: string) => `<div class="tb-empty"><span class="tb-empty-mark">${icon('check', 20)}</span><strong>C'est vide, et c'est bien</strong><span>${h(texte)}</span><span class="tb-note tb-clavier">Appuie sur <span class="tb-kbd">⌘K</span> pour poser une question à ta boîte ou rattraper ce que tu as manqué.</span></div>`;
 
   function ligneHtml(m: TableauMail, nouveau: boolean): string {
     const cle = cleDe(m);
@@ -406,7 +418,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     if (m.urgence >= 3) chips.push('<span class="tb-chip is-hot">Urgent</span>');
     const boite = etat.boite === 'toutes' && (etat.t?.boites.length || 0) > 1 && m.mailbox && m.mailbox !== etat.t?.moi ? ` · ${h(m.mailbox.split('@')[0])}@` : '';
     const coche = etat.lot.includes(cle);
-    return `<div class="tb-row${nouveau ? ' is-new' : ''}${coche ? ' is-coche' : ''}" role="option" tabindex="-1" draggable="true" data-cle="${h(cle)}" aria-selected="false">
+    return `<div class="tb-row${nouveau ? ' is-new' : ''}${coche ? ' is-coche' : ''}" role="option" tabindex="-1" draggable="${tactile ? 'false' : 'true'}" data-cle="${h(cle)}" aria-selected="false">
       <input type="checkbox" class="tb-sel" data-cocher ${coche ? 'checked' : ''} aria-label="Cocher ce mail (x)" title="Cocher (x, Maj-clic pour une plage)">
       ${m.urgence >= 2 ? `<span class="tb-prio p${Math.min(3, m.urgence)}"></span>` : ''}
       <span class="tb-av${m.correspondant === 'client' ? ' is-client' : ''}" aria-hidden="true">${h(initiales(m.from?.name || '', m.from?.email || ''))}</span>
@@ -450,6 +462,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   }
 
   function choisir(cle: string | null): void {
+    if (cle) $('tb-app').classList.remove('has-jour');
     if (cle === etat.sel) return;
     etat.sel = cle;
     marquerSelection();
@@ -487,8 +500,10 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       ouvrirDock(glisse);
     });
     el.addEventListener('dragend', () => { el.classList.remove('is-dragging'); fermerDock(); glisse = null; });
-    el.addEventListener('mouseenter', () => planifierApercu(el));
-    el.addEventListener('mouseleave', cacherApercu);
+    if (!tactile) {
+      el.addEventListener('mouseenter', () => planifierApercu(el));
+      el.addEventListener('mouseleave', cacherApercu);
+    }
   }
 
   function brancherDepot(zone: HTMLElement, faire: (m: TableauMail) => void): void {
@@ -627,6 +642,15 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   }
 
   $('tb-cmdk').addEventListener('click', palette);
+  // Écran étroit (téléphone) : la colonne de droite devient un volet ; « Aujourd'hui » l'ouvre, « Retour » le ferme.
+  $('tb-jour').addEventListener('click', () => {
+    if (etat.sel) choisir(null);
+    $('tb-app').classList.toggle('has-jour');
+  });
+  $('tb-retour').addEventListener('click', () => {
+    $('tb-app').classList.remove('has-jour');
+    if (etat.sel) choisir(null);
+  });
   $('tb-aide').addEventListener('click', aide);
   $('tb-refresh').addEventListener('click', () => rafraichir(true));
 
@@ -667,8 +691,12 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       etat.enLigne = false;
       majLive('off', 'hors ligne');
       if (!etat.t) {
-        $('tb-list').innerHTML = `<div class="tb-empty"><strong>Tableau indisponible</strong><span>${h(humanError(e))}</span><button type="button" class="tb-btn" id="tb-retry">Réessayer</button></div>`;
-        document.getElementById('tb-retry')?.addEventListener('click', () => rafraichir(true));
+        $('tb-list').innerHTML = `<div class="tb-empty"><strong>Tableau indisponible</strong><span>${h(humanError(e))}</span><button type="button" class="tb-btn" id="tb-retry">${e instanceof AtlasError && e.kind === 'session' ? 'Se connecter' : 'Réessayer'}</button></div>`;
+        document.getElementById('tb-retry')?.addEventListener('click', () => {
+          // Session refusée : le clic autorise la fenêtre de connexion de l'hôte (jamais ouverte toute seule).
+          if (e instanceof AtlasError && e.kind === 'session') autoriserConnexionInteractive();
+          void rafraichir(true);
+        });
       }
     }
   }

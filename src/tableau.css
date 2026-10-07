@@ -292,3 +292,71 @@ body.tb { background: var(--bg); min-width: 0; font-size: 13.5px; }
   .tb-row, .tb-stat, .tb-btn, .tb-dock, .tb-peek, .tb-palette, .tb-overlay { transition: none !important; }
   .tb-row.is-new, .tb-live.is-sync i, .tb-skel, .tb-toast { animation: none !important; }
 }
+
+/* ── Téléphone et écran tactile (07/10/2026 : Outlook iPhone, onglet « Applications ») ──
+ * Volet de droite en plein écran avec « Retour », bouton « Aujourd'hui » dans la barre du haut,
+ * compteurs en bande défilante (doigt), cibles d'au moins 44 px, aucune aide clavier ni dock de
+ * glisser-déposer, recherche sur toute la largeur. */
+.tb-retour, .tb-seul-etroit { display: none; }
+.tb-retour svg { transform: scaleX(-1); }
+@media (max-width: 1023px) {
+  .tb-seul-etroit { display: inline-grid; }
+  .tb-app.has-jour .tb-col.is-right { transform: none; }
+  .tb-app.has-detail .tb-retour, .tb-app.has-jour .tb-retour {
+    display: inline-flex; position: fixed; top: max(10px, env(safe-area-inset-top)); left: max(10px, env(safe-area-inset-left)); z-index: 36;
+  }
+  .tb-app.has-detail .tb-col.is-right, .tb-app.has-jour .tb-col.is-right { padding-top: 64px; }
+}
+@media (max-width: 640px) {
+  body.tb { font-size: 14px; }
+  .tb-app { height: 100vh; height: 100dvh; }
+  .tb-top { flex-wrap: wrap; gap: 8px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); }
+  .tb-top .tb-spacer { display: none; }
+  .tb-mark { margin-right: auto; }
+  .tb-boites { order: 3; width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tb-boites button { flex: 1 0 auto; min-height: 36px; }
+  .tb-cmdk { order: 4; width: 100%; min-width: 0; min-height: 44px; }
+  .tb-live { order: 1; }
+  .tb-stats {
+    display: flex; gap: 8px; padding: 10px 12px; overflow-x: auto; scroll-snap-type: x proximity;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain;
+  }
+  .tb-stats::-webkit-scrollbar, .tb-boites::-webkit-scrollbar { display: none; }
+  .tb-stat { flex: 0 0 auto; min-width: 112px; min-height: 64px; scroll-snap-align: start; }
+  .tb-stat-v { font-size: 22px; }
+  .tb-main { padding: 0 8px calc(8px + env(safe-area-inset-bottom)); gap: 8px; }
+  .tb-list-wrap { padding: 6px; }
+  .tb-list-head { flex-wrap: wrap; }
+  .tb-row { grid-template-columns: 34px minmax(0, 1fr) auto; gap: 8px; padding: 10px 10px 10px 8px; min-height: 56px; }
+  .tb-row .tb-sel { display: none; }
+  .tb-row[aria-selected="true"] { transform: none; }
+  .tb-row-l1 { flex-direction: column; align-items: stretch; gap: 0; }
+  .tb-from { max-width: 100%; }
+  .tb-row-side { align-self: start; }
+  .tb-row-side .tb-chips { display: none; }
+  .tb-digest { grid-template-columns: 34px minmax(0, 1fr) auto; }
+  .tb-col.is-right { width: 100vw; padding: 12px; padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .tb-app.has-detail .tb-col.is-right, .tb-app.has-jour .tb-col.is-right { padding-top: calc(64px + env(safe-area-inset-top)); }
+  .tb-fatal { margin: 8vh 12px; }
+  .tb-toast { left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .tb-overlay { padding-top: max(16px, env(safe-area-inset-top)); }
+  .tb-palette ul { max-height: 60vh; }
+  .tb-presets { grid-template-columns: minmax(0, 1fr); }
+  .tb-rdv { grid-template-columns: 44px minmax(0, 1fr); }
+  .tb-react { display: block; overflow-x: auto; }
+  .tb-textarea { font-size: 16px; } /* iOS : pas de zoom automatique au focus */
+  .tb-input, .tb-palette input { font-size: 16px; }
+}
+/* Doigt (pas de souris) : cibles de 44 px, pas d'aides clavier, pas de glisser-déposer ni d'aperçu au survol. */
+@media (hover: none) and (pointer: coarse) {
+  .tb-btn { min-height: 44px; padding: 8px 14px; }
+  .tb-iconbtn { width: 44px; height: 44px; }
+  .tb-boites button { min-height: 40px; padding: 6px 12px; }
+  .tb-tabs button { min-height: 44px; }
+  .tb-nav button { min-height: 44px; }
+  .tb-palette li { min-height: 44px; }
+  .tb-sel { width: 22px; height: 22px; }
+  .tb-stat:hover, .tb-btn:hover { transform: none; }
+}
+body.tb-tactile .tb-kbd, body.tb-tactile .tb-stat-k, body.tb-tactile .tb-clavier,
+body.tb-tactile .tb-dock, body.tb-tactile .tb-peek { display: none !important; }

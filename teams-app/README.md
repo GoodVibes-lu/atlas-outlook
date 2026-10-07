@@ -26,9 +26,13 @@ Page pleine largeur (`../src/tableau/`), langage visuel ATLAS, clavier d'abord. 
 
 ## Connexion
 
-Même jeton que le panneau : `getWorkerToken` (`../src/api/worker.ts`), voie **nested app authentication** (MSAL `createNestablePublicClientApplication`, application Entra « ATLAS Outlook (complément) », URI de redirection SPA `brk-multihub://goodvibes-lu.github.io` déjà déclarée). La page initialise d'abord **TeamsJS** (chargé depuis le CDN Microsoft, version à vérifier à la publication) puis active cette voie hors Office.js (`enableHostedNaa()`).
+Même jeton que le panneau (`getWorkerToken`, `../src/api/worker.ts`), émis pour l'application Entra « ATLAS Outlook (complément) » (`fc36080c-…`), audience `api://goodvibes-lu.github.io/fc36080c-…`, étendue `access_as_user`. Depuis le 07/10/2026 (Outlook iPhone, onglet « Applications » : « Ta session Outlook doit être rouverte »), trois voies, dans l'ordre :
 
-**Limite** : la connexion automatique dans une application de la barre de gauche dépend de l'hôte (nouvel Outlook Windows et Outlook sur le web récents : prévu ; Mac : à confirmer). Si l'hôte ne la fournit pas, MSAL tente une fenêtre de connexion ; si elle est bloquée, la page affiche « Connexion impossible » avec « Réessayer » et « Ouvrir ATLAS » (le bandeau « Ma journée » du panneau reste disponible). Pour que la fenêtre de repli fonctionne, ajouter aussi `https://goodvibes-lu.github.io/atlas-outlook/tableau-de-bord.html` comme URI de redirection **SPA** de l'application Entra. Le SSO Teams classique (`getAuthToken`, qui exigerait de pré-autoriser les clients Teams / Outlook sur l'application Entra) n'est pas utilisé.
+1. **Connexion automatique** (nested app authentication, MSAL `createNestablePublicClientApplication`), **seulement si l'hôte pose le pont** `window.nestedAppAuthBridge` (TeamsJS le pose après `app.initialize()` quand l'hôte annonce `supports.nestedAppAuth`). Sans pont, MSAL retombait sans le dire sur un client classique (fenêtre surgissante), inutilisable dans Outlook mobile. URI de redirection SPA `brk-multihub://goodvibes-lu.github.io`.
+2. **Authentification unique Teams** (`authentication.getAuthToken`, bloc `webApplicationInfo` du manifeste). Exige que les applications Microsoft 365 soient **pré-autorisées** sur l'étendue `access_as_user` (`docs/agent-inbox-entra-id.md`, étape 5.2 bis) : Teams bureau et mobile `1fec8e78-bce4-4aaf-ab1b-5451cc387264`, Teams web `5e3ce6c0-2b1f-4285-8d4b-75ee78787346`, Microsoft 365 web `4765445b-32c6-49b0-83e6-1d93765276ca`, Microsoft 365 bureau `0ec893e0-5785-4de6-99da-4ed124e5296c`, Microsoft 365 mobile et Outlook bureau `d3590ed6-52b3-4102-aeff-aad2292ab01c`, Outlook web `bc59ab01-8403-45c6-8796-ac3ef710b3e3`, **Outlook mobile `27922004-5251-4030-b22d-91ecd9a37ea4`**.
+3. **Fenêtre de connexion de l'hôte** (`authentication.authenticate`), seulement sur « Se connecter » : ouvre `tableau-de-bord.html?auth=debut`, connexion MSAL par redirection, jeton rendu par `notifySuccess`. Exige l'URI de redirection **SPA** `https://goodvibes-lu.github.io/atlas-outlook/tableau-de-bord.html`.
+
+Chaque jeton est contrôlé avant usage (audience, étendue, tenant, compte, `src/api/jeton-diagnostic.ts`). Si le worker le refuse quand même, la page lui demande pourquoi (`GET /api/plugin/agent/jeton`, raison courte : `audience`, `scope`, `employe_inactif`…) et l'affiche. L'écran « Connexion impossible » dit ce qui manque et où le corriger, avec le détail technique repliable.
 
 ## Avant l'essai
 
@@ -65,7 +69,7 @@ Validation : schéma Microsoft 1.17 (`$schema` du manifeste), vérifié avec ajv
 | Outlook sur le web | oui |
 | Outlook Mac (nouvel Outlook) | **non** (Microsoft : pas d'applications Teams dans la barre de gauche sur Mac) → grande fenêtre du complément, ci-dessous |
 | Outlook classique Windows | a priori non → bandeau « Ma journée » du panneau |
-| Outlook iPhone / Android | non → bandeau « Ma journée » du panneau |
+| Outlook iPhone / Android | **oui**, onglet « Applications » (constaté le 07/10/2026 sur iPhone) : mise en page téléphone (compteurs en bande défilante, volet « Retour », bouton « Aujourd'hui », sans dock ni aides clavier) ; connexion par SSO Teams (voie 2) si l'hôte ne fournit pas la connexion automatique |
 
 La liste de contrôle complète est dans `docs/agent-inbox-essai-complement.md` (sections 3 et 5).
 

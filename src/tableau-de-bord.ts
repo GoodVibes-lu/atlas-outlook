@@ -20,36 +20,119 @@
  * les applications de la barre de gauche. Là : Office.js chargé à la demande (pas TeamsJS), jeton
  * fourni par la page parente (panneau ou commande du ruban), sinon connexion par redirection MSAL
  * dans la fenêtre ; les mails s'ouvrent dans Outlook par la page parente (`displayMessageForm`).
+ *
+ * OUTLOOK MOBILE (07/10/2026, retour de Charles sur iPhone : « Ta session Outlook doit être rouverte »,
+ * compteurs à 0) : l'application ATLAS apparaît dans l'onglet « Applications » d'Outlook iOS, mais
+ * cet hôte ne fournit pas toujours le pont de la connexion automatique (`nestedAppAuthBridge`) ; MSAL
+ * retombait alors sans le dire sur un client classique. Désormais, dans l'hôte Teams / Microsoft 365 :
+ *   1. connexion automatique (NAA) seulement si le pont est là ;
+ *   2. sinon authentification unique Teams (`authentication.getAuthToken`, bloc webApplicationInfo,
+ *      applications Microsoft 365 pré-autorisées dans Entra) ;
+ *   3. sur « Se connecter » : fenêtre de connexion de l'hôte (`authentication.authenticate`) qui
+ *      ouvre cette page en mode `?auth=debut` (connexion MSAL par redirection, URI SPA de la page) ;
+ *   4. chaque jeton est contrôlé avant usage (audience, étendue, tenant, compte) et, si le worker le
+ *      refuse quand même, sa raison (`GET /api/plugin/agent/jeton`) est affichée : la page dit QUOI
+ *      corriger (src/api/jeton-diagnostic.ts).
  */
 
 import {
-  enableDialogRedirectLogin, enableHostedNaa, finishDialogRedirect, getWorkerToken, setExternalTokenProvider,
+  autoriserConnexionInteractive, enableDialogRedirectLogin, enableHostedNaa, finishDialogRedirect, getWorkerToken,
+  setContexteConnexion, setExternalTokenProvider, setHoteTeams,
 } from './api/worker';
 import { brancherSurParent } from './api/dialogue-tableau';
 import { ATLAS_BASE } from './api/platform';
-import { humanError } from './api/net';
+import { AtlasError, getDiag, humanError } from './api/net';
 import { demarrerTableau } from './tableau/app';
 import { h } from './tableau/ui';
 
 /** TeamsJS (chargé par tableau-de-bord.html depuis le CDN Microsoft), facultatif. */
 const teams: any = (window as any).microsoftTeams;
 
-async function initHost(): Promise<void> {
-  if (!teams?.app?.initialize) return;
+/** Hôte Microsoft 365 détecté par TeamsJS : nom (« Outlook », « Teams »…) et plateforme (« ios », « android », « desktop », « web »). */
+interface InfoHote { ok: boolean; appli: string; plateforme: string }
+
+async function initHost(): Promise<InfoHote> {
+  const info: InfoHote = { ok: false, appli: '', plateforme: '' };
+  if (!teams?.app?.initialize) return info;
   try {
     await Promise.race([
       teams.app.initialize(),
       new Promise((_, reject) => setTimeout(() => reject(new Error('délai dépassé')), 5000)),
     ]);
+    info.ok = true;
     try {
       const ctx = await teams.app.getContext();
       applyTheme(String(ctx?.app?.theme || 'default'));
       teams.app.registerOnThemeChangeHandler?.((t: string) => applyTheme(t));
+      info.appli = String(ctx?.app?.host?.name || '');
+      info.plateforme = String(ctx?.app?.host?.clientType || '').toLowerCase();
     } catch { /* thème du système */ }
     teams.app.notifySuccess?.();
   } catch (e) {
     // Page ouverte hors d'un hôte Microsoft 365 (navigateur seul) : on continue sans TeamsJS.
     console.warn('[tableau-de-bord] TeamsJS indisponible :', (e as Error)?.message || e);
+  }
+  return info;
+}
+
+/** Adresse de la page de connexion ouverte par la fenêtre de l'hôte (même page, mode `auth=debut`). */
+function urlFenetreConnexion(): string {
+  return `${window.location.origin}${window.location.pathname}?auth=debut`;
+}
+
+/**
+ * Branche les voies de connexion propres à l'hôte Teams / Microsoft 365 (worker.ts) : SSO Teams,
+ * puis, sur geste, la fenêtre de connexion de l'hôte.
+ */
+function brancherConnexionTeams(info: InfoHote): void {
+  setContexteConnexion({ hote: 'teams', appli: info.appli, plateforme: info.plateforme });
+  const auth = teams?.authentication;
+  if (!info.ok || !auth) return;
+  setHoteTeams({
+    sso: typeof auth.getAuthToken === 'function' ? () => auth.getAuthToken() : undefined,
+    fenetre: typeof auth.authenticate === 'function'
+      ? () => auth.authenticate({ url: urlFenetreConnexion(), width: 600, height: 640 })
+      : undefined,
+  });
+}
+
+// ── Fenêtre de connexion de l'hôte Teams (`?auth=debut`) ──
+
+const CLE_AUTH = 'teams-auth';
+
+/** Vrai si la page est la fenêtre de connexion ouverte par `authentication.authenticate`, ou son retour de Microsoft. */
+function enFenetreConnexion(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('auth') === 'debut') {
+    try { sessionStorage.setItem(CLE_HOTE, CLE_AUTH); } catch { /* stockage indisponible */ }
+    return true;
+  }
+  try {
+    return /[#&](code|error)=/.test(window.location.hash) && sessionStorage.getItem(CLE_HOTE) === CLE_AUTH;
+  } catch { return false; }
+}
+
+/**
+ * Connexion Microsoft par redirection (application Entra du complément, URI SPA = cette page), puis
+ * jeton rendu à l'onglet par `authentication.notifySuccess`. La page part vers Microsoft puis revient.
+ */
+async function fenetreConnexion(): Promise<void> {
+  const app = document.getElementById('app')!;
+  app.innerHTML = '<div class="loading"><div class="spinner"></div><p>Connexion à ton compte Microsoft…</p></div>';
+  await initHost();
+  enableDialogRedirectLogin();
+  if (/[#&](code|error)=/.test(window.location.hash)) await finishDialogRedirect();
+  try {
+    const token = await getWorkerToken();
+    try { sessionStorage.removeItem(CLE_HOTE); } catch { /* rien */ }
+    teams?.authentication?.notifySuccess?.(token);
+  } catch (e) {
+    const detail = e instanceof AtlasError ? e.detail : String((e as Error)?.message || e);
+    // Redirection lancée : la page est en train de partir vers Microsoft, rien à signaler.
+    if (/redirection\)|connexion Microsoft en cours/.test(detail)) return;
+    try { sessionStorage.removeItem(CLE_HOTE); } catch { /* rien */ }
+    if (typeof teams?.authentication?.notifyFailure === 'function') teams.authentication.notifyFailure(detail.slice(0, 400));
+    else renderError(humanError(e));
   }
 }
 
@@ -126,17 +209,21 @@ function openLink(url: string): void {
 
 function renderError(message: string): void {
   const app = document.getElementById('app')!;
+  const diag = getDiag() as any;
+  const detail = String(diag?.token?.lastError || '');
   app.innerHTML = `
     <div class="tb-fatal tb-panel is-raised">
       <div class="tb-h">Connexion impossible</div>
       <p>${h(message)}</p>
-      <p class="tb-note">La connexion automatique (nested app authentication) n'est peut-être pas disponible dans cette version d'Outlook. Le panneau ATLAS d'un mail (bandeau « Ma journée ») reste utilisable.</p>
+      <p class="tb-note">Le panneau ATLAS d'un mail (bandeau « Ma journée ») reste utilisable.</p>
+      ${detail ? `<details class="tb-note"><summary>Détail technique</summary><p style="word-break:break-word">${h(detail.slice(0, 900))}</p></details>` : ''}
       <div class="tb-actions">
-        <button type="button" class="tb-btn is-primary" id="tdb-retry">Réessayer</button>
+        <button type="button" class="tb-btn is-primary" id="tdb-retry">Se connecter</button>
         <button type="button" class="tb-btn" id="tdb-open-atlas">Ouvrir ATLAS</button>
       </div>
     </div>`;
-  document.getElementById('tdb-retry')?.addEventListener('click', () => start());
+  // Le clic autorise la fenêtre de connexion de l'hôte (jamais ouverte sans geste).
+  document.getElementById('tdb-retry')?.addEventListener('click', () => { autoriserConnexionInteractive(); void start(); });
   document.getElementById('tdb-open-atlas')?.addEventListener('click', () => openLink(ATLAS_BASE));
 }
 
@@ -152,6 +239,7 @@ async function start(): Promise<void> {
 }
 
 async function initDialogueOffice(): Promise<void> {
+  setContexteConnexion({ hote: 'dialogue', appli: 'Outlook' });
   const params = new URLSearchParams(window.location.search);
   const theme = params.get('theme');
   if (theme === 'dark' || theme === 'light') applyTheme(theme);
@@ -168,11 +256,16 @@ async function initDialogueOffice(): Promise<void> {
 (async () => {
   document.body.classList.add('tb');
   applyTheme(null);
+  if (enFenetreConnexion()) {
+    await fenetreConnexion();
+    return;
+  }
   if (enDialogueOffice()) {
     await initDialogueOffice();
   } else {
-    await initHost();
+    const info = await initHost();
     enableHostedNaa();
+    brancherConnexionTeams(info);
   }
   await start();
 })();

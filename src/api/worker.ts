@@ -21,6 +21,9 @@
 import {
   AtlasError, humanMessage, isHumanText, kindForStatus, netFetch, setDiagWorkerUrl, setTokenDiag,
 } from './net';
+import {
+  expliquerEchecConnexion, expliquerRaisonWorker, libelleProblemes, problemesJeton, resumeJeton, type ContexteConnexion,
+} from './jeton-diagnostic';
 
 const DEFAULT_WORKER_URL = 'https://worker.vibes.lu';
 
@@ -125,9 +128,20 @@ export function enableHostedNaa(): void {
   hostedNaa = true;
 }
 
+/**
+ * Pont de la connexion automatique posé par l'hôte (TeamsJS le pose après `app.initialize()` si
+ * l'hôte déclare `supports.nestedAppAuth` ; Office.js le pose dans les compléments). Sans lui,
+ * `createNestablePublicClientApplication` de MSAL retombe SANS LE DIRE sur un client MSAL classique
+ * (fenêtre surgissante), inutilisable dans une application d'Outlook mobile : cause du 07/10/2026
+ * (Outlook iPhone, onglet « Applications »). On ne tente donc la voie NAA hébergée que si le pont existe.
+ */
+function naaBridgePresent(): boolean {
+  try { return !!(window as any).nestedAppAuthBridge; } catch { return false; }
+}
+
 function naaSupported(): boolean {
   let ok = false;
-  if (hostedNaa) ok = !!ADDIN_SCOPE;
+  if (hostedNaa) ok = !!ADDIN_SCOPE && naaBridgePresent();
   else {
     try {
       ok = !!ADDIN_SCOPE && typeof Office !== 'undefined'
@@ -158,7 +172,10 @@ async function getNaaClient(): Promise<any | null> {
 }
 
 async function getNaaToken(forceRefresh: boolean, errors: string[]): Promise<string> {
-  if (!naaSupported()) { errors.push('connexion automatique non proposée par Outlook'); return ''; }
+  if (!naaSupported()) {
+    errors.push(hostedNaa ? 'NAA absente (nestedAppAuthBridge non fourni par l\'hôte)' : 'connexion automatique non proposée par Outlook');
+    return '';
+  }
   const pca = await getNaaClient();
   if (!pca) { errors.push('MSAL indisponible'); return ''; }
   const account = (pca.getActiveAccount?.() || pca.getAllAccounts?.()?.[0]) ?? undefined;
@@ -192,6 +209,73 @@ async function getSsoToken(errors: string[]): Promise<string> {
     errors.push(`SSO ${code ?? ''} : ${(e as Error)?.message || e}`.trim());
     return '';
   }
+}
+
+// Voies propres à l'hôte Teams / Microsoft 365 (application ATLAS de la barre de gauche d'Outlook,
+// onglet « Applications » d'Outlook mobile), branchées par tableau-de-bord.ts après TeamsJS :
+//   - `sso` : authentification unique Teams (`authentication.getAuthToken`), jeton émis pour la
+//     ressource du bloc webApplicationInfo (api://goodvibes-lu.github.io/<client id>), étendue
+//     access_as_user. Exige que les applications Microsoft 365 (Teams, Outlook, Microsoft 365, web,
+//     bureau, mobile) soient pré-autorisées sur cette étendue dans Entra (jeton-diagnostic.ts) ;
+//   - `fenetre` : fenêtre de connexion de l'hôte (`authentication.authenticate`) qui ouvre la page en
+//     mode `?auth=debut` (connexion MSAL par redirection, renvoie le jeton). Seulement sur un geste de
+//     la personne (« Se connecter ») : jamais ouverte toute seule.
+export interface HoteTeams {
+  sso?: () => Promise<string>;
+  fenetre?: () => Promise<string>;
+}
+let hoteTeams: HoteTeams | null = null;
+export function setHoteTeams(h: HoteTeams | null): void {
+  hoteTeams = h;
+}
+/** Autorise UNE tentative interactive (fenêtre de connexion de l'hôte) au prochain calcul du jeton. */
+let interactifAutorise = false;
+export function autoriserConnexionInteractive(): void {
+  interactifAutorise = true;
+  lastTokenFailure = null;
+}
+
+/** Hôte de la page, pour des messages d'erreur qui disent quoi corriger (null : panneau, messages historiques). */
+let contexteConnexion: ContexteConnexion | null = null;
+export function setContexteConnexion(c: ContexteConnexion | null): void {
+  contexteConnexion = c;
+}
+
+function messageErreur(e: unknown): string {
+  return String((e as any)?.errorCode || (e as Error)?.message || e);
+}
+
+async function getTeamsSsoToken(errors: string[]): Promise<string> {
+  if (!hoteTeams?.sso) return '';
+  try {
+    return String(await withTimeout(hoteTeams.sso(), TOKEN_STEP_TIMEOUT, 'SSO Teams') || '');
+  } catch (e) {
+    errors.push(`SSO Teams : ${messageErreur(e)}`);
+    return '';
+  }
+}
+
+async function getTeamsFenetreToken(errors: string[]): Promise<string> {
+  if (!hoteTeams?.fenetre || !interactifAutorise) return '';
+  interactifAutorise = false;
+  try {
+    return String(await withTimeout(hoteTeams.fenetre(), TOKEN_STEP_TIMEOUT * 9, 'fenêtre de connexion') || '');
+  } catch (e) {
+    errors.push(`fenêtre de connexion : ${messageErreur(e)}`);
+    return '';
+  }
+}
+
+/**
+ * Jeton accepté s'il passerait les contrôles du worker (hors signature) ; sinon noté et jeté, pour
+ * essayer la voie suivante au lieu d'un 401 opaque (« Ta session Outlook doit être rouverte »).
+ */
+function jetonUtilisable(token: string, source: string, errors: string[]): string {
+  if (!token || !ADDIN_CLIENT_ID) return token;
+  const pb = problemesJeton(token, { clientId: ADDIN_CLIENT_ID, resource: ADDIN_RESOURCE, tenantId: GV_TENANT_ID, nowMs: Date.now() });
+  if (!pb.length) return token;
+  errors.push(`${source} : jeton refusé : ${libelleProblemes(pb)} (${resumeJeton(token)})`);
+  return '';
 }
 
 // Voie 0 (07/10/2026) : tableau de bord ouvert dans une FENÊTRE de dialogue Office (Outlook Mac,
@@ -288,19 +372,29 @@ export async function getWorkerToken(forceRefresh = false): Promise<string> {
     let token = '';
     if (externalTokenProvider) {
       try { token = await externalTokenProvider(forceRefresh); } catch (e) { errors.push(`page parente : ${(e as Error)?.message || e}`); }
+      token = jetonUtilisable(token, 'page parente', errors);
       if (token) source = 'parent';
     }
     // Dans un dialogue Office (redirectLogin), ni NAA ni SSO Office : on passe à la redirection.
     if (!token && !redirectLogin) {
-      token = await getNaaToken(forceRefresh, errors);
+      token = jetonUtilisable(await getNaaToken(forceRefresh, errors), 'NAA', errors);
       if (token) source = 'naa';
     }
-    if (!token && !redirectLogin) {
-      token = await getSsoToken(errors);
+    // Hôte Teams / Microsoft 365 : SSO Teams, puis (sur geste) la fenêtre de connexion de l'hôte.
+    if (!token && hoteTeams) {
+      token = jetonUtilisable(await getTeamsSsoToken(errors), 'SSO Teams', errors);
+      if (token) source = 'sso';
+      if (!token) {
+        token = jetonUtilisable(await getTeamsFenetreToken(errors), 'fenêtre de connexion', errors);
+        if (token) source = 'redirection';
+      }
+    }
+    if (!token && !redirectLogin && !hoteTeams) {
+      token = jetonUtilisable(await getSsoToken(errors), 'SSO Office', errors);
       if (token) source = 'sso';
     }
     if (!token) {
-      token = await getRedirectToken(forceRefresh, errors);
+      token = jetonUtilisable(await getRedirectToken(forceRefresh, errors), 'redirection', errors);
       if (token) source = 'redirection';
     }
     if (!token) {
@@ -308,9 +402,11 @@ export async function getWorkerToken(forceRefresh = false): Promise<string> {
       setTokenDiag({ source: '', until: 0, lastError: detail, lastErrorAt: Date.now() });
       // 13002 / user_cancelled : la personne a fermé la fenêtre de connexion.
       const cancelled = /13002|user_cancel/i.test(detail);
-      const err = new AtlasError('session', cancelled
-        ? 'Connexion à ton compte Microsoft annulée : clique sur Réessayer pour te connecter.'
-        : humanMessage('session'), { route: 'jeton', detail });
+      const err = new AtlasError('session', contexteConnexion
+        ? expliquerEchecConnexion(detail, contexteConnexion)
+        : cancelled
+          ? 'Connexion à ton compte Microsoft annulée : clique sur Réessayer pour te connecter.'
+          : humanMessage('session'), { route: 'jeton', detail });
       lastTokenFailure = { at: Date.now(), err };
       throw err;
     }
@@ -378,7 +474,15 @@ export async function workerRequest<T = Record<string, unknown>>(
       let res = await send(await getWorkerToken());
       if (res.status === 401) {
         cachedToken = null;
-        res = await send(await getWorkerToken(true));
+        const frais = await getWorkerToken(true);
+        res = await send(frais);
+        if (res.status === 401 && contexteConnexion) {
+          // Jeton obtenu mais refusé deux fois : on demande au worker POURQUOI (raison courte).
+          const raison = await raisonRefusWorker(frais);
+          setTokenDiag({ lastError: `worker 401 : ${raison || '?'} (${resumeJeton(frais)})`, lastErrorAt: Date.now() });
+          const texte = expliquerRaisonWorker(raison);
+          if (texte) throw new AtlasError('session', texte, { status: 401, route: label, detail: `HTTP 401 · raison ${raison}` });
+        }
       }
       const data: any = await res.json().catch(() => ({}));
       if (!res.ok || data?.ok === false) {
@@ -397,6 +501,18 @@ export async function workerRequest<T = Record<string, unknown>>(
     }
   }
   throw lastErr;
+}
+
+/** Raison du refus d'un jeton par le worker (`GET /api/plugin/agent/jeton`) ; '' si indisponible. */
+async function raisonRefusWorker(token: string): Promise<string> {
+  try {
+    const r = await netFetch(`${WORKER_BASE}/api/plugin/agent/jeton`, {
+      method: 'GET', headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
+    }, { service: 'atlas', label: 'agent/jeton', timeoutMs: 15_000 });
+    if (r.ok) return '';
+    const data: any = await r.json().catch(() => ({}));
+    return typeof data?.raison === 'string' ? data.raison : '';
+  } catch { return ''; }
 }
 
 /** Lectures de la liste blanche `/api/plugin/atlas/*` (retentées sur coupure réseau). */
