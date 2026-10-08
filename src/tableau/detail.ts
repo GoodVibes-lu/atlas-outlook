@@ -198,8 +198,8 @@ export async function composer(host: HTMLElement, m: TableauMail, ctx: Ctx, sour
     <textarea class="tb-textarea" id="tb-texte" aria-label="Texte de la réponse">${h(r.texte)}</textarea>
     <label class="tb-note"><input type="checkbox" id="tb-tous"> Répondre à tous</label>
     <div class="tb-actions">
-      ${actives ? `<button type="button" class="tb-btn is-primary" id="tb-deposer">${icon('reply', 14)}Déposer dans Outlook</button>` : ''}
-      <button type="button" class="tb-btn" id="tb-copier">${icon('copy', 14)}Copier</button>
+      ${actives ? `<button type="button" class="tb-btn is-primary" id="tb-deposer">${icon('reply', 14)}Répondre</button>` : ''}
+      ${actives ? '' : `<button type="button" class="tb-btn" id="tb-copier">${icon('copy', 14)}Copier</button>`}
       <button type="button" class="tb-btn is-ghost" id="tb-fermer-rep">Fermer</button>
     </div>
     ${actives ? '' : '<p class="tb-note">Le dépôt direct dans Outlook n\'est pas encore activé : copie le texte, ouvre le mail (Entrée) et colle-le dans ta réponse.</p>'}
@@ -216,7 +216,10 @@ export async function composer(host: HTMLElement, m: TableauMail, ctx: Ctx, sour
     try {
       const d = await deposerBrouillon(m.messageId, m.mailbox, texte(), (zone.querySelector('#tb-tous') as HTMLInputElement).checked);
       if (!d.depose) { toast('Dépôt indisponible : texte à copier', 'info'); b.disabled = false; return; }
-      toast('Brouillon prêt dans Outlook', 'success');
+      // « Répondre » (08/10/2026, Charles : « on peut répondre directement ») : la réponse est déposée dans
+      // la conversation et s'ouvre aussitôt dans Outlook, prête à relire et envoyer.
+      toast('Réponse ouverte dans Outlook', 'success');
+      if (d.webLink) ctx.openLink(d.webLink);
       apresDepot(zone.querySelector('#tb-apres')!, m, ctx, d.brouillonId || '', d.webLink || '');
     } catch (e) { toast(humanError(e), 'error'); b.disabled = false; }
   });
