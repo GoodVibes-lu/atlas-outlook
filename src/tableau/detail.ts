@@ -97,7 +97,7 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
         const d = await deposerBrouillon(m.messageId, m.mailbox, texte);
         if (!d.depose) { const ok = await copierTexte(texte); toast(ok ? 'Dépôt indisponible (double verrou) : texte copié' : 'Dépôt indisponible (double verrou)', 'info'); return; }
         toast('Proposition de RDV déposée dans le brouillon de réponse', 'success');
-        if (d.webLink) ctx.openLink(d.webLink);
+        ctx.actions.ouvrir(m);
       },
       prefillTiers: { contactPrenom: prenomExp || '', contactNom: nomExp.join(' '), contactEmail: m.from?.email || '' },
     });
@@ -218,8 +218,10 @@ export async function composer(host: HTMLElement, m: TableauMail, ctx: Ctx, sour
       if (!d.depose) { toast('Dépôt indisponible : texte à copier', 'info'); b.disabled = false; return; }
       // « Répondre » (08/10/2026, Charles : « on peut répondre directement ») : la réponse est déposée dans
       // la conversation et s'ouvre aussitôt dans Outlook, prête à relire et envoyer.
-      toast('Réponse ouverte dans Outlook', 'success');
-      if (d.webLink) ctx.openLink(d.webLink);
+      // Outlook n'ouvre pas un BROUILLON par displayMessageForm (rien ne se passait) : on ouvre le mail
+      // d'origine, la réponse y apparaît en brouillon dans la conversation, prête à relire et envoyer.
+      toast('Réponse prête : elle est en brouillon dans la conversation', 'success');
+      ctx.actions.ouvrir(m);
       apresDepot(zone.querySelector('#tb-apres')!, m, ctx, d.brouillonId || '', d.webLink || '');
     } catch (e) { toast(humanError(e), 'error'); b.disabled = false; }
   });
@@ -230,10 +232,11 @@ export async function composer(host: HTMLElement, m: TableauMail, ctx: Ctx, sour
 function apresDepot(host: HTMLElement, m: TableauMail, ctx: Ctx, brouillonId: string, webLink: string): void {
   const perso = (m.mailbox || '').toLowerCase() === ctx.etat.t?.moi;
   host.innerHTML = `<div class="tb-sep"></div><div class="tb-actions">
-    ${webLink ? `<button type="button" class="tb-btn" id="tb-ouvrir-br">${icon('external', 14)}Ouvrir le brouillon</button>` : ''}
+    <button type="button" class="tb-btn" id="tb-ouvrir-br">${icon('external', 14)}Ouvrir la conversation</button>
     ${perso && brouillonId ? `<button type="button" class="tb-btn is-primary" id="tb-plus-tard">${icon('clock', 14)}Envoyer plus tard…</button>` : ''}
   </div>${perso ? '' : '<p class="tb-note">Boîte partagée : relis et envoie depuis Outlook.</p>'}`;
-  host.querySelector('#tb-ouvrir-br')?.addEventListener('click', () => ctx.openLink(webLink));
+  host.querySelector('#tb-ouvrir-br')?.addEventListener('click', () => ctx.actions.ouvrir(m));
+  void webLink;
   host.querySelector('#tb-plus-tard')?.addEventListener('click', async () => {
     const choix = await choisirMoment<number | undefined>('Envoyer plus tard', {
       envoi: true,
