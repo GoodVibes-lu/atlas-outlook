@@ -200,7 +200,11 @@ export function ouvrirTableauDialogue(opts: OuvrirTableauOptions = {}): void {
       } else if (m.type === 'repondre' && typeof m.messageId === 'string' && typeof m.html === 'string') {
         repondre({ atlas: MARQUE, type: 'repondre-reponse', id: m.id, ok: repondreSurElementCourant(m.messageId, m.html) });
       } else if (m.type === 'ouvrir' && typeof m.url === 'string') {
+        // Un mail ouvert dans Outlook s'affichait DERRIÈRE la fenêtre du tableau de bord (Office la garde
+        // au premier plan). Pour un mail, la fenêtre se ferme donc ; on la rouvre d'un clic (« Tableau de bord »).
+        const mail = !!idDuLienOutlook(m.url);
         ouvrirDepuisTableau(m.url);
+        if (mail) { try { d.close(); } catch { /* déjà fermée */ } fin(); }
       } else if (m.type === 'fermer') {
         try { d.close(); } catch { /* déjà fermée */ }
         fin();
