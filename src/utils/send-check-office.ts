@@ -8,7 +8,7 @@
  * Les contrôles eux-mêmes sont purs (utils/send-check.ts) : les trois surfaces appliquent EXACTEMENT
  * les mêmes.
  */
-import { checkAvantEnvoi, smartAlertMessage, type SendCheckInput, type SendCheckProblem, type SendCheckRecipient } from './send-check';
+import { checkAvantEnvoi, decisionEnvoi, type SendCheckInput, type SendCheckProblem, type SendCheckRecipient } from './send-check';
 import { supportsMailbox } from '../api/platform';
 
 export function getAsyncValue<T>(getter: ((cb: (r: Office.AsyncResult<T>) => void) => void) | undefined, fallback: T): Promise<T> {
@@ -89,14 +89,35 @@ export async function controleAvantEnvoi(opts: ControleEnvoiOptions = {}): Promi
   }
 }
 
+/** Valeur de `sendModeOverride` « prompt user » (Mailbox 1.14) ; chaîne de repli si l'énumération manque. */
+function promptUserOverride(): string {
+  try { return (Office.MailboxEnums as any)?.SendModeOverride?.PromptUser || 'promptUser'; } catch { return 'promptUser'; }
+}
+
+/** Avertissement montré après un envoi autorisé (client sans Mailbox 1.14) : bandeau du message, meilleur effort. */
+function avertirApresCoup(message: string): void {
+  try {
+    const item = Office.context.mailbox?.item as any;
+    if (!item?.notificationMessages?.addAsync) return;
+    item.notificationMessages.addAsync('atlas-envoi-avert', {
+      type: Office.MailboxEnums.ItemNotificationMessageType.InformationalMessage,
+      message: message.replace(/\s+/g, ' ').slice(0, 150),
+      icon: 'icon16',
+      persistent: false,
+    });
+  } catch { /* sans bandeau */ }
+}
+
 /**
- * Gestionnaire Smart Alerts (`OnMessageSend`, SendMode « SoftBlock ») : si quelque chose est à
- * signaler, l'envoi est RETENU avec le message et la personne peut corriger ou envoyer quand même.
+ * Gestionnaire Smart Alerts (`OnMessageSend`, SendMode « SoftBlock » dans le manifeste). Décision
+ * pure `decisionEnvoi` (send-check.ts, 08/10/2026) : cas critique = retenu (« Ne pas envoyer » seul,
+ * à corriger) ; autre problème = retenu avec « Envoyer quand même » (Mailbox 1.14, sendModeOverride
+ * PromptUser : nouvel Outlook Mac, Windows, web), ou, sans 1.14, envoi autorisé et avertissement à part.
  * Jamais bloqué par ATLAS : API absente, erreur, réseau en panne ou budget dépassé = envoi autorisé.
  */
 export async function gererOnMessageSend(event: any, opts: ControleEnvoiOptions = {}): Promise<void> {
   let termine = false;
-  const terminer = (o: { allowEvent: boolean; errorMessage?: string }) => {
+  const terminer = (o: { allowEvent: boolean; errorMessage?: string; sendModeOverride?: string }) => {
     if (termine) return;
     termine = true;
     try { event.completed(o); } catch { /* déjà terminé */ }
@@ -107,7 +128,9 @@ export async function gererOnMessageSend(event: any, opts: ControleEnvoiOptions 
     if (!supportsMailbox('1.12')) { terminer({ allowEvent: true }); return; }
     const problems = await controleAvantEnvoi(opts);
     if (!problems || !problems.length) { terminer({ allowEvent: true }); return; }
-    terminer({ allowEvent: false, errorMessage: smartAlertMessage(problems) });
+    const d = decisionEnvoi(problems, supportsMailbox('1.14'));
+    if (d.allowEvent) { avertirApresCoup(d.message); terminer({ allowEvent: true }); return; }
+    terminer({ allowEvent: false, errorMessage: d.message, ...(d.promptUser ? { sendModeOverride: promptUserOverride() } : {}) });
   } catch (e) {
     console.warn('[ATLAS] contrôle avant envoi impossible, envoi autorisé :', e);
     terminer({ allowEvent: true });

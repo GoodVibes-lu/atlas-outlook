@@ -34,7 +34,8 @@ import { choisirAutreDossier, rangerTraiteMail } from './traites';
 import { ignorerTraite, annulerTraite } from '../api/tableau';
 import { annulerAction, executerAction, fetchDossierProjet, mettrePlusTard, rangerDansDossier, retirerPlusTard } from '../api/agent';
 import { deposerBrouillon, redigerArgo } from '../api/tableau';
-import { callAtlasWorker } from '../api/worker';
+import { callAtlasWorker, compteConnecte } from '../api/worker';
+import { confirmerParModale, envoyerDirect } from './envoi-direct';
 import { humanError } from '../api/net';
 import { openAgentMail } from '../components/agent-lists';
 import { copierTexte } from '../components/agent-outils';
@@ -473,6 +474,15 @@ export function ouvrirSeance(opts: OptionsSeance): void {
       const r = await redigerArgo(c.messageId, c.mailbox);
       texte = r.texte || '';
       if (!texte) { toast('Rédaction indisponible : réponds depuis Outlook', 'error'); openAgentMail(c, opts.openLink); return false; }
+    }
+    // Boîte personnelle (08/10/2026) : envoi direct confirmé « Envoyer à X ? » puis « Annuler » quelques
+    // secondes (le nouvel Outlook pour Mac n'ouvre pas un brouillon déposé). Abandon = carte gardée.
+    const moi = (compteConnecte() || '').trim().toLowerCase();
+    if (moi && (c.mailbox || '').trim().toLowerCase() === moi) {
+      const issue = await envoyerDirect({ messageId: c.messageId, mailbox: c.mailbox, texte, confirmer: confirmerParModale });
+      if (issue === 'envoye') return true;
+      if (issue === 'abandonne') return false;
+      // erreur : replis ci-dessous
     }
     if (s?.ecrituresActives) {
       try {

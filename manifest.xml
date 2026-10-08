@@ -14,7 +14,8 @@
       décision de la direction du 08/10/2026, le contrôle automatique avant envoi prime.
     - Panneau RÉDACTION : bureau et web uniquement (pas de surface de rédaction sur mobile).
     - SMART ALERTS (1.5.0) : contrôle automatique avant chaque envoi (LaunchEvent OnMessageSend,
-      SendMode SoftBlock : la personne relit et peut envoyer quand même ; jamais HardBlock).
+      SendMode SoftBlock déclaré ; à l'exécution (08/10/2026) : cas critique retenu, sinon
+      « Envoyer quand même » via sendModeOverride PromptUser, Mailbox 1.14 ; jamais HardBlock).
       Runtime navigateur = commands.html (nouvel Outlook Mac / Windows, web) ; Outlook classique
       Windows = launch-event.js (fichier seul, produit au build). Exige un déploiement par
       l'administrateur (Centre d'administration Microsoft 365 › Applications intégrées).
@@ -342,9 +343,11 @@
             <!-- ── Smart Alerts : contrôle AUTOMATIQUE avant l'envoi (activé le 08/10/2026) ──
                  Gestionnaire « atlasOnMessageSend » : commands.ts (runtime navigateur) et
                  launch-event.ts (Outlook classique Windows), mêmes contrôles que l'onglet « Relire
-                 avant envoi ». SoftBlock : l'envoi est retenu avec le message, la personne peut
-                 corriger ou envoyer quand même ; erreur, réseau en panne ou budget (5 s) dépassé =
-                 envoi autorisé. Jamais HardBlock. -->
+                 avant envoi ». SoftBlock déclaré (boîte « Ne pas envoyer » seule) : réservé aux cas
+                 critiques (fournisseur visible d'un client) ; tout autre avertissement passe en
+                 « Envoyer quand même » par sendModeOverride PromptUser (Mailbox 1.14 : nouvel
+                 Outlook Mac, Windows, web ; sans 1.14, envoi autorisé et avertissement à part).
+                 Erreur, réseau en panne ou budget (5 s) dépassé = envoi autorisé. Jamais HardBlock. -->
             <ExtensionPoint xsi:type="LaunchEvent">
               <LaunchEvents>
                 <LaunchEvent Type="OnMessageSend" FunctionName="atlasOnMessageSend" SendMode="SoftBlock" />

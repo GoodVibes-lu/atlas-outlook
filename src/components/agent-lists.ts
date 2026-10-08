@@ -114,6 +114,7 @@ export async function renderMailList(host: HTMLElement, pile: AgentListePile, op
     const m: string[] = [];
     if (el.plusTardJusqua) m.push(`Revient ${jour(el.plusTardJusqua)}`);
     if (el.relanceLe) m.push(`Relance prévue ${jour(el.relanceLe)}`);
+    else if (el.relanceGeree) m.push(el.relanceGeree);
     if (el.brouillonPret) m.push('Brouillon prêt');
     if (el.equipe?.prisPar) m.push(`Pris par ${el.equipe.prisParNom || el.equipe.prisPar}`);
     else if (el.equipe?.assigneA) m.push(`Pour ${el.equipe.assigneNom || el.equipe.assigneA}`);

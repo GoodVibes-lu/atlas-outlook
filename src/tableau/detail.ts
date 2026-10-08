@@ -1,13 +1,16 @@
 /**
  * detail.ts · colonne de droite quand un mail est choisi : ce qu'ARGO en dit (résumé, pourquoi en
  * tête), ce que l'agent propose (actions, réutilise /agent/actions), la réponse (ARGO dans le style
- * de la personne ou modèle Communications) déposée dans le brouillon Outlook, l'envoi programmé,
+ * de la personne ou modèle Communications) envoyée d'ici pour sa boîte personnelle (envoi-direct.ts,
+ * 08/10/2026 : confirmation puis « Annuler » quelques secondes) ou déposée dans le brouillon Outlook
+ * pour une boîte partagée, l'envoi programmé,
  * la relance si pas de réponse, et le fil d'équipe des boîtes partagées (« Je prends »,
  * « Attribuer à… », commentaires internes, jamais dans le mail).
  */
 import type { Ctx } from './app';
 import type { DigestNewsletter, ReponseRedigee, TableauMail } from '../api/tableau';
 import { deposerBrouillon, programmerEnvoi, redigerArgo, remplirModeleTableau } from '../api/tableau';
+import { confirmerDansLaPage, confirmerParModale, envoyerDirect } from './envoi-direct';
 import {
   fetchEquipe, relacherMail, attribuerMail, ajouterCommentaire, fetchModeles, demanderRelance,
   type ModeleReponse,
@@ -94,6 +97,12 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
     renderPlusActions(parite, {
       messageId: m.messageId, mailbox: m.mailbox, onInfo: toast,
       deposer: async (texte: string) => {
+        // Boîte personnelle (08/10/2026) : envoi direct confirmé en modale (le nouvel Outlook pour Mac
+        // n'ouvre pas un brouillon déposé). Boîte partagée : dépôt dans les Brouillons comme avant.
+        if (perso) {
+          await envoyerDirect({ messageId: m.messageId, mailbox: m.mailbox, texte, confirmer: confirmerParModale, apresEnvoi: () => void ctx.rafraichir(true) });
+          return;
+        }
         const d = await deposerBrouillon(m.messageId, m.mailbox, texte);
         if (!d.depose) { const ok = await copierTexte(texte); toast(ok ? 'Dépôt indisponible (double verrou) : texte copié' : 'Dépôt indisponible (double verrou)', 'info'); return; }
         if (d.webLink) ctx.openLink(d.webLink); else ctx.actions.ouvrir(m);
@@ -189,6 +198,10 @@ export async function composer(host: HTMLElement, m: TableauMail, ctx: Ctx, sour
     return;
   }
   const actives = !!ctx.etat.t?.ecrituresActives;
+  // Boîte personnelle (08/10/2026) : « Envoyer » part d'ici, de la main de la personne (confirmation en
+  // page, puis « Annuler » quelques secondes). Le nouvel Outlook pour Mac n'ouvre pas un brouillon
+  // déposé (displayMessageForm) : la réponse restait dans les Brouillons. Boîte partagée : dépôt comme avant.
+  const perso = (m.mailbox || '').toLowerCase() === (ctx.etat.t?.moi || '');
   const manque = [...(r.aCompleter || []), ...(r.manquantes || []).map(x => `{{${x}}}`)];
   zone.innerHTML = `
     <div class="tb-h">Réponse<span class="tb-h-n">${h(SOURCES[r.source])}</span></div>
@@ -197,57 +210,97 @@ export async function composer(host: HTMLElement, m: TableauMail, ctx: Ctx, sour
     <textarea class="tb-textarea" id="tb-texte" aria-label="Texte de la réponse">${h(r.texte)}</textarea>
     <label class="tb-note"><input type="checkbox" id="tb-tous"> Répondre à tous</label>
     <div class="tb-actions">
-      ${actives ? `<button type="button" class="tb-btn is-primary" id="tb-deposer">${icon('reply', 14)}Répondre</button>` : ''}
-      ${actives ? '' : `<button type="button" class="tb-btn" id="tb-copier">${icon('copy', 14)}Copier</button>`}
+      ${perso ? `<button type="button" class="tb-btn is-primary" id="tb-envoyer">${icon('reply', 14)}Envoyer</button>` : ''}
+      ${perso && actives ? `<button type="button" class="tb-btn" id="tb-plus-tard">${icon('clock', 14)}Envoyer plus tard…</button>` : ''}
+      ${perso ? `<button type="button" class="tb-btn" id="tb-ouvrir-orig">${icon('external', 14)}Ouvrir dans Outlook</button>` : ''}
+      ${!perso && actives ? `<button type="button" class="tb-btn is-primary" id="tb-deposer">${icon('reply', 14)}Répondre</button>` : ''}
+      ${perso || actives ? '' : `<button type="button" class="tb-btn" id="tb-copier">${icon('copy', 14)}Copier</button>`}
       <button type="button" class="tb-btn is-ghost" id="tb-fermer-rep">Fermer</button>
     </div>
-    ${actives ? '' : '<p class="tb-note">Le dépôt direct dans Outlook n\'est pas encore activé : copie le texte, ouvre le mail (Entrée) et colle-le dans ta réponse.</p>'}
+    ${perso ? '<p class="tb-note">« Envoyer » part d\'ici après ta confirmation (signature ajoutée à l\'envoi). Pour joindre un fichier : « Ouvrir dans Outlook » et réponds depuis le mail.</p>' : ''}
+    ${perso || actives ? '' : '<p class="tb-note">Le dépôt direct dans Outlook n\'est pas encore activé : copie le texte, ouvre le mail (Entrée) et colle-le dans ta réponse.</p>'}
     <div id="tb-apres"></div>`;
   const texte = () => (zone.querySelector('#tb-texte') as HTMLTextAreaElement).value;
+  const tous = () => (zone.querySelector('#tb-tous') as HTMLInputElement).checked;
+  const boutons = () => [...zone.querySelectorAll<HTMLButtonElement>('#tb-envoyer, #tb-plus-tard, #tb-deposer')];
+  const figer = (on: boolean) => boutons().forEach(b => { b.disabled = on; });
   zone.querySelector('#tb-copier')?.addEventListener('click', async () => {
     const ok = await copierTexte(texte(), zone.querySelector<HTMLTextAreaElement>('#tb-texte'));
     toast(ok ? 'Texte copié : colle-le dans ta réponse Outlook' : 'Copie impossible : sélectionne le texte', ok ? 'success' : 'error');
   });
   zone.querySelector('#tb-fermer-rep')?.addEventListener('click', () => { zone.hidden = true; });
+  // « Ouvrir dans Outlook » : le mail D'ORIGINE (displayMessageForm, la fenêtre du tableau se ferme),
+  // pour répondre depuis Outlook quand il faut une pièce jointe.
+  zone.querySelector('#tb-ouvrir-orig')?.addEventListener('click', () => ctx.actions.ouvrir(m));
+  zone.querySelector('#tb-envoyer')?.addEventListener('click', async () => {
+    const apres = zone.querySelector<HTMLElement>('#tb-apres')!;
+    figer(true);
+    const issue = await envoyerDirect({
+      messageId: m.messageId, mailbox: m.mailbox, texte: texte(), tous: tous(),
+      confirmer: p => confirmerDansLaPage(apres, p),
+      apresEnvoi: p => {
+        apres.innerHTML = `<div class="tb-sep"></div><p class="tb-note">${icon('reply', 13)} Envoyé à ${h([...p.a, ...p.cc].map(x => x.nom || x.email).join(', '))}. Ce mail passera dans « Traités à ranger ».</p>`;
+        void ctx.rafraichir(true);
+      },
+      apresAnnulation: () => { apres.innerHTML = ''; figer(false); },
+    });
+    if (issue !== 'envoye') figer(false);
+  });
+  // « Envoyer plus tard… » : brouillon déposé (étape interne) puis remise différée d'Exchange, comme avant.
+  zone.querySelector('#tb-plus-tard')?.addEventListener('click', async () => {
+    figer(true);
+    try {
+      const d = await deposerBrouillon(m.messageId, m.mailbox, texte(), tous());
+      if (!d.depose || !d.brouillonId) { toast('Dépôt indisponible : envoi programmé impossible', 'info'); figer(false); return; }
+      const apres = zone.querySelector<HTMLElement>('#tb-apres')!;
+      const programme = await programmerPlusTard(apres, m, ctx, d.brouillonId);
+      if (!programme) figer(false);
+    } catch (e) { toast(humanError(e), 'error'); figer(false); }
+  });
   zone.querySelector('#tb-deposer')?.addEventListener('click', async ev => {
     const b = ev.currentTarget as HTMLButtonElement;
     b.disabled = true;
     try {
-      const d = await deposerBrouillon(m.messageId, m.mailbox, texte(), (zone.querySelector('#tb-tous') as HTMLInputElement).checked);
+      const d = await deposerBrouillon(m.messageId, m.mailbox, texte(), tous());
       if (!d.depose) { toast('Dépôt indisponible : texte à copier', 'info'); b.disabled = false; return; }
-      // « Répondre » (08/10/2026, Charles : « on peut répondre directement ») : la réponse est déposée dans
-      // la conversation et s'ouvre aussitôt dans Outlook, prête à relire et envoyer.
-      // La réponse s'ouvre directement dans Outlook, prête à envoyer (le tableau de bord se ferme pour
-      // qu'elle apparaisse devant ; auparavant elle s'ouvrait derrière la fenêtre et semblait absente).
+      // Boîte partagée : la réponse est déposée dans la conversation et Outlook l'ouvre (le tableau se
+      // ferme pour qu'elle apparaisse devant) ; relecture et envoi depuis Outlook.
       if (d.webLink) ctx.openLink(d.webLink); else ctx.actions.ouvrir(m);
-      apresDepot(zone.querySelector('#tb-apres')!, m, ctx, d.brouillonId || '', d.webLink || '');
+      apresDepot(zone.querySelector('#tb-apres')!, m, ctx, d.webLink || '');
     } catch (e) { toast(humanError(e), 'error'); b.disabled = false; }
   });
   (zone.querySelector('#tb-texte') as HTMLTextAreaElement).focus();
 }
 
-/** Après le dépôt : ouvrir le brouillon, ou l'envoyer plus tard (remise différée Exchange) avec relance. */
-function apresDepot(host: HTMLElement, m: TableauMail, ctx: Ctx, brouillonId: string, webLink: string): void {
-  const perso = (m.mailbox || '').toLowerCase() === ctx.etat.t?.moi;
+/** Boîte partagée, après le dépôt : rouvrir le brouillon ; relecture et envoi depuis Outlook. */
+function apresDepot(host: HTMLElement, m: TableauMail, ctx: Ctx, webLink: string): void {
   host.innerHTML = `<div class="tb-sep"></div><div class="tb-actions">
     <button type="button" class="tb-btn" id="tb-ouvrir-br">${icon('external', 14)}Ouvrir la réponse</button>
-    ${perso && brouillonId ? `<button type="button" class="tb-btn is-primary" id="tb-plus-tard">${icon('clock', 14)}Envoyer plus tard…</button>` : ''}
-  </div>${perso ? '' : '<p class="tb-note">Boîte partagée : relis et envoie depuis Outlook.</p>'}`;
+  </div><p class="tb-note">Boîte partagée : relis et envoie depuis Outlook.</p>`;
   host.querySelector('#tb-ouvrir-br')?.addEventListener('click', () => (webLink ? ctx.openLink(webLink) : ctx.actions.ouvrir(m)));
-  host.querySelector('#tb-plus-tard')?.addEventListener('click', async () => {
-    const choix = await choisirMoment<number | undefined>('Envoyer plus tard', {
-      envoi: true,
-      extra: `<label class="tb-note"><input type="checkbox" id="tb-rel"> Relancer si pas de réponse sous <select id="tb-rel-j" class="tb-input">${[2, 3, 5, 10].map(n => `<option value="${n}"${n === 3 ? ' selected' : ''}>${n} jours ouvrés</option>`).join('')}</select></label>`,
-      lireExtra: el => ((el.querySelector('#tb-rel') as HTMLInputElement)?.checked ? Number((el.querySelector('#tb-rel-j') as HTMLSelectElement).value) : undefined),
-    });
-    if (!choix) return;
-    try {
-      const r = await programmerEnvoi({ brouillonId, quand: choix.iso, relanceJours: choix.extra, enReponseA: m.messageId });
-      toast(`Envoi programmé ${quandLisible(r.envoi.quand, Date.now())} : Exchange l'enverra même si ATLAS est fermé`, 'success');
-      host.innerHTML = `<p class="tb-note">${icon('clock', 13)} Part ${h(quandLisible(r.envoi.quand, Date.now()))}${choix.extra ? `, relance sous ${choix.extra} jours ouvrés sans réponse` : ''}.</p>`;
-      void ctx.rafraichir(true);
-    } catch (e) { toast(humanError(e), 'error'); }
+}
+
+/**
+ * « Envoyer plus tard… » : moment choisi puis remise différée d'Exchange du brouillon déposé, avec
+ * relance facultative. true si programmé (la zone affiche le moment), false si la personne renonce.
+ */
+async function programmerPlusTard(host: HTMLElement, m: TableauMail, ctx: Ctx, brouillonId: string): Promise<boolean> {
+  const choix = await choisirMoment<number | undefined>('Envoyer plus tard', {
+    envoi: true,
+    extra: `<label class="tb-note"><input type="checkbox" id="tb-rel"> Relancer si pas de réponse sous <select id="tb-rel-j" class="tb-input">${[2, 3, 5, 10].map(n => `<option value="${n}"${n === 3 ? ' selected' : ''}>${n} jours ouvrés</option>`).join('')}</select></label>`,
+    lireExtra: el => ((el.querySelector('#tb-rel') as HTMLInputElement)?.checked ? Number((el.querySelector('#tb-rel-j') as HTMLSelectElement).value) : undefined),
   });
+  if (!choix) {
+    host.innerHTML = '<p class="tb-note">Réponse gardée dans tes Brouillons Outlook (non envoyée).</p>';
+    return false;
+  }
+  try {
+    const r = await programmerEnvoi({ brouillonId, quand: choix.iso, relanceJours: choix.extra, enReponseA: m.messageId });
+    toast(`Envoi programmé ${quandLisible(r.envoi.quand, Date.now())} : Exchange l'enverra même si ATLAS est fermé`, 'success');
+    host.innerHTML = `<p class="tb-note">${icon('clock', 13)} Part ${h(quandLisible(r.envoi.quand, Date.now()))}${choix.extra ? `, relance sous ${choix.extra} jours ouvrés sans réponse` : ''}.</p>`;
+    void ctx.rafraichir(true);
+    return true;
+  } catch (e) { toast(humanError(e), 'error'); return false; }
 }
 
 // ── Fil d'équipe (boîtes partagées) ──

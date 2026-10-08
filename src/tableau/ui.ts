@@ -10,7 +10,7 @@ export const mouvementReduit = () => window.matchMedia?.('(prefers-reduced-motio
 
 let toastTimer: number | null = null;
 /** Notification discrète en bas à droite ; `annuler` ajoute un bouton (5 s). */
-export function toast(message: string, type: 'info' | 'success' | 'error' = 'info', annuler?: () => void): void {
+export function toast(message: string, type: 'info' | 'success' | 'error' = 'info', annuler?: () => void, dureeMs?: number): void {
   document.querySelectorAll('.tb-toast').forEach(el => el.remove());
   if (toastTimer) window.clearTimeout(toastTimer);
   const el = document.createElement('div');
@@ -19,7 +19,7 @@ export function toast(message: string, type: 'info' | 'success' | 'error' = 'inf
   el.innerHTML = `<span>${h(message)}</span>${annuler ? '<button type="button">Annuler</button>' : ''}`;
   el.querySelector('button')?.addEventListener('click', () => { el.remove(); annuler?.(); });
   document.body.appendChild(el);
-  toastTimer = window.setTimeout(() => el.remove(), annuler ? 6000 : 3500);
+  toastTimer = window.setTimeout(() => el.remove(), dureeMs ?? (annuler ? 6000 : 3500));
 }
 
 /** Ouvre une couche (palette, modale) ; Échap ou clic dehors la ferme. Renvoie la fonction de fermeture. */

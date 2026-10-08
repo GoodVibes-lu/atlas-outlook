@@ -481,6 +481,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     else if (m.equipe?.assigneA) chips.push(`<span class="tb-chip">Pour ${h(m.equipe.assigneNom || prenomDe(m.equipe.assigneA))}</span>`);
     if (m.plusTardJusqua) chips.push(`<span class="tb-chip">${h(quandLisible(m.plusTardJusqua, Date.now()))}</span>`);
     if (m.relanceLe) chips.push(`<span class="tb-chip">Relance ${h(m.relanceLe.slice(8, 10))}/${h(m.relanceLe.slice(5, 7))}</span>`);
+    else if (m.relanceGeree) chips.push(`<span class="tb-chip" title="${h(m.relanceGeree)}">${h(m.relanceGeree)}</span>`);
     if (m.urgence >= 3) chips.push('<span class="tb-chip is-hot">Urgent</span>');
     const boite = etat.boite === 'toutes' && (etat.t?.boites.length || 0) > 1 && m.mailbox && m.mailbox !== etat.t?.moi ? ` · ${h(m.mailbox.split('@')[0])}@` : '';
     const coche = etat.lot.includes(cle);

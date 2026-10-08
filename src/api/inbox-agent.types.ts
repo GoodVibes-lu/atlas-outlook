@@ -317,6 +317,8 @@ export type InboxListeElement = Pick<InboxMessageState, 'messageId' | 'graphId' 
   brouillonPret?: boolean;
   /** « En attente » : relance prévue ce jour-là ('YYYY-MM-DD') si aucune réponse n'arrive. */
   relanceLe?: string;
+  /** « En attente » : mail d'un flux ATLAS (offre, portail Créas…) dont ATLAS gère déjà les rappels : « Relance gérée par ATLAS (…) », jamais de relance de l'agent. */
+  relanceGeree?: string;
   /** Phase 5 (listes de good@) : boîte du mail, assigné / preneur. */
   mailbox?: string;
   equipe?: Pick<InboxEquipe, 'assigneA' | 'assigneNom' | 'prisPar' | 'prisParNom'>;

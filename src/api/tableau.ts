@@ -161,6 +161,13 @@ export const remplirModeleTableau = (messageId: string, mailbox: string, modeleI
 export interface Depot { depose: boolean; brouillonId?: string; webLink?: string; raison?: string }
 export const deposerBrouillon = (messageId: string, mailbox: string, texte: string, tous = false) => ecriture<Depot>('POST', 'tableau/brouillon', { messageId, mailbox, texte, tous });
 
+/** Envoi direct (08/10/2026) : réponse préparée dans la boîte personnelle, destinataires à confirmer ; rien ne part. */
+export interface EnvoiPret { pret: boolean; brouillonId: string; a: Array<{ email: string; nom: string }>; cc: Array<{ email: string; nom: string }>; sujet?: string }
+export const preparerEnvoi = (messageId: string, mailbox: string, texte: string, tous = false) => ecriture<EnvoiPret>('POST', 'tableau/envoyer', { messageId, mailbox, texte, tous });
+/** Confirmation : remise différée de quelques secondes (`annulableS`), « Annuler » le retire tant qu'il n'est pas parti. */
+export const confirmerEnvoi = (brouillonId: string, enReponseA?: string) => ecriture<{ envoye: boolean; partLe: string; annulableS: number }>('POST', 'tableau/envoyer/confirmer', { brouillonId, enReponseA });
+export const abandonnerEnvoi = (brouillonId: string) => ecriture<{ ok: boolean }>('POST', 'tableau/envoyer/abandonner', { brouillonId });
+
 export const programmerEnvoi = (p: { brouillonId: string; quand: string; relanceJours?: number; enReponseA?: string }) =>
   ecriture<{ ok: boolean; envoi: EnvoiProgramme }>('POST', 'tableau/envois', p);
 export const annulerEnvoi = (brouillonId: string) => ecriture<{ ok: boolean; envoi: EnvoiProgramme }>('DELETE', 'tableau/envois', { brouillonId });

@@ -4,6 +4,7 @@
  *
  * Ce runtime n'a ni DOM, ni fenêtre, ni MSAL : seuls Office.js et le code pur sont disponibles. Les
  * contrôles sont donc LOCAUX (pièce jointe annoncée, destinataires, registre, « Cordialement »…),
+ * sur le texte rédigé seul (fil cité et signature exclus, decisionEnvoi : « Envoyer quand même »),
  * les mêmes que le bouton manuel sans les données ATLAS. Le nouvel Outlook (Mac, Windows) et le
  * web chargent commands.html (runtime navigateur) : là, commands.ts enrichit avec les fiches ATLAS.
  *

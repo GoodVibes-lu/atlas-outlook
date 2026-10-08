@@ -163,6 +163,8 @@ export interface AgentListeElement {
   brouillonPret?: boolean;
   /** « En attente » : relance prévue ce jour-là ('YYYY-MM-DD') sans réponse. */
   relanceLe?: string;
+  /** « En attente » : rappels gérés par un flux ATLAS (offre, portail Créas…) : « Relance gérée par ATLAS (…) ». */
+  relanceGeree?: string;
   /** Phase 5 (listes de good@) : boîte du mail, assigné / preneur. */
   mailbox?: string;
   equipe?: Pick<InboxEquipe, 'assigneA' | 'assigneNom' | 'prisPar' | 'prisParNom'>;

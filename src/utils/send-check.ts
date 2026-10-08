@@ -29,9 +29,11 @@
  * complément est publié depuis son propre dossier et n'importe rien hors de `outlook-addin/`.
  * Toute correction de ces fonctions là-bas doit être recopiée ici.
  *
- * Gravité : « bloquant » = l'envoi est retenu (Smart Alerts « soft block » : l'utilisateur peut
- * envoyer quand même) ; « avertissement » = signalé seulement. Rien n'est jamais envoyé ni modifié.
+ * Gravité : « bloquant » = à corriger avant d'envoyer ; « avertissement » = signalé seulement. Dans la
+ * boîte Smart Alerts, seul un cas CRITIQUE retient l'envoi (CODES_CRITIQUES) ; le reste laisse « Envoyer
+ * quand même » (decisionEnvoi, 08/10/2026). Rien n'est jamais envoyé ni modifié.
  */
+import { indexHtmlQuote, indexQuotedReply, stripSignature } from '../shared/email-body-clean';
 
 export type SendCheckGravite = 'bloquant' | 'avertissement';
 
@@ -110,16 +112,29 @@ const decode = (s: string) => s
  */
 export function ownPart(html: string): string {
   let h = html || '';
+  // 08/10/2026 : marqueurs partagés avec ATLAS (shared/email-body-clean.ts : conteneur du nouvel Outlook
+  // « mail-editor-reference-message-container », gmail_quote, Apple Mail…) : le faux positif « pièce
+  // jointe annoncée » venait d'un « attachments » dans le fil cité d'une réponse du nouvel Outlook Mac.
+  const i = indexHtmlQuote(h);
+  if (i >= 0) h = h.slice(0, i);
   const cuts = [
     /<blockquote[\s\S]*$/i,
     /<div[^>]*id=["']?(divRplyFwdMsg|appendonsend)["']?[\s\S]*$/i,
-    /<hr[^>]*>[\s\S]*?(De|From|Von)\s*:[\s\S]*$/i,
+    /<hr[^>]*>[\s\S]*?(De|From|Von)(\s|&nbsp;| )*:[\s\S]*$/i,
   ];
   for (const re of cuts) h = h.replace(re, '');
   return h;
 }
 
 const QUOTE_TEXT_RE = /\n\s*(-{2,}\s*(Original|Message d'origine|Ursprüngliche)|(De|From|Von)\s*:.*\n\s*(Envoyé|Sent|Gesendet)\s*:|On .{4,80} wrote:|Le .{4,80} a écrit\s*:|Am .{4,80} schrieb)/i;
+
+/** Début du fil cité dans un texte : marqueurs locaux ET partagés (indexQuotedReply), le plus tôt l'emporte. */
+function indexCitation(t: string): number {
+  const a = t.search(QUOTE_TEXT_RE);
+  const b = indexQuotedReply(t);
+  if (a > 0 && b > 0) return Math.min(a, b);
+  return a > 0 ? a : b > 0 ? b : -1;
+}
 
 function htmlToText(html: string): string {
   return decode((html || '')
@@ -132,8 +147,17 @@ function htmlToText(html: string): string {
 /** Texte visible (lignes conservées), sans le fil cité en texte brut. */
 export function visibleText(html: string): string {
   const t = htmlToText(html);
-  const m = t.search(QUOTE_TEXT_RE);
+  const m = indexCitation(t);
   return (m > 0 ? t.slice(0, m) : t).trim();
+}
+
+/**
+ * Texte RÉDIGÉ seul : partie propre (sans le fil cité, HTML puis texte) et SANS la signature (locale ou
+ * Exclaimer citée) ; la formule de politesse finale est gardée (contrôle « Cordialement »). C'est sur ce
+ * texte, et lui seul, que portent tous les contrôles.
+ */
+export function texteRedige(html: string): string {
+  return stripSignature(visibleText(ownPart(html)));
 }
 
 /** Texte du fil CITÉ (ce qui suit la partie rédigée), vide pour un nouveau message. */
@@ -143,7 +167,7 @@ export function quotedText(html: string): string {
   const quotedHtml = h.slice(own.length);
   // Fil cité en texte brut, resté dans la partie « rédigée » (Outlook en mode texte).
   const t = htmlToText(own);
-  const m = t.search(QUOTE_TEXT_RE);
+  const m = indexCitation(t);
   const tail = m > 0 ? t.slice(m) : '';
   return `${tail}\n${htmlToText(quotedHtml)}`.trim();
 }
@@ -586,7 +610,8 @@ export function momentEnvoi(now: number, email: string): { fuseau: string; heure
 
 export function checkAvantEnvoi(input: SendCheckInput): SendCheckProblem[] {
   const html = input.html || (input.text ? input.text.replace(/\n/g, '<br>') : '');
-  const ownText = visibleText(ownPart(html));
+  // Tous les contrôles portent sur le texte RÉDIGÉ au-dessus du fil cité, signature exclue (08/10/2026).
+  const ownText = texteRedige(html);
   const threadText = quotedText(html);
   const destinataires = tousDestinataires(input);
   const estReponse = input.estReponse ?? (/^\s*(re|aw|sv|antw|r)\s*:/i.test(input.subject || '') || !!threadText);
@@ -621,4 +646,32 @@ export function smartAlertMessage(problems: SendCheckProblem[]): string {
   const lignes = problems.slice(0, 4).map(p => `• ${p.message}`);
   const txt = `ATLAS : à vérifier avant d'envoyer.\n${lignes.join('\n')}`;
   return txt.length > 480 ? `${txt.slice(0, 477)}…` : txt;
+}
+
+/** Cas CRITIQUES : l'envoi est retenu tant que ce n'est pas corrigé (fournisseur visible d'un client). */
+export const CODES_CRITIQUES: ReadonlySet<SendCheckProblem['code']> = new Set(['fournisseur_en_copie']);
+
+export interface DecisionEnvoi {
+  allowEvent: boolean;
+  /** Boîte Smart Alerts avec « Envoyer quand même » (Mailbox 1.14 : sendModeOverride PromptUser). */
+  promptUser: boolean;
+  /** Texte de la boîte (allowEvent false) ou de l'avertissement montré après coup (allowEvent true). */
+  message: string;
+}
+
+/**
+ * Décision Smart Alerts (08/10/2026). Le manifeste déclare SoftBlock : la boîte n'offre QUE « Ne pas
+ * envoyer » (la personne doit corriger puis renvoyer), ce qui empêchait d'envoyer sur un simple
+ * avertissement. Désormais :
+ *  - cas critique (fournisseur visible d'un client) : retenu (SoftBlock) ;
+ *  - autre problème, Mailbox 1.14 disponible (nouvel Outlook Mac, Windows, web) : retenu avec
+ *    « Envoyer quand même » (sendModeOverride PromptUser) ;
+ *  - autre problème sans 1.14 (Outlook classique ancien) : envoi AUTORISÉ, avertissement affiché à part.
+ */
+export function decisionEnvoi(problems: SendCheckProblem[], supporte114: boolean): DecisionEnvoi {
+  if (!problems.length) return { allowEvent: true, promptUser: false, message: '' };
+  const message = smartAlertMessage(problems);
+  if (problems.some(p => CODES_CRITIQUES.has(p.code))) return { allowEvent: false, promptUser: false, message };
+  if (supporte114) return { allowEvent: false, promptUser: true, message };
+  return { allowEvent: true, promptUser: false, message };
 }
