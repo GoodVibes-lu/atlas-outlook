@@ -111,6 +111,19 @@ function repondreSurElementCourant(messageId: string, html: string): boolean {
   }
 }
 
+/** Lien hébergé par Outlook (mail, brouillon, calendrier, compose…) : Outlook l'ouvrira devant, la fenêtre doit se fermer. */
+function estLienOutlook(url: string): boolean {
+  try { return /(^|\.)outlook\.(office|office365|live)\.com$/i.test(new URL(url).hostname); } catch { return false; }
+}
+
+/**
+ * Ferme la fenêtre du tableau juste après l'ouverture d'une fenêtre Outlook (sinon celle-ci reste
+ * derrière). Un court délai laisse partir l'accusé `messageChild` vers le dialogue.
+ */
+function fermerApres(d: Office.Dialog, fin: () => void): void {
+  setTimeout(() => { try { d.close(); } catch { /* déjà fermée */ } fin(); }, 120);
+}
+
 /** Ouvre, depuis la fenêtre principale, l'adresse demandée par le tableau de bord. */
 function ouvrirDepuisTableau(url: string): void {
   const id = idDuLienOutlook(url);
@@ -198,13 +211,19 @@ export function ouvrirTableauDialogue(opts: OuvrirTableauOptions = {}): void {
           .then(token => repondre({ atlas: MARQUE, type: 'jeton-reponse', id: m.id, token }))
           .catch(e => repondre({ atlas: MARQUE, type: 'jeton-reponse', id: m.id, erreur: humanError(e) }));
       } else if (m.type === 'repondre' && typeof m.messageId === 'string' && typeof m.html === 'string') {
-        repondre({ atlas: MARQUE, type: 'repondre-reponse', id: m.id, ok: repondreSurElementCourant(m.messageId, m.html) });
+        const ok = repondreSurElementCourant(m.messageId, m.html);
+        repondre({ atlas: MARQUE, type: 'repondre-reponse', id: m.id, ok });
+        // Le formulaire de réponse d'Outlook s'ouvre DERRIÈRE la fenêtre du tableau (Office la garde au
+        // premier plan) : la fenêtre se ferme juste après (la reprise la ramène là où elle était).
+        if (ok) fermerApres(d, fin);
       } else if (m.type === 'ouvrir' && typeof m.url === 'string') {
-        // Un mail ouvert dans Outlook s'affichait DERRIÈRE la fenêtre du tableau de bord (Office la garde
-        // au premier plan). Pour un mail, la fenêtre se ferme donc ; on la rouvre d'un clic (« Tableau de bord »).
-        const mail = !!idDuLienOutlook(m.url);
+        // Toute fenêtre d'Outlook ouverte depuis le tableau (mail, brouillon, réponse) s'affichait DERRIÈRE
+        // la fenêtre du tableau de bord. Pour un lien Outlook, la fenêtre se ferme donc (08/10/2026 :
+        // généralisé à tout lien Outlook, pas seulement un mail lisible) ; « Tableau de bord » la rouvre
+        // là où la personne était (reprise, 30 min).
+        const outlook = !!idDuLienOutlook(m.url) || estLienOutlook(m.url);
         ouvrirDepuisTableau(m.url);
-        if (mail) { try { d.close(); } catch { /* déjà fermée */ } fin(); }
+        if (outlook) fermerApres(d, fin);
       } else if (m.type === 'fermer') {
         try { d.close(); } catch { /* déjà fermée */ }
         fin();

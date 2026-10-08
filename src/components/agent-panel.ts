@@ -53,6 +53,7 @@ import {
 import { renderEquipe } from './agent-equipe';
 import { convertToRestId, getGraphToken } from '../api/graph';
 import { renderOffreRecue, renderClasserOutlook } from './agent-dossiers';
+import { fetchTraites } from '../api/tableau';
 import { renderPlusActions } from './agent-parite';
 import { renderSecurite } from './agent-securite';
 import { escapeHtml } from '../utils/html';
@@ -578,7 +579,17 @@ export class AgentPanel {
     const offre = this.$('agent-offre');
     if (offre && !this.mobile) renderOffreRecue(offre, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue, repondre: (html: string) => this.repondreHtml(html) });
     const classer = this.$('agent-classer');
-    if (classer) renderClasserOutlook(classer, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue });
+    if (classer) {
+      renderClasserOutlook(classer, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue });
+      // Traités à ranger (08/10/2026) : mail déjà répondu → la carte « Classer » passe en tête, suggestion mise en avant.
+      void fetchTraites(it.messageId).then(r => {
+        const t = r.traites?.[0];
+        if (!t || t.statut !== 'a_ranger' || this.destroyed || this.item !== it || !classer.isConnected) return;
+        const etat = this.$('agent-state');
+        if (etat?.parentElement) etat.insertAdjacentElement('afterend', classer);
+        renderClasserOutlook(classer, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue, repondu: t, ...(t.destination.projetId ? { projetId: t.destination.projetId, projetLibelle: t.destination.libelle } : {}) });
+      }).catch(() => { /* suggestion facultative */ });
+    }
     // 07/10/2026 (fin de la parité Inbox ATLAS) : reclasser, pièces → projet, RDV, tiers, prospection.
     const parite = this.$('agent-parite');
     if (parite) {

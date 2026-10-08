@@ -21,6 +21,7 @@ import {
 import { getAllProjets } from '../api/airtable';
 import { renderImportDossier, renderContactDevis } from './agent-parite';
 import { fetchProjetDuMail } from '../api/parite';
+import { annulerTraite, phraseSuggestion, rangerTraite, sourceSuggestion, type TraiteARanger } from '../api/tableau';
 import { escapeHtml } from '../utils/html';
 import { humanError } from '../api/net';
 import { icon } from '../ui/icons';
@@ -139,6 +140,11 @@ export interface CtxClasser extends CtxDossiers {
   /** Projet du mail s'il est déjà connu (sinon lu : fil lié dans ATLAS, ou appris par l'agent). */
   projetId?: string;
   projetLibelle?: string;
+  /**
+   * Traités à ranger (08/10/2026) : la personne a DÉJÀ répondu à ce mail ; la carte passe en tête avec
+   * la suggestion du worker mise en avant (« Répondu : le ranger dans … ? »), un clic range.
+   */
+  repondu?: TraiteARanger;
 }
 
 /** Message d'un refus du worker (texte du serveur s'il en donne un), sinon message lisible. */
@@ -149,10 +155,12 @@ function texteErreur(e: unknown): string {
 
 export function renderClasserOutlook(host: HTMLElement, ctx: CtxClasser): void {
   host.hidden = false;
+  const rep = ctx.repondu;
   host.innerHTML = `
-    <div class="agent-section-title">Classer ce mail</div>
-    <div class="agent-carte">
-      <div data-suggestion><div class="agent-loading"><div class="spinner"></div><span>Dossier du projet…</span></div></div>
+    <div class="agent-section-title">${rep ? 'Répondu : ranger ce mail' : 'Classer ce mail'}</div>
+    <div class="agent-carte${rep ? ' is-repondu' : ''}">
+      ${rep ? '<div data-repondu></div>' : ''}
+      <div data-suggestion${rep && rep.destination.type === 'projet' ? ' hidden' : ''}><div class="agent-loading"><div class="spinner"></div><span>Dossier du projet…</span></div></div>
       <label class="agent-muted" for="cl-q-${ctx.messageId.length}">Autre dossier</label>
       <input type="search" class="agent-input" id="cl-q-${ctx.messageId.length}" data-recherche autocomplete="off"
         placeholder="Tape un nom ou un n° de projet (ex. 871, DealsUp)" aria-label="Chercher un dossier Outlook">
@@ -186,6 +194,38 @@ export function renderClasserOutlook(host: HTMLElement, ctx: CtxClasser): void {
       res.innerHTML = `<p class="agent-error" role="alert">Classement impossible : ${escapeHtml(texteErreur(e))}</p>`;
     } finally { occupe = false; }
   };
+
+  // 0. Déjà répondu (traités à ranger) : la suggestion du worker d'abord, un clic range (statut tenu par le worker, annulable).
+  if (rep) {
+    const zone = host.querySelector<HTMLElement>('[data-repondu]')!;
+    const d = rep.destination;
+    const src = sourceSuggestion(d);
+    zone.innerHTML = `<div class="agent-carte-titre">${icon('check-circle', 14)} ${escapeHtml(phraseSuggestion(d))}</div>
+      ${src ? `<div class="agent-muted">${escapeHtml(src)}</div>` : '<div class="agent-muted">Aucun dossier proposé : choisis-en un ci-dessous.</div>'}
+      ${d.type !== 'aucun' && d.chemin ? '<button type="button" class="btn btn-primary btn-block agent-btn" data-ranger-repondu>Ranger</button>' : ''}`;
+    zone.querySelector<HTMLButtonElement>('[data-ranger-repondu]')?.addEventListener('click', async ev => {
+      if (occupe) return;
+      occupe = true;
+      const btn = ev.currentTarget as HTMLButtonElement;
+      btn.disabled = true; btn.textContent = 'Rangement…';
+      res.hidden = true;
+      try {
+        const r = await rangerTraite({ messageId: rep.messageId });
+        host.querySelector('.agent-carte')!.innerHTML = faitHtml({ chemin: r.dossier.chemin, cree: r.cree, actionId: r.actionId });
+        const b = host.querySelector<HTMLButtonElement>('[data-annuler-rangement]');
+        b?.addEventListener('click', async () => {
+          b.disabled = true;
+          try { await annulerTraite(rep.messageId); b.replaceWith(Object.assign(document.createElement('span'), { className: 'agent-muted', textContent: 'Annulé : mail remis à sa place' })); ctx.onInfo?.('Rangement annulé', 'success'); }
+          catch (e) { b.disabled = false; ctx.onInfo?.(`Annulation impossible : ${humanError(e)}`, 'error'); }
+        });
+        ctx.onInfo?.(`Rangé dans ${r.dossier.chemin}`, 'success');
+      } catch (e) {
+        btn.disabled = false; btn.textContent = 'Ranger';
+        res.hidden = false;
+        res.innerHTML = `<p class="agent-error" role="alert">Rangement impossible : ${escapeHtml(texteErreur(e))}</p>`;
+      } finally { occupe = false; }
+    });
+  }
 
   // 1. Dossier du projet
   const suggestion = async () => {

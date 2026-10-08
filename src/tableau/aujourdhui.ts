@@ -21,18 +21,22 @@ import { icon } from '../ui/icons';
 import { dureeHeures, prenomDe, quandLisible, retardEngagement } from './logique';
 import { confirmer, h, toast } from './ui';
 import { renderDetail, composer } from './detail';
+import { renderTraites } from './traites';
 
 const heure = (iso: string) => new Date(iso).toLocaleTimeString('fr-FR', { timeZone: 'Europe/Luxembourg', hour: '2-digit', minute: '2-digit' });
 const jourLisible = (ymd: string) => new Date(`${ymd}T12:00:00Z`).toLocaleDateString('fr-FR', { timeZone: 'Europe/Luxembourg', weekday: 'long', day: 'numeric', month: 'long' });
 
 export function renderAujourdhui(host: HTMLElement, ctx: Ctx): void {
   host.innerHTML = `
+    <div class="tb-panel is-raised tb-traites" id="tb-traites" hidden></div>
     <div class="tb-panel is-raised" id="tb-rdv"><div class="tb-h">Prochains rendez-vous</div><div class="tb-skel"></div></div>
     <div class="tb-panel" id="tb-eng"><div class="tb-h">Engagements</div><div class="tb-skel"></div></div>
     <div class="tb-panel" id="tb-react"><div class="tb-h">Réactivité aux clients</div><div class="tb-skel"></div></div>
     <div class="tb-panel" id="tb-filtrer"><div class="tb-h">Nouveaux expéditeurs à filtrer</div><div id="tb-filtrer-liste"></div></div>
     <div class="tb-panel"><div class="tb-h">Ce que l'agent a fait</div><div id="tb-journal"></div></div>
     <div class="tb-panel"><div class="tb-tabs" role="tablist"><button type="button" role="tab" data-outil="question" aria-selected="true">Question à ma boîte</button><button type="button" role="tab" data-outil="rattrapage" aria-selected="false">Rattrapage</button></div><div id="tb-outil"></div></div>`;
+  // Traités à ranger (08/10/2026) : mails répondus, dossier proposé, un clic (données du tableau, relues à chaque rafraîchissement).
+  renderTraites(host.querySelector('#tb-traites')!, ctx.etat.t?.traites || [], ctx.etat.t?.rangesSeuls || [], { openLink: ctx.openLink, onChange: () => void ctx.rafraichir(true) });
   void rdv(host.querySelector('#tb-rdv')!);
   void engagements(host.querySelector('#tb-eng')!, ctx);
   void reactivite(host.querySelector('#tb-react')!, ctx);

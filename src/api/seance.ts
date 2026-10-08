@@ -7,6 +7,7 @@
  * Types : miroir de src/utils/inbox-seance.ts (le complément n'importe rien hors de son dossier).
  */
 import { workerRequest } from './worker';
+import type { TraiteARanger } from './tableau';
 
 export type SeanceActionType = 'repondre' | 'classer-projet' | 'metier' | 'confier' | 'plus-tard' | 'archiver' | 'ouvrir';
 
@@ -108,6 +109,8 @@ export interface Seance {
   promesses?: SeancePromesse[];
   offresConsultees?: SeanceOffreConsultee[];
   crsASuivre?: SeanceCrASuivre[];
+  /** Traités à ranger (08/10/2026) : mails répondus, dossier proposé, en tête de séance. */
+  traites?: TraiteARanger[];
 }
 
 export const fetchSeance = (frais = false) =>

@@ -59,6 +59,50 @@ export interface Tableau {
   moi: string;
   /** Boîtes dont la boîte de réception n'a pas pu être relue (Graph) : rien n'y est masqué. */
   inboxNonVerifiee?: string[];
+  /** Traités à ranger (08/10/2026) : mails répondus encore dans la boîte, dossier proposé (boîte personnelle). */
+  traites?: TraiteARanger[];
+  /** Rangés seuls par l'agent après la réponse (3 jours), annulables. */
+  rangesSeuls?: TraiteARanger[];
+}
+
+// ── Traités à ranger (08/10/2026) : miroir de src/utils/inbox-traites-a-ranger.ts ──
+
+export interface TraiteDestination {
+  type: 'projet' | 'expediteur' | 'regle' | 'aucun';
+  dossierId?: string;
+  chemin?: string;
+  aCreer?: boolean;
+  projetId?: string;
+  libelle?: string;
+}
+
+export interface TraiteARanger {
+  mailbox: string;
+  messageId: string;
+  graphId: string;
+  conversationId: string;
+  subject: string;
+  from: { email: string; name: string };
+  receivedAt: string;
+  webLink?: string;
+  repondu: { at: string; messageId: string };
+  destination: TraiteDestination;
+  statut: 'a_ranger' | 'range' | 'ignore';
+  calculeLe: string;
+  actionId?: string;
+  rangeLe?: string;
+  auto?: boolean;
+}
+
+/** Phrase de la suggestion (même texte que le worker). */
+export function phraseSuggestion(d: TraiteDestination): string {
+  if (d.type === 'aucun' || !d.chemin) return 'Répondu : le ranger dans un dossier ?';
+  return `Répondu : le ranger dans « ${d.chemin} » ?${d.aCreer ? ' (dossier à créer)' : ''}`;
+}
+export function sourceSuggestion(d: TraiteDestination): string {
+  return d.type === 'projet' ? (d.aCreer ? 'dossier du projet, à créer' : 'dossier du projet')
+    : d.type === 'expediteur' ? 'dossier habituel de cet expéditeur'
+    : d.type === 'regle' ? 'ta règle' : '';
 }
 
 export interface ReponseRedigee {
@@ -130,3 +174,15 @@ export const redigerEngagement = (recordId: string) => ecriture<ReponseRedigee>(
 
 export const fetchRdv = () => lecture<{ rdv: RdvPrep[]; jours: { aujourdhui: string; lendemain: string } }>('tableau/rdv');
 export const fetchReactivite = () => lecture<ReactiviteVue>('tableau/reactivite');
+
+// ── Traités à ranger (08/10/2026) ──
+
+/** Mails répondus à ranger (sa boîte) ; `messageId` : ce mail seulement (panneau « Ce mail »). */
+export const fetchTraites = (messageId?: string) =>
+  lecture<{ mailbox: string; traites: TraiteARanger[]; rangesSeuls: TraiteARanger[] }>(`tableau/traites${messageId ? `?messageId=${encodeURIComponent(messageId)}` : ''}`);
+/** « Ranger » : dossier proposé par défaut, ou un autre dossier (existant, ou chemin à créer). */
+export const rangerTraite = (p: { messageId: string; dossierId?: string; projetId?: string; creer?: { chemin: string; projetId?: string } }) =>
+  ecriture<{ ok: boolean; messageId: string; dossier: { id: string; chemin: string }; cree: boolean; actionId?: string }>('POST', 'tableau/traites/ranger', p);
+export const ignorerTraite = (messageId: string) => ecriture<{ ok: boolean }>('POST', 'tableau/traites/ignorer', { messageId });
+/** « Annuler » : le mail revient dans la boîte de réception et redevient à ranger. */
+export const annulerTraite = (messageId: string) => ecriture<{ ok: boolean }>('POST', 'tableau/traites/annuler', { messageId });

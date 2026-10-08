@@ -30,6 +30,7 @@ import { renderDetail, renderDigest } from './detail';
 import { renderAujourdhui } from './aujourdhui';
 import { ouvrirPalette, type ActionPalette } from './palette';
 import { ouvrirSeance } from './seance';
+import { effacerReprise, lireReprise, messageIdDeCle, sauverReprise, selectionReprise, suivantsDe, type Reprise, type RepriseSeance } from './reprise';
 import { fetchStatsSeance, fetchStatistiques, type SeanceSemaine, type StatistiquesBoite } from '../api/seance';
 
 export type Section = 'priorites' | 'personnes' | 'clients' | 'mandats' | 'enAttente' | 'deCote' | 'factures' | 'newsletters' | 'notifications';
@@ -255,7 +256,15 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   const tactile = ecranTactile();
   let boiteMemo = 'toutes';
   try { boiteMemo = localStorage.getItem('atlas.tdb.boite') || 'toutes'; } catch { /* stockage indisponible */ }
-  const etat: Etat = { boite: boiteMemo, section: 'priorites', t: null, sel: null, vus: [], derniereSync: 0, enLigne: true, lot: [], ancre: null };
+  // Reprise (08/10/2026) : fenêtre rouverte dans les 30 minutes → même boîte, même section, même mail ou séance.
+  let repriseAttendue: Reprise | null = lireReprise();
+  const sectionReprise = repriseAttendue && SECTIONS.some(x => x.id === repriseAttendue!.section) ? repriseAttendue.section as Section : 'priorites';
+  const etat: Etat = { boite: repriseAttendue?.boite || boiteMemo, section: sectionReprise, t: null, sel: null, vus: [], derniereSync: 0, enLigne: true, lot: [], ancre: null };
+  let seanceCourante: RepriseSeance | null = null;
+  /** Note où la personne en est (section, mail choisi et ses suivants, séance), pour la reprise. */
+  function sauver(): void {
+    sauverReprise({ boite: etat.boite, section: etat.section, sel: etat.sel, suivants: suivantsDe(etat.sel, lignesDe(etat.t, etat.section).map(cleDe)), seance: seanceCourante });
+  }
   let ctx: Ctx;
   const actions = creerActions(() => ctx);
   ctx = { etat, openLink: opts.openLink, rafraichir, choisir, actions };
@@ -344,7 +353,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       ${statistiquesHtml()}
       <div class="tb-panel tb-clavier"><div class="tb-h">Glisser un mail vers</div><p class="tb-note">« Je prends », une date ou un projet : le dock apparaît en bas pendant le glisser.</p></div>`;
     host.querySelectorAll<HTMLButtonElement>('[data-s]').forEach(b => b.addEventListener('click', () => allerSection(b.dataset.s as Section)));
-    host.querySelector<HTMLButtonElement>('[data-seance]')?.addEventListener('click', seance);
+    host.querySelector<HTMLButtonElement>('[data-seance]')?.addEventListener('click', () => seance());
   }
 
   // Séance de tri (07/10/2026) : statistiques de la semaine (mails restants à la clôture, temps passé).
@@ -387,8 +396,14 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     try { statsSeance = await fetchStatsSeance(); renderLeft(); } catch { /* facultatif (boîte non suivie) */ }
     try { statistiques = await fetchStatistiques(); renderLeft(); } catch { /* facultatif */ }
   }
-  function seance(): void {
-    ouvrirSeance({ openLink: opts.openLink, repondreDansOutlook: opts.repondreDansOutlook, onFerme: () => { void rafraichir(true); void chargerStatsSeance(); } });
+  function seance(reprise: RepriseSeance | null = null): void {
+    seanceCourante = reprise || { messageId: null, suivants: [] };
+    sauver();
+    ouvrirSeance({
+      openLink: opts.openLink, repondreDansOutlook: opts.repondreDansOutlook, reprise,
+      onPosition: p => { seanceCourante = p; sauver(); },
+      onFerme: () => { seanceCourante = null; sauver(); void rafraichir(true); void chargerStatsSeance(); },
+    });
   }
 
   function renderListe(nouv: string[] = []): void {
@@ -518,6 +533,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     etat.sel = cle;
     marquerSelection();
     renderDroite();
+    sauver();
     if (cle) $('tb-list').querySelector<HTMLElement>(`[data-cle="${CSS.escape(cle)}"]`)?.scrollIntoView({ block: 'nearest', behavior: mouvementReduit() ? 'auto' : 'smooth' });
   }
 
@@ -525,6 +541,30 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
     etat.section = s;
     etat.sel = null;
     renderStats(); renderLeft(); renderListe(); renderDroite();
+    sauver();
+  }
+
+  /**
+   * Reprise (08/10/2026) : après le premier tableau reçu, revenir là où la personne était : séance à la
+   * même carte ; sinon le même mail, ou le suivant s'il a été traité ; le mail auquel elle vient de
+   * répondre est montré dans « Traités à ranger » (« Aujourd'hui »).
+   */
+  function appliquerReprise(t: Tableau): void {
+    const r = repriseAttendue;
+    if (!r) return;
+    repriseAttendue = null;
+    if (!r.seance && !r.sel && r.section === 'priorites') return; // rien à reprendre : pas de toast
+    if (r.seance) { seance(r.seance); toast('Reprise là où tu étais', 'info'); return; }
+    const mid = messageIdDeCle(r.sel);
+    const traite = !!mid && (t.traites || []).some(x => x.messageId === mid);
+    if (traite) {
+      choisir(null);
+      const carte = document.querySelector<HTMLElement>(`#tb-traites [data-id="${CSS.escape(mid)}"]`);
+      if (carte) { carte.classList.add('is-nouveau'); carte.scrollIntoView({ block: 'center', behavior: mouvementReduit() ? 'auto' : 'smooth' }); }
+    } else {
+      choisir(selectionReprise(r.sel, r.suivants, lignesDe(t, etat.section).map(cleDe)));
+    }
+    toast('Reprise là où tu étais', 'info');
   }
 
   // ── Glisser-déposer, aperçu au survol ──
@@ -696,7 +736,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   }
 
   $('tb-cmdk').addEventListener('click', palette);
-  $('tb-seance-btn').addEventListener('click', seance);
+  $('tb-seance-btn').addEventListener('click', () => seance());
   // Écran étroit (téléphone) : la colonne de droite devient un volet ; « Aujourd'hui » l'ouvre, « Retour » le ferme.
   $('tb-jour').addEventListener('click', () => {
     if (etat.sel) choisir(null);
@@ -754,6 +794,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
       // « Aujourd'hui » relu seulement si la personne n'y écrit pas (question à sa boîte, etc.).
       else if (!etat.sel && !$('tb-right').contains(document.activeElement)) renderDroite();
       if (nouv.length && avant.length) toast(`${nouv.length} nouveau${nouv.length > 1 ? 'x' : ''} mail${nouv.length > 1 ? 's' : ''}`, 'info');
+      if (repriseAttendue) appliquerReprise(t);
       majLive('ok');
     } catch (e) {
       etat.enLigne = false;
@@ -788,7 +829,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   // Lien de la cloche de fin de journée (`?seance=1`, gardé pendant la connexion Microsoft) : séance ouverte d'emblée.
   let lienSeance = new URLSearchParams(window.location.search).get('seance') === '1';
   try { lienSeance = lienSeance || sessionStorage.getItem('atlas_tdb_seance') === '1'; sessionStorage.removeItem('atlas_tdb_seance'); } catch { /* stockage indisponible */ }
-  if (lienSeance) seance();
+  if (lienSeance) { repriseAttendue = null; effacerReprise(); seance(); }
   window.setInterval(() => { if (document.visibilityState === 'visible') void rafraichir(false); }, POLL_MS);
   window.setInterval(() => { if (etat.enLigne && etat.derniereSync) majLive('ok'); }, 15_000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - etat.derniereSync > POLL_MS) void rafraichir(false); });

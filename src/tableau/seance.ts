@@ -29,6 +29,9 @@ import {
   type ConditionRetour, type Seance, type SeanceAction, type SeanceCarte, type SeanceDesabonnement, type SeanceGroupe,
   type SeancePropositionAutonomie, type SeanceSemaine, type SeanceSollicitations, type SeancePromesse, type SeanceOffreConsultee, type SeanceCrASuivre,
 } from '../api/seance';
+import { phraseSuggestion, sourceSuggestion, type TraiteARanger } from '../api/tableau';
+import { choisirAutreDossier, rangerTraiteMail } from './traites';
+import { ignorerTraite, annulerTraite } from '../api/tableau';
 import { annulerAction, executerAction, fetchDossierProjet, mettrePlusTard, rangerDansDossier, retirerPlusTard } from '../api/agent';
 import { deposerBrouillon, redigerArgo } from '../api/tableau';
 import { callAtlasWorker } from '../api/worker';
@@ -38,6 +41,7 @@ import { copierTexte } from '../components/agent-outils';
 import { icon } from '../ui/icons';
 import { ilYA, prenomDe } from './logique';
 import { h, toast, ouvrirCouche, animerChiffre } from './ui';
+import { indexReprise, type RepriseSeance } from './reprise';
 
 export interface OptionsSeance {
   openLink: (url: string) => void;
@@ -45,6 +49,10 @@ export interface OptionsSeance {
   repondreDansOutlook?: (messageId: string, html: string) => Promise<boolean>;
   /** Appelé à la fermeture (le tableau se relit). */
   onFerme?: () => void;
+  /** Reprise (08/10/2026) : carte où la personne en était (ou la suivante encore présente). */
+  reprise?: RepriseSeance | null;
+  /** À chaque carte affichée : position notée pour la reprise. */
+  onPosition?: (p: RepriseSeance) => void;
 }
 
 /** Cartes de l'Assistant inbox (07/10/2026) : regroupements avant les mails ; désabonnements, sollicitations et autonomie après. */
@@ -55,7 +63,9 @@ type Special =
   | { kind: 'autonomie'; a: SeancePropositionAutonomie }
   | { kind: 'promesse'; p: SeancePromesse }
   | { kind: 'offre'; o: SeanceOffreConsultee }
-  | { kind: 'cr'; r: SeanceCrASuivre };
+  | { kind: 'cr'; r: SeanceCrASuivre }
+  /** Traités à ranger (08/10/2026) : mail répondu, dossier proposé. */
+  | { kind: 'traite'; t: TraiteARanger };
 
 interface Defaire {
   carte?: SeanceCarte; index: number; recommandee: string | null; faite: string; annuler?: () => Promise<void>; sortie: boolean | number;
@@ -255,6 +265,17 @@ export function ouvrirSeance(opts: OptionsSeance): void {
           { libelle: 'Pas de mail pour cette réunion', faire: async () => ({ message: 'Noté pour cette séance' }) },
         ];
       }
+      case 'traite': {
+        const t = sp.t;
+        const d = t.destination;
+        const fait = (r: { chemin: string; cree: boolean; annuler: () => Promise<void> }) => ({ message: `${r.cree ? 'Dossier créé, mail rangé' : 'Rangé'} dans ${r.chemin}`, sortie: 1, annuler: async () => { await r.annuler(); } });
+        return [
+          ...(d.type !== 'aucun' && d.chemin ? [{ libelle: 'Ranger', detail: `Dans ${d.chemin}${d.aCreer ? ' (dossier créé)' : ''}`, faire: async () => fait(await rangerTraiteMail(t)) }] : []),
+          { libelle: 'Autre dossier…', detail: 'Recherche dans toute la boîte', faire: async () => { const c = await choisirAutreDossier(t.mailbox); return c ? fait(await rangerTraiteMail(t, c)) : null; } },
+          { libelle: 'Laisser dans la boîte', detail: 'Plus proposé', faire: async () => { await ignorerTraite(t.messageId); return { message: 'Laissé dans la boîte', annuler: async () => { await annulerTraite(t.messageId); } }; } },
+          ...(t.webLink ? [{ libelle: 'Ouvrir le mail', faire: async () => { opts.openLink(t.webLink!); return null; } }] : []),
+        ];
+      }
       case 'autonomie': {
         const a = sp.a;
         return [
@@ -284,6 +305,11 @@ export function ouvrirSeance(opts: OptionsSeance): void {
     } else if (sp.kind === 'offre') {
       titre = `Offre ${sp.o.offre} ${sp.o.libelle}, pas de réponse`;
       corps = `<p class="tb-seance-resume">Envoyée à ${h(sp.o.a)} ${h(ilYA(sp.o.sentAt, Date.now()))}${sp.o.montant ? ` (${h(sp.o.montant)})` : ''}. Le lien de l'offre a été ouvert (clic sur le lien du portail, sans pixel de suivi) et rien n'est revenu depuis. ARGO prépare une relance courte, sans jamais dire au client qu'il a ouvert l'offre.</p>`;
+    } else if (sp.kind === 'traite') {
+      const t = sp.t;
+      titre = phraseSuggestion(t.destination);
+      const src = sourceSuggestion(t.destination);
+      corps = `<p class="tb-seance-resume">Tu as répondu ${h(ilYA(t.repondu.at, Date.now()))} à <b>${h(t.from?.name || t.from?.email)}</b> : « ${h(t.subject || '(sans objet)')} ». Un clic range ce mail${src ? ` (${h(src)})` : ''} ; ⌘Z le ramène.</p>`;
     } else if (sp.kind === 'cr') {
       titre = `Compte rendu à envoyer : ${sp.r.titre}`;
       corps = `<p class="tb-seance-resume">Validé ${h(ilYA(sp.r.valideLe, Date.now()))}, pas encore partagé avec les participants. Le module Réunion compose le mail de suivi (relu avant envoi).</p>`;
@@ -335,6 +361,7 @@ export function ouvrirSeance(opts: OptionsSeance): void {
 
   function renderCarte(): void {
     majCompteur();
+    opts.onPosition?.({ messageId: cartes[i]?.messageId || null, suivants: cartes.slice(i + 1, i + 7).map(c => c.messageId) });
     const main = $('sc-main');
     const sp = specialCourant();
     if (sp) { renderSpecial(sp); return; }
@@ -699,6 +726,7 @@ export function ouvrirSeance(opts: OptionsSeance): void {
       s = await fetchSeance(frais);
       cartes = s.cartes || [];
       avant = [
+        ...(s.traites || []).map(t => ({ kind: 'traite' as const, t })),
         ...(s.groupes || []).map(g => ({ kind: 'groupe' as const, g })),
         ...(s.promesses || []).map(p => ({ kind: 'promesse' as const, p })),
         ...(s.offresConsultees || []).map(o => ({ kind: 'offre' as const, o })),
@@ -709,7 +737,8 @@ export function ouvrirSeance(opts: OptionsSeance): void {
         ...(s.sollicitations?.mails.length ? [{ kind: 'sollicitations' as const, s: s.sollicitations }] : []),
         ...(s.autonomie || []).map(a => ({ kind: 'autonomie' as const, a })),
       ];
-      i = 0;
+      i = indexReprise(opts.reprise, cartes.map(c => c.messageId));
+      opts.reprise = null;
       $('sc-pied').innerHTML = renderStats(s.stats || []);
       const conc = s.concentration;
       if (conc?.actif && conc.retenus) $('sc-pied').insertAdjacentHTML('beforeend', `<span>Concentration : ${conc.retenus} mail${conc.retenus > 1 ? 's' : ''} non urgent${conc.retenus > 1 ? 's' : ''} attend${conc.retenus > 1 ? 'ent' : ''} ${h(conc.libelle || 'le prochain créneau')}</span>`);
