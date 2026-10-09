@@ -13,6 +13,7 @@
 import { workerRequest } from './worker';
 import type { ReponseSecurite } from './securite';
 import type { TraiteARanger } from './tableau';
+import type { VuePrete } from './projet-mail';
 
 export interface FicheCorrespondant {
   email: string;
@@ -33,6 +34,10 @@ export interface VueMail {
   projet: { id: string; libelle: string; source?: 'lie' | 'appris' | 'agent' } | null;
   correspondant: FicheCorrespondant | null;
   traite: TraiteARanger | null;
+  /** Vue préparée par l'agent à l'arrivée du mail (lot 2, 10/10/2026) : carte « Prêt ». */
+  pret?: VuePrete | null;
+  /** Dossier Outlook du projet déjà connu (plus d'appel séparé). */
+  dossier?: { existant: { id: string; chemin: string } | null; propose: string | null } | null;
   aCharger: string[];
   ms?: number;
 }
@@ -49,6 +54,8 @@ export async function fetchVueMail(p: { messageId: string; conversationId?: stri
     projet: r?.projet || null,
     correspondant: r?.correspondant || null,
     traite: r?.traite || null,
+    pret: r?.pret && typeof r.pret === 'object' ? r.pret : null,
+    dossier: r?.dossier && typeof r.dossier === 'object' ? r.dossier : null,
     aCharger: Array.isArray(r?.aCharger) ? r.aCharger.map(String) : [],
     ...(typeof r?.ms === 'number' ? { ms: r.ms } : {}),
   };

@@ -142,7 +142,7 @@ function renderApp(): void {
     <header class="header">
       <span class="brand" aria-label="ATLAS, GOOD VIBES"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">ATLAS</span></span>
       <span class="header-context">${isCompose ? 'Rédaction' : 'Lecture'}</span>
-      ${mobile ? '' : `<button type="button" class="header-tdb" id="btn-tableau" title="Ouvrir le tableau de bord ATLAS dans une grande fenêtre">${icon('inbox', 16)}<span>Tableau de bord</span></button>`}
+      ${mobile ? '' : `<button type="button" class="header-tdb" id="btn-tableau" title="Afficher le tableau de bord ATLAS dans ce volet">${icon('inbox', 16)}<span>Tableau de bord</span></button>`}
       <button type="button" class="icon-btn" id="btn-settings" data-tab="settings" aria-label="Réglages" title="Réglages">${icon('settings', 18)}</button>
     </header>
     ${isCompose ? '' : '<div id="journee-host" hidden></div>'}
@@ -157,13 +157,9 @@ function renderApp(): void {
     <main id="panel-content" class="content" role="tabpanel" tabindex="-1"></main>
   `;
 
-  // Tableau de bord en grande fenêtre (07/10/2026) : seule voie sur Outlook Mac (pas d'application
-  // dans la barre de gauche). La fenêtre vit tant que ce panneau reste ouvert.
-  app.querySelector('#btn-tableau')?.addEventListener('click', () => {
-    void import('./api/dialogue-tableau')
-      .then(m => m.ouvrirTableauDialogue({ onErreur: (message) => showToast(message, 'error') }))
-      .catch(e => showToast(humanError(e), 'error'));
-  });
+  // Tableau de bord DANS ce volet (10/10/2026) : la fenêtre de dialogue restait au-dessus de toutes
+  // les applications sur Outlook Mac. Le volet bascule en entier, « Ce mail » le ramène.
+  app.querySelector('#btn-tableau')?.addEventListener('click', () => ouvrirTableau());
 
   app.querySelector('#btn-settings')?.addEventListener('click', () => {
     switchTab(currentTab === 'settings' ? (previousTab || defaultTab) : 'settings');
@@ -278,6 +274,29 @@ async function chargerPanneau(tabId: string, content: HTMLElement, userName: str
   return null;
 }
 
+// ── Mode « Tableau de bord » du volet ──
+
+/** Vrai tant que le volet montre le tableau de bord (le mode « Ce mail » est caché). */
+let enTableau = false;
+/** Le mail a changé pendant que le tableau était affiché : « Ce mail » se redessine au retour. */
+let mailChange = false;
+
+function ouvrirTableau(seance = false): void {
+  enTableau = true;
+  void import('./tableau-volet')
+    .then(m => m.afficherTableauVolet({ onRetour: revenirAuMail, onInfo: showToast, seance }))
+    .catch(e => { enTableau = false; showToast(humanError(e), 'error'); });
+}
+
+function revenirAuMail(): void {
+  enTableau = false;
+  void import('./tableau-volet').then(m => m.masquerTableauVolet());
+  if (mailChange) { mailChange = false; currentTab = ''; renderApp(); }
+}
+
+// Bouton « Séance de tri » du bandeau « Ma journée » (components/journee-banner.ts).
+window.addEventListener('atlas:tableau', (e) => ouvrirTableau(!!(e as CustomEvent).detail?.seance));
+
 // ── Office.js Initialization ──
 
 Office.onReady(async (info) => {
@@ -290,6 +309,8 @@ Office.onReady(async (info) => {
     prechaufferConnexion();
     await initRoamingStorage();
     renderApp();
+    // Commande « Tableau de bord » du ruban : volet ouvert directement sur le tableau.
+    if (getUrlParams().tab === 'tableau' && !isMobile()) ouvrirTableau();
 
     // Quand le task-pane est ÉPINGLÉ par l'utilisateur (icône 📌 en haut),
     // il reste ouvert pendant qu'il change de mail. Sans handler, le contenu
@@ -299,7 +320,8 @@ Office.onReady(async (info) => {
       Office.context.mailbox.addHandlerAsync(
         Office.EventType.ItemChanged,
         () => {
-          console.log('[ATLAS] ItemChanged → re-render');
+          // Tableau affiché : il reste tel quel (pas de rechargement), « Ce mail » attend le retour.
+          if (enTableau) { mailChange = true; return; }
           currentTab = '';
           renderApp();
         },

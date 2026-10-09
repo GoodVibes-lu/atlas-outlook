@@ -92,8 +92,8 @@ function dessiner(host: HTMLElement, j: AgentJournee, opts: Pick<MailListOptions
   `;
   const list = host.querySelector<HTMLElement>('#journee-list')!;
   host.querySelector('#journee-seance')?.addEventListener('click', () => {
-    // Fenêtre du tableau de bord chargée à la demande (pas au démarrage du volet).
-    void import('../api/dialogue-tableau').then(m => m.ouvrirTableauDialogue({ seance: true, onErreur: (message) => opts.onInfo?.(message, 'error') }));
+    // Tableau de bord dans ce volet, séance ouverte (src/taskpane.ts › ouvrirTableau).
+    window.dispatchEvent(new CustomEvent('atlas:tableau', { detail: { seance: true } }));
   });
   let ouverte: AgentListePile | null = null;
   host.querySelectorAll<HTMLButtonElement>('button[data-pile]').forEach(btn => {

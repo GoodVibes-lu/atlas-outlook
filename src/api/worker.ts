@@ -700,7 +700,7 @@ const RETRY_DELAYS = [3000, 8000];
  * (jeton renouvelé) et, pour les lectures, sur une coupure réseau.
  */
 export async function workerRequest<T = Record<string, unknown>>(
-  method: 'GET' | 'POST' | 'DELETE', path: string, payload?: unknown, opts: WorkerRequestOptions = {},
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE', path: string, payload?: unknown, opts: WorkerRequestOptions = {},
 ): Promise<T> {
   const url = `${WORKER_BASE}/api/plugin/${path.replace(/^\//, '')}`;
   const label = path.split('?')[0];

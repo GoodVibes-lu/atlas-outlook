@@ -18,6 +18,7 @@ import { callAtlasWorker, resetWorkerToken } from '../api/worker';
 import { icon } from '../ui/icons';
 import { inlineLoadingHtml } from '../ui/states';
 import { monterReglagesAssistant } from './assistant-inbox-reglages';
+import { monterAutonomie } from './carte-pret';
 
 /** Version affichée (manifeste 1.4.0 : menu « Tableau de bord », 07/10/2026). */
 const ADDIN_VERSION = '1.4.0 · tableau de bord en fenêtre, 07/10/2026';
@@ -97,6 +98,7 @@ export class SettingsPanel {
 
         <section class="section" aria-labelledby="set-assistant">
           <h2 class="section-heading" id="set-assistant">Assistant inbox</h2>
+          <div id="autonomie-reglages" class="tool-row-body"></div>
           <div id="assistant-inbox-reglages"></div>
         </section>
 
@@ -125,6 +127,8 @@ export class SettingsPanel {
     document.getElementById('save-settings-btn')?.addEventListener('click', () => this.saveSettings());
     const assistant = document.getElementById('assistant-inbox-reglages');
     if (assistant) monterReglagesAssistant(assistant);
+    const autonomie = document.getElementById('autonomie-reglages');
+    if (autonomie) monterAutonomie(autonomie, showToast);
 
     document.getElementById('create-cats-btn')?.addEventListener('click', async () => {
       const btn = document.getElementById('create-cats-btn') as HTMLButtonElement;

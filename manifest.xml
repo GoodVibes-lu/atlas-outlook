@@ -30,7 +30,7 @@
            xsi:type="MailApp">
 
   <Id>4f0d857e-bcc2-4f63-bc08-322e21ec2acc</Id>
-  <Version>1.5.0</Version>
+  <Version>1.5.1</Version>
   <ProviderName>GOOD VIBES</ProviderName>
   <DefaultLocale>fr-FR</DefaultLocale>
   <DisplayName DefaultValue="ATLAS" />
@@ -122,9 +122,9 @@
                     </Icon>
                     <Items>
 
-                      <!-- 0. Tableau de bord en grande fenêtre (07/10/2026) : Outlook Mac n'affiche pas
-                           l'application de la barre de gauche (teams-app). Fenêtre de dialogue Office
-                           ouverte par commands.ts (atlasTableauCommand, src/api/dialogue-tableau.ts). -->
+                      <!-- 0. Tableau de bord DANS LE VOLET (10/10/2026) : la fenêtre de dialogue Office restait
+                           au-dessus de toutes les applications sur Outlook Mac. Volet épinglable
+                           ouvert sur le tableau (?tab=tableau, src/tableau-volet.ts). -->
                       <Item id="atlasMenuTableau">
                         <Label resid="tableauBtnLabel" />
                         <Supertip>
@@ -136,8 +136,9 @@
                           <bt:Image size="32" resid="icon32" />
                           <bt:Image size="80" resid="icon80" />
                         </Icon>
-                        <Action xsi:type="ExecuteFunction">
-                          <FunctionName>atlasTableauCommand</FunctionName>
+                        <Action xsi:type="ShowTaskpane">
+                          <SourceLocation resid="taskpaneTableauUrl" />
+                          <SupportsPinning>true</SupportsPinning>
                         </Action>
                       </Item>
 
@@ -411,6 +412,7 @@
           <bt:Url id="ctxLinkUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=link" />
           <bt:Url id="ctxInfoUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=info" />
           <bt:Url id="ctxCreateUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=create" />
+          <bt:Url id="taskpaneTableauUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=tableau" />
           <bt:Url id="ctxReunionUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/index.html?mode=read&amp;tab=reunion" />
           <bt:Url id="commandsFileUrl" DefaultValue="https://goodvibes-lu.github.io/atlas-outlook/commands.html" />
           <!-- Smart Alerts, Outlook classique Windows : fichier JS seul produit au build (vite.config.ts). -->
@@ -446,7 +448,7 @@
           <bt:String id="doneBtnDesc" DefaultValue="Marquer ce mail comme traité (tag vert ATLAS apparait dans l'inbox)" />
           <bt:String id="snoozeBtnDesc" DefaultValue="Reporter ce mail à demain 8h (tag bleu ATLAS apparait dans l'inbox)" />
           <bt:String id="archiveBtnDesc" DefaultValue="Archiver et ranger automatiquement ce mail dans son dossier habituel" />
-          <bt:String id="tableauBtnDesc" DefaultValue="Ouvrir le tableau de bord ATLAS dans une grande fenêtre : boîte triée, priorités ARGO, équipe, rendez-vous et engagements" />
+          <bt:String id="tableauBtnDesc" DefaultValue="Afficher le tableau de bord ATLAS dans le volet : boîte triée, priorités ARGO, équipe, rendez-vous et engagements" />
           <bt:String id="reanalyzeBtnDesc" DefaultValue="Forcer une nouvelle analyse Claude (corrige une mauvaise classification)" />
         </bt:LongStrings>
       </Resources>

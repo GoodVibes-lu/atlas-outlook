@@ -1,30 +1,19 @@
 /**
- * dialogue-tableau.ts : tableau de bord ATLAS dans une GRANDE FENÊTRE de dialogue Office (07/10/2026).
+ * dialogue-tableau.ts : liaison du tableau de bord ATLAS avec Outlook.
  *
- * Pourquoi : le nouvel Outlook pour Mac n'affiche pas les applications Microsoft 365 / Teams dans la
- * barre de gauche (onglet personnel de teams-app/manifest.json). Pour avoir le tableau de bord DANS
- * Outlook sur Mac, le complément l'ouvre avec `Office.context.ui.displayDialogAsync` (fenêtre de
- * 95 % × 90 % de l'écran), depuis le menu ATLAS du ruban (commande `atlasTableauCommand`,
- * src/commands.ts) ou depuis le bouton en tête du panneau (src/taskpane.ts). Windows et le web
- * gardent aussi l'onglet de la barre de gauche (même page, hôte TeamsJS).
- *
- * Deux côtés, un seul protocole (messages JSON marqués `atlas: 'tableau'`) :
- *   - PAGE PARENTE (panneau ou fichier de commandes, Office.js complet) : `ouvrirTableauDialogue`.
- *     Elle fournit le jeton Microsoft au dialogue (sa propre connexion, `getWorkerToken`) et ouvre
- *     les mails demandés par le tableau de bord (`displayMessageForm`, le dialogue ne pouvant pas
- *     piloter la fenêtre principale d'Outlook).
- *   - DIALOGUE (tableau-de-bord.html?hote=office) : `brancherSurParent`.
- *     Demande le jeton par `messageParent`, le reçoit par `messageChild` (DialogApi 1.2) ; sans
- *     réponse, la page passe à sa propre connexion Microsoft (redirection MSAL, worker.ts).
- * Aucun secret dans la page : le jeton est celui de la personne connectée, de courte durée.
+ * Depuis le 10/10/2026, le tableau de bord s'affiche DANS LE VOLET du complément (src/tableau-volet.ts),
+ * plus dans une fenêtre de dialogue Office : sur le nouvel Outlook pour Mac, cette fenêtre restait
+ * au-dessus de toutes les applications. Ce fichier garde :
+ *   - `ouvrirDepuisTableau` : ouvre un mail demandé par le tableau de bord dans l'application Outlook
+ *     (`displayMessageForm`, Mailbox 1.1, pris en charge sur Mac), sinon l'adresse telle quelle ;
+ *   - `repondreSurElementCourant` : formulaire de réponse d'Outlook sur le mail affiché ;
+ *   - `brancherSurParent` : côté page tableau-de-bord.html ouverte en dialogue (ancien hôte, gardé
+ *     pour une page encore ouverte par un vieux manifeste).
  */
 
-import { getWorkerToken } from './worker';
-import { openExternal, supportsSet } from './platform';
-import { humanError } from './net';
+import { openExternal } from './platform';
 
 const MARQUE = 'tableau';
-const PAGE = 'tableau-de-bord.html';
 
 type Message =
   | { atlas: typeof MARQUE; type: 'jeton'; id: number; force?: boolean }
@@ -44,38 +33,11 @@ function lire(raw: unknown): Message | null {
 
 // ── Côté PAGE PARENTE ──
 
-let dialogue: Office.Dialog | null = null;
-
-/** Thème d'Outlook lu par Office.js (fond sombre ⇒ sombre), transmis au dialogue par l'adresse. */
-function themeOutlook(): 'dark' | 'light' | '' {
-  try {
-    const bg = (Office.context as any)?.officeTheme?.bodyBackgroundColor as string | undefined;
-    const m = bg && /^#?([0-9a-f]{6})$/i.exec(bg.trim());
-    if (!m) return '';
-    const n = parseInt(m[1], 16);
-    const lum = (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255;
-    return lum < 0.5 ? 'dark' : 'light';
-  } catch { return ''; }
-}
-
-/** Adresse du tableau de bord en mode dialogue (même dossier que la page parente, même domaine). */
-export function urlTableauDialogue(): string {
-  const u = new URL(PAGE, window.location.href);
-  u.search = '';
-  u.hash = '';
-  u.searchParams.set('hote', 'office');
-  // Le parent sait répondre (messageChild) : sinon le dialogue se connecte seul tout de suite.
-  if (supportsSet('DialogApi', '1.2')) u.searchParams.set('parent', '1');
-  const t = themeOutlook();
-  if (t) u.searchParams.set('theme', t);
-  return u.toString();
-}
-
 /**
  * Identifiant EWS d'un mail à partir de son lien Outlook sur le web (`webLink` de Graph :
  * `…/owa/?ItemID=…`, ou `…/mail/deeplink/read/<id>`), pour `displayMessageForm`.
  */
-function idDuLienOutlook(url: string): string {
+export function idDuLienOutlook(url: string): string {
   let u: URL;
   try { u = new URL(url); } catch { return ''; }
   if (!/(^|\.)outlook\.(office|office365|live)\.com$/i.test(u.hostname)) return '';
@@ -98,7 +60,7 @@ function idDuLienOutlook(url: string): string {
  * (même internetMessageId). Office.js ne sait pas répondre à un autre mail que l'élément courant :
  * sinon false, et le tableau copie le texte puis ouvre le mail. Rien n'est envoyé.
  */
-function repondreSurElementCourant(messageId: string, html: string): boolean {
+export function repondreSurElementCourant(messageId: string, html: string): boolean {
   try {
     const item: any = Office.context?.mailbox?.item;
     if (!item || typeof item.displayReplyForm !== 'function') return false;
@@ -112,20 +74,7 @@ function repondreSurElementCourant(messageId: string, html: string): boolean {
 }
 
 /** Lien hébergé par Outlook (mail, brouillon, calendrier, compose…) : Outlook l'ouvrira devant, la fenêtre doit se fermer. */
-function estLienOutlook(url: string): boolean {
-  try { return /(^|\.)outlook\.(office|office365|live)\.com$/i.test(new URL(url).hostname); } catch { return false; }
-}
-
-/**
- * Ferme la fenêtre du tableau juste après l'ouverture d'une fenêtre Outlook (sinon celle-ci reste
- * derrière). Un court délai laisse partir l'accusé `messageChild` vers le dialogue.
- */
-function fermerApres(d: Office.Dialog, fin: () => void): void {
-  setTimeout(() => { try { d.close(); } catch { /* déjà fermée */ } fin(); }, 120);
-}
-
-/** Ouvre, depuis la fenêtre principale, l'adresse demandée par le tableau de bord. */
-function ouvrirDepuisTableau(url: string): void {
+export function ouvrirDepuisTableau(url: string): void {
   const id = idDuLienOutlook(url);
   const mailbox = (() => { try { return Office.context?.mailbox; } catch { return undefined; } })();
   if (id && mailbox && typeof mailbox.displayMessageForm === 'function') {
@@ -136,103 +85,6 @@ function ouvrirDepuisTableau(url: string): void {
   openExternal(url);
 }
 
-export interface OuvrirTableauOptions {
-  /** Ouvre directement la séance de tri (bouton « Séance de tri » du panneau). */
-  seance?: boolean;
-  /** Appelé quand la fenêtre se ferme (ou n'a pas pu s'ouvrir). */
-  onFerme?: () => void;
-  /** Message lisible si la fenêtre ne s'ouvre pas. */
-  onErreur?: (message: string) => void;
-}
-
-/** Message lisible pour les codes d'erreur de displayDialogAsync. */
-function messageOuverture(code: number | undefined): string {
-  switch (code) {
-    case 12007: return 'Le tableau de bord est déjà ouvert dans une autre fenêtre.';
-    case 12009: return 'Ouverture du tableau de bord refusée : autorise la fenêtre ATLAS puis réessaie.';
-    case 12011: return 'Le navigateur bloque la fenêtre du tableau de bord : autorise les fenêtres pour Outlook.';
-    case 12004: case 12005: return 'Adresse du tableau de bord refusée par Outlook (complément à republier).';
-    default: return 'Impossible d\'ouvrir le tableau de bord dans cette version d\'Outlook.';
-  }
-}
-
-/**
- * Ouvre le tableau de bord dans une grande fenêtre de dialogue Office. Une seule fenêtre à la fois
- * (limite d'Office) : un second appel signale qu'elle est déjà ouverte.
- */
-export function ouvrirTableauDialogue(opts: OuvrirTableauOptions = {}): void {
-  let fini = false;
-  const fin = () => {
-    if (fini) return;
-    fini = true;
-    dialogue = null;
-    opts.onFerme?.();
-  };
-  if (typeof Office === 'undefined' || !Office.context?.ui?.displayDialogAsync) {
-    opts.onErreur?.(messageOuverture(undefined));
-    fin();
-    return;
-  }
-  if (dialogue) {
-    opts.onErreur?.(messageOuverture(12007));
-    // Pas de fin() : la fenêtre ouverte garde son propre suivi.
-    return;
-  }
-  const url = new URL(urlTableauDialogue());
-  if (opts.seance) url.searchParams.set('seance', '1');
-  Office.context.ui.displayDialogAsync(url.toString(), {
-    width: 95,
-    height: 90,
-    // Web : vraie fenêtre (pas un cadre), sans demande de confirmation. Ignoré sur Mac / Windows.
-    displayInIframe: false,
-    promptBeforeOpen: false,
-  } as Office.DialogOptions, (res) => {
-    if (res.status !== Office.AsyncResultStatus.Succeeded) {
-      console.warn('[dialogue-tableau] ouverture impossible :', res.error);
-      opts.onErreur?.(messageOuverture(res.error?.code));
-      fin();
-      return;
-    }
-    const d = res.value;
-    dialogue = d;
-    const repondre = (m: Message) => {
-      try { (d as any).messageChild?.(JSON.stringify(m)); } catch (e) {
-        console.warn('[dialogue-tableau] messageChild impossible :', e);
-      }
-    };
-    d.addEventHandler(Office.EventType.DialogMessageReceived, (arg: any) => {
-      if (!arg || 'error' in arg) return;
-      // DialogApi 1.2 donne l'origine : seule la page du complément (même domaine) est écoutée.
-      if (arg.origin && arg.origin !== window.location.origin) return;
-      const m = lire(arg.message);
-      if (!m) return;
-      if (m.type === 'jeton') {
-        getWorkerToken(!!m.force)
-          .then(token => repondre({ atlas: MARQUE, type: 'jeton-reponse', id: m.id, token }))
-          .catch(e => repondre({ atlas: MARQUE, type: 'jeton-reponse', id: m.id, erreur: humanError(e) }));
-      } else if (m.type === 'repondre' && typeof m.messageId === 'string' && typeof m.html === 'string') {
-        const ok = repondreSurElementCourant(m.messageId, m.html);
-        repondre({ atlas: MARQUE, type: 'repondre-reponse', id: m.id, ok });
-        // Le formulaire de réponse d'Outlook s'ouvre DERRIÈRE la fenêtre du tableau (Office la garde au
-        // premier plan) : la fenêtre se ferme juste après (la reprise la ramène là où elle était).
-        if (ok) fermerApres(d, fin);
-      } else if (m.type === 'ouvrir' && typeof m.url === 'string') {
-        // Toute fenêtre d'Outlook ouverte depuis le tableau (mail, brouillon, réponse) s'affichait DERRIÈRE
-        // la fenêtre du tableau de bord. Pour un lien Outlook, la fenêtre se ferme donc (08/10/2026 :
-        // généralisé à tout lien Outlook, pas seulement un mail lisible) ; « Tableau de bord » la rouvre
-        // là où la personne était (reprise, 30 min).
-        const outlook = !!idDuLienOutlook(m.url) || estLienOutlook(m.url);
-        ouvrirDepuisTableau(m.url);
-        if (outlook) fermerApres(d, fin);
-      } else if (m.type === 'fermer') {
-        try { d.close(); } catch { /* déjà fermée */ }
-        fin();
-      }
-    });
-    // Fenêtre fermée par la personne (12006) ou page du dialogue en erreur.
-    d.addEventHandler(Office.EventType.DialogEventReceived, () => fin());
-  });
-}
 
 // ── Côté DIALOGUE (tableau-de-bord.html?hote=office) ──
 

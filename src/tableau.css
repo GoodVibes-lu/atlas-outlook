@@ -466,3 +466,11 @@ body.tb-tactile .tb-dock, body.tb-tactile .tb-peek { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .tb-seance, .tb-seance-carte { transition: none !important; animation: none !important; }
 }
+
+/* ── Tableau de bord dans le volet du complément (10/10/2026, src/tableau-volet.ts) ──
+ * Volet de 360 à 600 px : mise en page étroite ci-dessus (une colonne, détail en écran suivant).
+ * Le mode « Ce mail » (#app) est caché, pas détruit ; le tableau caché dort. */
+body.en-tableau > #app { display: none; }
+.tdb-volet[hidden] { display: none !important; }
+.tdb-volet-retour { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.tdb-volet-retour svg { transform: scaleX(-1); }

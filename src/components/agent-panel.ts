@@ -56,6 +56,7 @@ import {
 import { renderEquipe } from './agent-equipe';
 import { convertToRestId, getGraphToken } from '../api/graph';
 import { renderOffreRecue, renderClasserOutlook } from './agent-dossiers';
+import { renderCartePret } from './carte-pret';
 import { fetchTraites, type TraiteARanger } from '../api/tableau';
 import { renderPlusActions } from './agent-parite';
 import { renderSecurite } from './agent-securite';
@@ -204,6 +205,8 @@ export class AgentPanel {
       <div class="agent-panel ${this.mobile ? 'is-mobile' : ''}">
         <section id="agent-securite" class="agent-securite" hidden></section>
 
+        <section id="agent-pret" class="agent-section" hidden></section>
+
         <div id="agent-state" class="agent-state">
           <div class="state-loading" aria-busy="true" aria-label="Chargement du mail"><div class="skeleton-line skeleton-lg" style="width:58%"></div><div class="skeleton-line" style="width:92%"></div><div class="skeleton-line" style="width:76%"></div></div>
         </div>
@@ -318,8 +321,17 @@ export class AgentPanel {
       if (manque.has('correspondant')) void this.correspondantSeul();
       else this.afficherCorrespondant(null);
     }
+    // Lot 2 (10/10/2026) : carte « Prêt » (projet reconnu à l'arrivée, Lier et classer), sans appel de plus.
+    const pret = this.$('agent-pret');
+    if (pret && !this.mobile) {
+      renderCartePret(pret, v.pret || null, {
+        messageId: it.messageId, mailbox: it.mailbox, conversationId: it.conversationId, onInfo: showToast,
+        onChange: p => this.chargerClasser(p ? { projetId: p.id, projetLibelle: p.libelle } : { sansProjet: true }),
+      });
+    }
     if (memorisee) return;
     this.chargerClasser({
+      ...(v.dossier && v.projet && !v.pret?.auto?.range ? { dossier: v.dossier } : {}),
       ...(v.projet ? { projetId: v.projet.id, projetLibelle: v.projet.libelle, projetPropose: v.projet.source === 'agent' } : manque.has('projet') ? {} : { sansProjet: true }),
       ...(v.traite && v.traite.statut === 'a_ranger' ? { repondu: v.traite } : {}),
       traiteAFaire: manque.has('traite'),
@@ -731,7 +743,7 @@ export class AgentPanel {
    * carte le demande elle-même. Traités à ranger (08/10/2026) : mail déjà répondu → la carte passe en
    * tête, suggestion mise en avant.
    */
-  private chargerClasser(o: { projetId?: string; projetLibelle?: string; projetPropose?: boolean; sansProjet?: boolean; repondu?: TraiteARanger; traiteAFaire?: boolean } = { traiteAFaire: true }): void {
+  private chargerClasser(o: { projetId?: string; projetLibelle?: string; projetPropose?: boolean; sansProjet?: boolean; repondu?: TraiteARanger; traiteAFaire?: boolean; dossier?: VueMail['dossier'] } = { traiteAFaire: true }): void {
     const it = this.item;
     const classer = this.$('agent-classer');
     if (!it || !classer) return;

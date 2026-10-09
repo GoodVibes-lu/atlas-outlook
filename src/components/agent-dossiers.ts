@@ -14,6 +14,8 @@
  * Écritures : par le worker, sur le clic de la personne dans SA boîte (graph.ts › rangementClicAutorise) ;
  * ailleurs, le refus du worker est dit tel quel. Erreurs toujours affichées, jamais avalées.
  */
+import { changerProjet, delierProjet } from '../api/projet-mail';
+import { monterChoixProjet } from './carte-pret';
 import {
   fetchDossiers, fetchDossierProjet, rangerDansDossier, fetchOffreFournisseur, preparerRemerciementOffre, executerAction,
   annulerAction, estVerrouFerme, type DossierOutlook, type OffreFournisseurContexte,
@@ -151,6 +153,8 @@ export interface CtxClasser extends CtxDossiers {
   projetPropose?: boolean;
   /** La vue du mail a déjà répondu « aucun projet » : rien à redemander. */
   sansProjet?: boolean;
+  /** Dossier du projet préparé par l'agent à l'arrivée (lot 2, 10/10/2026) : plus d'appel séparé. */
+  dossier?: { existant: { id: string; chemin: string } | null; propose: string | null } | null;
 }
 
 /** Message d'un refus du worker (texte du serveur s'il en donne un), sinon message lisible. */
@@ -233,15 +237,47 @@ export function renderClasserOutlook(host: HTMLElement, ctx: CtxClasser): void {
     });
   }
 
+  // Changer de projet / Délier (correction mémorisée par le worker : elle prime ensuite).
+  const brancherProjet = () => {
+    const ancien = projet;
+    sugg.querySelector('[data-changer-projet]')?.addEventListener('click', () => {
+      const zone = sugg.querySelector<HTMLElement>('[data-choix-projet]');
+      if (!zone) return;
+      monterChoixProjet(zone, async p => {
+        try {
+          const r = await changerProjet({ messageId: ctx.messageId, projetId: p.id, ...(ancien && !ctx.projetPropose ? { ancienProjetId: ancien.id } : {}), ...(ctx.mailbox ? { mailbox: ctx.mailbox } : {}) });
+          ctx.onInfo?.(`Lié à ${r.projet.libelle}${r.rangement?.dossier ? ` et classé dans ${r.rangement.dossier.chemin}` : ''}`, 'success');
+          renderClasserOutlook(host, { ...ctx, repondu: undefined, projetId: r.projet.id, projetLibelle: r.projet.libelle, projetPropose: false, sansProjet: false, dossier: undefined });
+        } catch (e) { res.hidden = false; res.innerHTML = `<p class="agent-error" role="alert">Changement impossible : ${escapeHtml(texteErreur(e))}</p>`; }
+      }, () => undefined);
+    });
+    sugg.querySelector<HTMLButtonElement>('[data-delier-projet]')?.addEventListener('click', async ev => {
+      const b = ev.currentTarget as HTMLButtonElement;
+      b.disabled = true;
+      try {
+        await delierProjet({ messageId: ctx.messageId, ...(ancien ? { projetId: ancien.id } : {}), ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}), ...(ctx.mailbox ? { mailbox: ctx.mailbox } : {}) });
+        ctx.onInfo?.('Délié du projet : ce choix est retenu pour ce fil', 'success');
+        renderClasserOutlook(host, { ...ctx, repondu: undefined, projetId: undefined, projetLibelle: undefined, projetPropose: false, sansProjet: true, dossier: undefined });
+      } catch (e) { b.disabled = false; res.hidden = false; res.innerHTML = `<p class="agent-error" role="alert">Impossible de délier : ${escapeHtml(texteErreur(e))}</p>`; }
+    });
+  };
+
   // 1. Dossier du projet
   const suggestion = async () => {
     try {
       if (!projet && !ctx.sansProjet) projet = await fetchProjetDuMail(ctx.messageId, ctx.mailbox || undefined, ctx.conversationId).catch(() => null);
       if (!host.isConnected) return;
       if (!projet) { sugg.innerHTML = '<p class="agent-muted">Mail lié à aucun projet : choisis le dossier ci-dessous.</p>'; return; }
-      const d = await fetchDossierProjet(projet.id, ctx.mailbox || undefined, ctx.messageId);
+      // Dossier préparé à l'arrivée (existant) : affiché tout de suite ; « déjà classé » se voit après le clic.
+      const d = ctx.dossier && ctx.projetId === projet.id
+        ? { existant: ctx.dossier.existant, propose: ctx.dossier.propose, verrou: true, dejaRange: false }
+        : await fetchDossierProjet(projet.id, ctx.mailbox || undefined, ctx.messageId);
       if (!host.isConnected) return;
-      const titre = `<div class="agent-carte-titre">${icon('folder', 14)} ${ctx.projetPropose ? 'Projet probable' : 'Projet'} ${escapeHtml(projet.libelle)}</div>`;
+      // Lot 3 (10/10/2026) : « Changer de projet » et « Délier » partout où le projet du mail est affiché.
+      const titre = `<div class="agent-carte-titre">${icon('folder', 14)} ${ctx.projetPropose ? 'Projet probable' : 'Projet'} ${escapeHtml(projet.libelle)}</div>
+        <div class="agent-liens"><button type="button" class="agent-link" data-changer-projet>Changer de projet</button>${ctx.projetPropose ? '' : '<button type="button" class="agent-link" data-delier-projet>Délier</button>'}</div>
+        <div data-choix-projet hidden></div>`;
+      queueMicrotask(() => brancherProjet());
       if (d.existant && d.dejaRange) {
         sugg.innerHTML = `${titre}<p class="status-linked">${icon('check-circle', 14)}Déjà classé dans « ${escapeHtml(d.existant.chemin)} »</p>`;
         return;

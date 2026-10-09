@@ -826,3 +826,15 @@ body.tdb { background: var(--bg); }
 .as-regle { padding: 8px 10px; margin-top: 8px; border-radius: 8px; background: var(--surface-sunk, rgba(0, 0, 0, 0.04)); }
 .as-regle p { margin: 0 0 6px; font-size: 12.5px; line-height: 1.45; }
 .as-regle small { color: var(--text-3, #777); }
+
+/* Carte « Prêt » et autonomie de la personne (lots 2 et 3, 10/10/2026) */
+.agent-liens { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.agent-btn-liste { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; padding: 7px 8px; border: 1px solid var(--border); border-radius: var(--r-ctl); background: var(--surface); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.agent-btn-liste + .agent-btn-liste { margin-top: 4px; }
+.agent-btn-liste:hover:not(:disabled) { background: var(--surface-high); }
+.agent-btn-liste:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.agent-autonomie { border: 0; padding: 0; margin: 10px 0 0; min-width: 0; }
+.agent-autonomie legend { font-size: 13px; font-weight: 600; padding: 0; margin-bottom: 4px; }
+.agent-segment { display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-segment label { display: inline-flex; align-items: center; gap: 4px; padding: 5px 9px; border: 1px solid var(--border-mid); border-radius: var(--r-ctl); font-size: 12px; cursor: pointer; }
+.agent-segment label:has(input:checked) { border-color: var(--accent); background: var(--surface-high); font-weight: 600; }

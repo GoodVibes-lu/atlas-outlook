@@ -653,6 +653,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
 
   // ── Clavier ──
   document.addEventListener('keydown', e => {
+    if (root.closest('[hidden]')) return; // volet Outlook revenu sur « Ce mail » : le tableau dort
     const cible = e.target as HTMLElement;
     const saisie = cible instanceof HTMLInputElement || cible instanceof HTMLTextAreaElement || cible instanceof HTMLSelectElement || cible?.isContentEditable;
     if (document.getElementById('tb-seance')) return; // séance de tri ouverte : elle a son propre clavier
@@ -831,7 +832,7 @@ export function demarrerTableau(root: HTMLElement, opts: { openLink: (url: strin
   let lienSeance = new URLSearchParams(window.location.search).get('seance') === '1';
   try { lienSeance = lienSeance || sessionStorage.getItem('atlas_tdb_seance') === '1'; sessionStorage.removeItem('atlas_tdb_seance'); } catch { /* stockage indisponible */ }
   if (lienSeance) { repriseAttendue = null; effacerReprise(); seance(); }
-  window.setInterval(() => { if (document.visibilityState === 'visible') void rafraichir(false); }, POLL_MS);
+  window.setInterval(() => { if (document.visibilityState === 'visible' && !root.closest('[hidden]')) void rafraichir(false); }, POLL_MS);
   window.setInterval(() => { if (etat.enLigne && etat.derniereSync) majLive('ok'); }, 15_000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Date.now() - etat.derniereSync > POLL_MS) void rafraichir(false); });
   window.addEventListener('focus', () => { if (Date.now() - etat.derniereSync > 5_000) void rafraichir(false); });
