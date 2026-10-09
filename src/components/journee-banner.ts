@@ -14,9 +14,8 @@
  * cliquables → liste des mails de la boîte partagée (assigné / pris par).
  */
 
-import { fetchJournee, type AgentJournee, type AgentListePile } from '../api/agent';
+import { fetchJournee, journeeMemorisee, type AgentJournee, type AgentListePile } from '../api/agent';
 import { renderMailList, type MailListOptions } from './agent-lists';
-import { ouvrirTableauDialogue } from '../api/dialogue-tableau';
 import { isMobile } from '../api/platform';
 
 /** Séance de tri (07/10/2026) : ouverte dans la grande fenêtre du tableau de bord (dialogue Office, Mac compris). */
@@ -63,13 +62,22 @@ export function formatJournee(j: AgentJournee): string {
  */
 export async function refreshJourneeBanner(host: HTMLElement | null, opts: Pick<MailListOptions, 'onInfo'> = {}): Promise<void> {
   if (!host) return;
+  // Derniers compteurs connus affichés tout de suite (avant la connexion), puis mis à jour sur place.
+  const pre = !host.querySelector('.journee-banner') ? journeeMemorisee() : null;
+  if (pre) dessiner(host, pre, opts);
   const j = await fetchJournee();
   if (!j) {
     // Bandeau facultatif : absent si la route ne répond pas (jamais d'erreur ici).
-    host.innerHTML = '';
-    host.hidden = true;
+    if (!host.querySelector('.journee-banner')) { host.innerHTML = ''; host.hidden = true; }
     return;
   }
+  // Liste d'une pile ouverte : compteurs mis à jour sans la refermer ; sinon bandeau redessiné.
+  const liste = host.querySelector<HTMLElement>('#journee-list');
+  if (liste && !liste.hidden) { majCompteurs(host, j); return; }
+  dessiner(host, j, opts);
+}
+
+function dessiner(host: HTMLElement, j: AgentJournee, opts: Pick<MailListOptions, 'onInfo'>): void {
   host.hidden = false;
   const cs = compteurs(j);
   host.innerHTML = `
@@ -84,7 +92,8 @@ export async function refreshJourneeBanner(host: HTMLElement | null, opts: Pick<
   `;
   const list = host.querySelector<HTMLElement>('#journee-list')!;
   host.querySelector('#journee-seance')?.addEventListener('click', () => {
-    ouvrirTableauDialogue({ seance: true, onErreur: (message) => opts.onInfo?.(message, 'error') });
+    // Fenêtre du tableau de bord chargée à la demande (pas au démarrage du volet).
+    void import('../api/dialogue-tableau').then(m => m.ouvrirTableauDialogue({ seance: true, onErreur: (message) => opts.onInfo?.(message, 'error') }));
   });
   let ouverte: AgentListePile | null = null;
   host.querySelectorAll<HTMLButtonElement>('button[data-pile]').forEach(btn => {
@@ -117,7 +126,10 @@ export async function refreshJourneeBanner(host: HTMLElement | null, opts: Pick<
 /** Met à jour le texte des compteurs cliquables sans refermer la liste ouverte. */
 async function updateCounts(host: HTMLElement): Promise<void> {
   const j = await fetchJournee();
-  if (!j) return;
+  if (j) majCompteurs(host, j);
+}
+
+function majCompteurs(host: HTMLElement, j: AgentJournee): void {
   for (const x of compteurs(j)) {
     const btn = x.pile ? host.querySelector<HTMLButtonElement>(`button[data-pile="${x.pile}"]`) : null;
     if (btn) { btn.innerHTML = chipInner(x); btn.classList.toggle('is-alert', !!x.alerte); }

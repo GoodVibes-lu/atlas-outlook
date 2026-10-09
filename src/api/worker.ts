@@ -101,6 +101,87 @@ const TOKEN_MARGIN = 5 * 60 * 1000;
 /** Une voie de connexion qui ne répond pas (fenêtre MSAL bloquée) est abandonnée après ce délai. */
 const TOKEN_STEP_TIMEOUT = 20_000;
 
+// ── Jeton gardé pour la session (lot 1 « vitesse », 09/10/2026) ──
+//
+// Le jeton ne vivait qu'en mémoire : chaque ouverture du volet rechargeait MSAL (305 ko) et refaisait
+// la connexion avant d'afficher quoi que ce soit. Il est maintenant gardé sur le poste jusqu'à
+// 5 min avant son expiration (sessionStorage, et localStorage pour survivre à la fermeture du volet),
+// pour le PANNEAU seulement (jamais le tableau de bord ni la fenêtre de dialogue, qui ont leurs règles
+// de compte), et seulement s'il est bien celui de la boîte ouverte. Il ne donne accès qu'aux routes
+// ATLAS du worker (audience du complément), jamais à la boîte. Renouvelé en silence avant la fin.
+const CLE_JETON = 'atlas_addin_jeton';
+/** Renouvellement silencieux en arrière-plan quand il reste moins que cela avant `cachedUntil`. */
+const RENOUVELER_AVANT = 10 * 60 * 1000;
+
+/** Adresse de la boîte ouverte dans Outlook ('' hors Outlook). */
+function compteDeLaBoite(): string {
+  try { return normaliserCompte(typeof Office !== 'undefined' ? Office.context?.mailbox?.userProfile?.emailAddress : ''); } catch { return ''; }
+}
+/** Jeton de session permis : panneau du complément seulement. */
+function jetonSessionPermis(): boolean {
+  return !contexteConnexion && !hoteTeams && !redirectLogin && !externalTokenProvider && !hostedNaa;
+}
+function ecrireJetonSession(token: string, until: number): void {
+  if (!jetonSessionPermis()) return;
+  const v = JSON.stringify({ token, until });
+  for (const st of [() => sessionStorage, () => localStorage]) { try { st().setItem(CLE_JETON, v); } catch { /* stockage indisponible */ } }
+}
+function oublierJetonSession(): void {
+  for (const st of [() => sessionStorage, () => localStorage]) { try { st().removeItem(CLE_JETON); } catch { /* stockage indisponible */ } }
+}
+/** Relit le jeton gardé (s'il est valable et de la boîte ouverte) ; true s'il est repris. */
+function reprendreJetonSession(): boolean {
+  if (cachedToken || !jetonSessionPermis()) return false;
+  for (const st of [() => sessionStorage, () => localStorage]) {
+    try {
+      const x = JSON.parse(st().getItem(CLE_JETON) || 'null');
+      if (!x || typeof x.token !== 'string' || typeof x.until !== 'number' || Date.now() >= x.until - 60_000) continue;
+      const boite = compteDeLaBoite();
+      if (boite && compteDuJeton(x.token) !== boite) continue; // autre compte (poste partagé) : jamais réutilisé
+      if (problemesJeton(x.token, { clientId: ADDIN_CLIENT_ID, resource: ADDIN_RESOURCE, tenantId: GV_TENANT_ID, nowMs: Date.now() }).length) continue;
+      cachedToken = x.token;
+      cachedUntil = x.until;
+      setTokenDiag({ source: 'naa', until: cachedUntil });
+      return true;
+    } catch { /* illisible : ignoré */ }
+  }
+  oublierJetonSession();
+  return false;
+}
+
+let renouvellement: Promise<void> | null = null;
+/** Renouvelle le jeton sans rien montrer (connexion automatique silencieuse) ; l'ancien reste en service sinon. */
+function renouvelerEnFond(): void {
+  if (renouvellement || tokenInFlight || redirectLogin || hoteTeams || externalTokenProvider || !naaSupported()) return;
+  renouvellement = (async () => {
+    try {
+      const pca = await getNaaClient();
+      if (!pca) return;
+      const account = (pca.getActiveAccount?.() || pca.getAllAccounts?.()?.[0]) ?? undefined;
+      const r = await withTimeout<any>(pca.acquireTokenSilent({ scopes: [ADDIN_SCOPE], ...(account ? { account } : {}), forceRefresh: true }), TOKEN_STEP_TIMEOUT, 'renouvellement');
+      const errors: string[] = [];
+      const t = r?.accessToken ? jetonUtilisable(String(r.accessToken), 'renouvellement', errors) : '';
+      if (!t) return;
+      const exp = tokenExpiry(t);
+      cachedToken = t;
+      cachedUntil = exp ? exp - TOKEN_MARGIN : Date.now() + TOKEN_TTL;
+      setTokenDiag({ source: 'naa', until: cachedUntil });
+      ecrireJetonSession(t, cachedUntil);
+    } catch (e) {
+      console.info('[worker] renouvellement silencieux du jeton impossible (nouvelle connexion à l\'expiration) :', (e as Error)?.message || e);
+    }
+  })().finally(() => { renouvellement = null; });
+}
+
+/**
+ * Connexion lancée dès l'ouverture du volet (Office.onReady), en parallèle du premier rendu : jeton
+ * de la session s'il est encore valable (aucun appel), sinon connexion automatique.
+ */
+export function prechaufferConnexion(): void {
+  if (reprendreJetonSession()) { if (cachedUntil - Date.now() < RENOUVELER_AVANT) renouvelerEnFond(); return; }
+  void getWorkerToken().catch(() => { /* l'appel qui en a besoin affichera l'erreur */ });
+}
+
 /** Expiration (ms) lue dans le jeton, sans vérification (le worker vérifie). */
 function tokenExpiry(token: string): number {
   try {
@@ -247,6 +328,7 @@ export function autoriserConnexionInteractive(): void {
   lastTokenFailure = null;
   cachedToken = null;
   cachedUntil = 0;
+  oublierJetonSession();
 }
 /** Geste « Changer de compte » / « Choisir mon compte » : connexion interactive avec choix du compte. */
 export function changerDeCompte(): void {
@@ -480,7 +562,11 @@ const TOKEN_FAILURE_COOLDOWN = 4000;
  * simultanés attendent le même résultat.
  */
 export async function getWorkerToken(forceRefresh = false): Promise<string> {
-  if (!forceRefresh && cachedToken && Date.now() < cachedUntil) return cachedToken;
+  if (!forceRefresh) reprendreJetonSession();
+  if (!forceRefresh && cachedToken && Date.now() < cachedUntil) {
+    if (cachedUntil - Date.now() < RENOUVELER_AVANT) renouvelerEnFond();
+    return cachedToken;
+  }
   if (tokenInFlight) return tokenInFlight;
   if (!forceRefresh && lastTokenFailure && Date.now() - lastTokenFailure.at < TOKEN_FAILURE_COOLDOWN) throw lastTokenFailure.err;
   tokenInFlight = (async () => {
@@ -573,6 +659,7 @@ export async function getWorkerToken(forceRefresh = false): Promise<string> {
     cachedUntil = exp ? exp - TOKEN_MARGIN : Date.now() + TOKEN_TTL;
     lastTokenFailure = null;
     setTokenDiag({ source, until: cachedUntil });
+    ecrireJetonSession(token, cachedUntil);
     return token;
   })();
   try {
@@ -586,6 +673,7 @@ export async function getWorkerToken(forceRefresh = false): Promise<string> {
 export function resetWorkerToken(): void {
   cachedToken = null;
   cachedUntil = 0;
+  oublierJetonSession();
   lastTokenFailure = null;
   setTokenDiag({ source: '', until: 0 });
 }
@@ -632,6 +720,7 @@ export async function workerRequest<T = Record<string, unknown>>(
       let res = await send(await getWorkerToken());
       if (res.status === 401) {
         cachedToken = null;
+        oublierJetonSession();
         const frais = await getWorkerToken(true);
         res = await send(frais);
         if (res.status === 401 && contexteConnexion) {

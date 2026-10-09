@@ -5,14 +5,12 @@
  * Boutons exposés via le manifest (ExecuteFunction) :
  *   • atlasDoneCommand       : marque le mail comme Traité ✓
  *   • atlasSnoozeCommand     : reporte le mail à demain 8h ⏰
- *   • atlasArchiveCommand    : archive le mail 📦 (+ move dans dossier habituel)
+ *   • atlasArchiveCommand    : archive le mail 📦 (rangé dans « Archives » par le worker)
  *
- * Chaque commande :
- *   1. Trouve/crée le tag IA pour le mail courant (via Airtable EmailTags)
- *   2. Met à jour le statut
- *   3. Applique la catégorie Outlook colorée (visuel inbox)
- *   4. Pour Archive : déplace le mail dans le dossier appris (index sender)
- *   5. Affiche une notification Outlook (NotificationMessage InfoBar)
+ * Chaque commande passe par le worker (api/actions-mail.ts, lot 1 « vitesse » du 09/10/2026) :
+ * fiche de tri ATLAS + action de l'agent dans la boîte de la personne (marquer lu, « plus tard »,
+ * ranger dans Archives), puis une notification Outlook (NotificationMessage InfoBar). Plus aucun accès
+ * direct à la boîte (catégories, déplacement) : Microsoft ne donne plus ce jeton au complément.
  *
  * AVANTAGE : actions accessibles en permanence depuis le bandeau Outlook,
  * sans dépendre du pin de task-pane (non supporté sur Outlook Mac sideload).
@@ -30,23 +28,10 @@
  * dépassé = contrôles locaux, puis envoi autorisé. Outlook classique Windows charge launch-event.ts.
  */
 
-import {
-  getEmailTagByEmailId,
-  getEmailTagByConversationId,
-  markTagDone,
-  snoozeTag,
-  archiveTag,
-  upsertEmailTag,
-} from './api/airtable';
+import { upsertEmailTag } from './api/airtable';
 import { analyzeEmailWithClaude } from './api/claude';
-import {
-  convertToRestId,
-  setMessageCategories,
-  moveMessageToFolder,
-  ATLAS_CATEGORIES,
-  ATLAS_IA_CATEGORIES,
-} from './api/graph';
-import { lookupSenderFolder, recordSenderFolder } from './api/sender-folder-index';
+import { convertToRestId, ATLAS_IA_CATEGORIES } from './api/graph';
+import { archiverMail, ficheDeTri, marquerTraite, reporterDemain, type MailCourant } from './api/actions-mail';
 import { initRoamingStorage } from './api/roaming-storage';
 import { supportsMailbox } from './api/platform';
 import { gererOnMessageSend } from './utils/send-check-office';
@@ -54,27 +39,6 @@ import { enrichWithAtlas } from './components/send-check-panel';
 import { humanError } from './api/net';
 import { ouvrirTableauDialogue } from './api/dialogue-tableau';
 
-/**
- * Construit la liste des catégories à appliquer pour un état donné.
- * Inclut : type IA + urgence (si >= 4) + état (snoozed/done/archived).
- */
-function buildCategoriesFor(tag: any, state: 'done' | 'snoozed' | 'archived'): string[] {
-  const cats: string[] = [];
-  if (tag?.category) {
-    const ia = ATLAS_IA_CATEGORIES[tag.category];
-    if (ia) cats.push(ia.name);
-  }
-  const u = tag?.urgencyScore || 0;
-  if (u >= 5) cats.push(ATLAS_CATEGORIES.URGENCE_5.name);
-  else if (u === 4) cats.push(ATLAS_CATEGORIES.URGENCE_4.name);
-  if (state === 'snoozed') cats.push(ATLAS_CATEGORIES.SNOOZED.name);
-  else if (state === 'done') cats.push(ATLAS_CATEGORIES.DONE.name);
-  else if (state === 'archived') cats.push(ATLAS_CATEGORIES.ARCHIVED.name);
-  return cats;
-}
-
-// Office.js doit être prêt avant que les commandes soient invoquées.
-// On register les handlers globalement (window) — manifest les référence par nom.
 Office.onReady(async () => {
   // Hydrate les réglages depuis roamingSettings et efface les anciens secrets (clé Anthropic,
   // jeton Airtable) : les commandes passent désormais par le worker.
@@ -123,90 +87,45 @@ function showInfoBar(message: string, isError = false): void {
   }
 }
 
-async function findTagForCurrentMail(restId: string, conversationId: string) {
-  let tag = await getEmailTagByEmailId(restId);
-  if (!tag && conversationId) tag = await getEmailTagByConversationId(conversationId);
-  return tag;
-}
-
-function getCurrentMailContext() {
+function getCurrentMailContext(): (MailCourant & { senderEmail: string }) | null {
   const item = Office.context.mailbox?.item as any;
   if (!item) return null;
   const ewsId: string = item.itemId || '';
   if (!ewsId) return null;
-  const restId = convertToRestId(ewsId);
-  const conversationId: string = item.conversationId || '';
-  const senderEmail: string = item.from?.emailAddress || '';
-  return { restId, conversationId, senderEmail };
+  return {
+    restId: convertToRestId(ewsId),
+    messageId: String(item.internetMessageId || ''),
+    conversationId: item.conversationId || '',
+    senderEmail: item.from?.emailAddress || '',
+  };
 }
 
-// ── Commandes exposées ─────────────────────────────────────────────────────
-
 /**
- * ✓ Traité — Marque le mail comme Traité (Airtable) + catégorie verte.
- * Pas de déplacement de mail (juste le statut + le tag visuel).
+ * Boutons du ruban (lot 1 « vitesse », 09/10/2026) : tout passe par le worker (api/actions-mail.ts),
+ * plus par le jeton de boîte du complément que Microsoft ne donne plus (catégories et déplacement
+ * échouaient). Le rangement se fait dans la boîte de la personne, sur son clic (rangementClicAutorise).
  */
+async function commandeMail(event: Office.AddinCommands.Event, faire: (m: MailCourant) => Promise<{ message: string }>): Promise<void> {
+  try {
+    const ctx = getCurrentMailContext();
+    if (!ctx) { showInfoBar('Aucun mail sélectionné', true); return; }
+    const r = await faire(ctx);
+    showInfoBar(r.message);
+  } catch (e) {
+    showInfoBar(humanError(e), true);
+  } finally {
+    event.completed();
+  }
+}
+
+/** Traité : fiche de tri « Traité » et mail marqué lu (worker). */
 export async function atlasDoneCommand(event: Office.AddinCommands.Event): Promise<void> {
-  try {
-    const ctx = getCurrentMailContext();
-    if (!ctx) { showInfoBar('Aucun mail sélectionné', true); event.completed(); return; }
-
-    const tag = await findTagForCurrentMail(ctx.restId, ctx.conversationId);
-    if (!tag) {
-      showInfoBar('Mail pas encore classé : ouvre ATLAS, onglet Classer', true);
-      event.completed();
-      return;
-    }
-
-    const ok = await markTagDone(tag.id);
-    if (!ok) { showInfoBar('Impossible de marquer comme traité : réessaie', true); event.completed(); return; }
-
-    // Catégorie ✓ verte
-    try {
-      await setMessageCategories(ctx.restId, buildCategoriesFor(tag, 'done'));
-    } catch (e) {
-      console.warn('[ATLAS commands] setCategories done failed:', e);
-    }
-
-    showInfoBar('Traité');
-  } catch (e) {
-    showInfoBar(`${humanError(e)}`, true);
-  } finally {
-    event.completed();
-  }
+  await commandeMail(event, marquerTraite);
 }
 
-/**
- * ⏰ Reporter — Snooze à demain 8h (Airtable) + catégorie bleue visible
- * dans la liste inbox.
- */
+/** Reporter : « répondre plus tard » de l'agent, demain 8 h (jours ouvrés), et fiche « Reporté ». */
 export async function atlasSnoozeCommand(event: Office.AddinCommands.Event): Promise<void> {
-  try {
-    const ctx = getCurrentMailContext();
-    if (!ctx) { showInfoBar('Aucun mail sélectionné', true); event.completed(); return; }
-
-    const tag = await findTagForCurrentMail(ctx.restId, ctx.conversationId);
-    if (!tag) {
-      showInfoBar('Mail pas encore classé : ouvre ATLAS, onglet Classer', true);
-      event.completed();
-      return;
-    }
-
-    const ok = await snoozeTag(tag.id);
-    if (!ok) { showInfoBar('Impossible de reporter : réessaie', true); event.completed(); return; }
-
-    try {
-      await setMessageCategories(ctx.restId, buildCategoriesFor(tag, 'snoozed'));
-    } catch (e) {
-      console.warn('[ATLAS commands] setCategories snooze failed:', e);
-    }
-
-    showInfoBar('Reporté à demain 8 h');
-  } catch (e) {
-    showInfoBar(`${humanError(e)}`, true);
-  } finally {
-    event.completed();
-  }
+  await commandeMail(event, reporterDemain);
 }
 
 /**
@@ -245,7 +164,7 @@ export async function atlasReanalyzeCommand(event: Office.AddinCommands.Event): 
       subject, from, toRecipients, ccRecipients, body, receivedAt, userEmail,
     });
 
-    const existing = await findTagForCurrentMail(ctx.restId, ctx.conversationId);
+    const existing = await ficheDeTri(ctx);
     const upserted = await upsertEmailTag({
       oldTagId: existing?.id,
       emailId: ctx.restId,
@@ -262,16 +181,7 @@ export async function atlasReanalyzeCommand(event: Office.AddinCommands.Event): 
     });
 
     // Applique les catégories (type IA + urgence si haute)
-    const newTag = { id: upserted.id, category: analysis.category, urgencyScore: analysis.urgencyScore };
-    try {
-      await setMessageCategories(ctx.restId, buildCategoriesFor(newTag, 'done' as any).filter((c) =>
-        // Pour le re-analyze : on applique IA + urgence, PAS d'état
-        !c.includes('Traité') && !c.includes('Reporté') && !c.includes('Archivé')
-      ));
-    } catch (e) {
-      console.warn('[ATLAS commands] setCategories reanalyze failed:', e);
-    }
-
+    void upserted; // catégorie Outlook posée par l'agent du worker (plus d'accès direct à la boîte ici)
     const iaCat = ATLAS_IA_CATEGORIES[analysis.category]?.name || analysis.category;
     showInfoBar(`Classé : ${iaCat} (urgence ${analysis.urgencyScore}/5)`);
   } catch (e) {
@@ -281,54 +191,9 @@ export async function atlasReanalyzeCommand(event: Office.AddinCommands.Event): 
   }
 }
 
-/**
- * 📦 Archiver — Archive le tag (Airtable) + déplace le mail dans le
- * dossier habituel via l'index sender → dossier + catégorie violette.
- */
+/** Archiver : rangé dans « Archives » par le worker (annulable dans le panneau) et fiche « Archivé ». */
 export async function atlasArchiveCommand(event: Office.AddinCommands.Event): Promise<void> {
-  try {
-    const ctx = getCurrentMailContext();
-    if (!ctx) { showInfoBar('Aucun mail sélectionné', true); event.completed(); return; }
-
-    const tag = await findTagForCurrentMail(ctx.restId, ctx.conversationId);
-    if (!tag) {
-      showInfoBar('Mail pas encore classé : ouvre ATLAS, onglet Classer', true);
-      event.completed();
-      return;
-    }
-
-    const ok = await archiveTag(tag.id);
-    if (!ok) { showInfoBar('Impossible d\'archiver : réessaie', true); event.completed(); return; }
-
-    try {
-      await setMessageCategories(ctx.restId, buildCategoriesFor(tag, 'archived'));
-    } catch (e) {
-      console.warn('[ATLAS commands] setCategories archive failed:', e);
-    }
-
-    // Déplace le mail dans le dossier habituel (sender → dossier index)
-    let movedTo = '';
-    if (ctx.senderEmail) {
-      const hit = lookupSenderFolder(ctx.senderEmail);
-      if (hit) {
-        try {
-          const { getApiContext } = await import('./api/graph');
-          const apiCtx = await getApiContext();
-          await moveMessageToFolder(apiCtx.token, ctx.restId, hit.folderId);
-          recordSenderFolder(ctx.senderEmail, hit.folderId, hit.folderPath, 1);
-          movedTo = hit.folderPath;
-        } catch (e) {
-          console.warn('[ATLAS commands] move failed:', e);
-        }
-      }
-    }
-
-    showInfoBar(movedTo ? `Archivé dans ${movedTo}` : 'Archivé (aucun dossier habituel)');
-  } catch (e) {
-    showInfoBar(`${humanError(e)}`, true);
-  } finally {
-    event.completed();
-  }
+  await commandeMail(event, archiverMail);
 }
 
 /**

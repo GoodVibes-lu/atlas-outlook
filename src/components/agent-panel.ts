@@ -45,6 +45,9 @@ import { renderJournal } from './agent-lists';
 import { refreshJourneeBanner } from './journee-banner';
 import { showToast } from '../taskpane';
 import { getAllContacts, getAllTiers, getProjetsByClient, fetchContactArgoProfile } from '../api/airtable';
+import { lireEtatAgent } from '../api/agent';
+import { fetchVueMail, fetchCorrespondant, vueMemorisee, memoriserVue, type VueMail, type FicheCorrespondant } from '../api/vue-mail';
+import { AtlasError } from '../api/net';
 import { isMobile, openExternal, supportsMailbox, ATLAS_BASE } from '../api/platform';
 import {
   renderActionsMetier, renderRappels, renderResumeFil, renderQuestion, lienReunion,
@@ -53,7 +56,7 @@ import {
 import { renderEquipe } from './agent-equipe';
 import { convertToRestId, getGraphToken } from '../api/graph';
 import { renderOffreRecue, renderClasserOutlook } from './agent-dossiers';
-import { fetchTraites } from '../api/tableau';
+import { fetchTraites, type TraiteARanger } from '../api/tableau';
 import { renderPlusActions } from './agent-parite';
 import { renderSecurite } from './agent-securite';
 import { escapeHtml } from '../utils/html';
@@ -165,15 +168,18 @@ export class AgentPanel {
   private item: CurrentItem | null = null;
   private state: EtatAvecBrouillon | null = null;
   private suggestions: EmailActionSuggestion[] | null = null;
+  /** Empreinte de l'état affiché (vue mémorisée) : la vue fraîche ne redessine que s'il a changé. */
+  private signatureEtat = '';
 
   constructor(root: HTMLElement, navigate: (tabId: string) => void) {
     this.root = root;
     this.navigate = navigate;
     this.item = readCurrentItem();
     this.renderShell();
-    this.loadSecurite();
-    this.loadState();
-    this.loadCorrespondant();
+    // Lot 1 « vitesse » (09/10/2026) : dernière vue de ce mail affichée tout de suite (avant même la
+    // connexion), puis UNE vue fraîche du worker (état, sécurité, projet, correspondant, traité) ;
+    // les autres cartes partent en parallèle.
+    this.chargerVue();
     this.renderOutils();
   }
 
@@ -199,7 +205,7 @@ export class AgentPanel {
         <section id="agent-securite" class="agent-securite" hidden></section>
 
         <div id="agent-state" class="agent-state">
-          <div class="agent-loading"><div class="spinner"></div><span>Lecture de l'état de l'agent…</span></div>
+          <div class="state-loading" aria-busy="true" aria-label="Chargement du mail"><div class="skeleton-line skeleton-lg" style="width:58%"></div><div class="skeleton-line" style="width:92%"></div><div class="skeleton-line" style="width:76%"></div></div>
         </div>
 
         <section id="agent-detections" class="agent-section" hidden></section>
@@ -219,7 +225,7 @@ export class AgentPanel {
         <section class="agent-section">
           <div class="agent-section-title">Correspondant</div>
           <div id="agent-correspondant" class="agent-correspondant">
-            <div class="spinner" style="margin:8px auto;"></div>
+            <div class="state-loading" aria-busy="true"><div class="skeleton-line" style="width:70%"></div><div class="skeleton-line skeleton-sm" style="width:45%"></div></div>
           </div>
           <div id="agent-fiche-contact" class="agent-fiche-contact" hidden></div>
         </section>
@@ -267,6 +273,59 @@ export class AgentPanel {
     });
   }
 
+  // ── Vue du mail en un appel (lot 1 « vitesse », 09/10/2026) ──
+
+  private async chargerVue(): Promise<void> {
+    const it = this.item;
+    if (!it) return;
+    const memo = vueMemorisee(it.messageId);
+    if (memo) this.appliquerVue(memo, true);
+    let v: VueMail;
+    try {
+      v = await fetchVueMail({ messageId: it.messageId, conversationId: it.conversationId, from: it.fromEmail, nom: it.fromName });
+    } catch (e) {
+      if (this.destroyed) return;
+      // Worker pas encore à jour (route absente) ou vue indisponible : appels séparés, comme avant.
+      console.warn('[AgentPanel] vue du mail indisponible :', e instanceof AtlasError ? e.detail || e.message : e);
+      this.loadSecurite();
+      void this.loadState();
+      void this.loadCorrespondant();
+      this.chargerClasser();
+      return;
+    }
+    if (this.destroyed || this.item !== it) return;
+    memoriserVue(it.messageId, v);
+    this.appliquerVue(v, false);
+  }
+
+  /** Dessine une vue (mémorisée : état, sécurité et correspondant seulement ; fraîche : tout). */
+  private appliquerVue(v: VueMail, memorisee: boolean): void {
+    const it = this.item;
+    if (!it) return;
+    const manque = new Set(v.aCharger);
+    // Sécurité : verdict de l'agent ; sinon (mail sans verdict) demandé à part.
+    const secu = this.$('agent-securite');
+    if (secu) {
+      if (v.securite) void renderSecurite(secu, { messageId: it.messageId, onInfo: showToast, reponse: v.securite });
+      else if (!memorisee && manque.has('securite')) this.loadSecurite();
+    }
+    // État identique à la vue mémorisée déjà affichée : rien à redessiner (ni à redemander).
+    const signature = JSON.stringify(v.etat);
+    if (memorisee || signature !== this.signatureEtat) this.appliquerEtat(lireEtatAgent(v.etat));
+    this.signatureEtat = signature;
+    if (v.correspondant) this.afficherCorrespondant(v.correspondant);
+    else if (!memorisee) {
+      if (manque.has('correspondant')) void this.correspondantSeul();
+      else this.afficherCorrespondant(null);
+    }
+    if (memorisee) return;
+    this.chargerClasser({
+      ...(v.projet ? { projetId: v.projet.id, projetLibelle: v.projet.libelle, projetPropose: v.projet.source === 'agent' } : manque.has('projet') ? {} : { sansProjet: true }),
+      ...(v.traite && v.traite.statut === 'a_ranger' ? { repondu: v.traite } : {}),
+      traiteAFaire: manque.has('traite'),
+    });
+  }
+
   // ── Sécurité du mail (backlog reczJ0zLhPXqkWF9S) : bandeau rouge en tête, masqué si risque faible ──
 
   private loadSecurite(): void {
@@ -282,6 +341,11 @@ export class AgentPanel {
     // Boîte vide : le worker cherche dans toutes les boîtes visibles (la sienne d'abord, puis good@
     // pour ses membres) ; un mail de good@ est ainsi reconnu même ouvert depuis la boîte partagée.
     const r = await fetchAgentState(this.item.messageId, '');
+    if (this.destroyed) return;
+    this.appliquerEtat(r);
+  }
+
+  private appliquerEtat(r: Awaited<ReturnType<typeof fetchAgentState>>): void {
     if (this.destroyed) return;
     const host = this.$('agent-state');
     if (!host) return;
@@ -613,6 +677,10 @@ export class AgentPanel {
     const onChange = () => {
       refreshJourneeBanner(document.getElementById('journee-host'), { onInfo: showToast }).catch(() => { /* bandeau facultatif */ });
     };
+    // Fiche mémoire du contact : demandée tout de suite, en parallèle de la vue du mail (lot 1 « vitesse »).
+    const ficheContact = this.$('agent-fiche-contact');
+    const exp = (it.fromEmail || '').toLowerCase();
+    if (ficheContact && exp && !exp.endsWith('@vibes.lu')) { ficheContact.dataset.email = exp; void renderFicheContact(ficheContact, { email: exp }); }
     const equipe = this.$('agent-equipe');
     // Phase 5 : bloc masqué si le mail n'est pas dans good@ ou si la personne n'en est pas membre.
     if (equipe) renderEquipe(equipe, { messageId: it.messageId, onInfo, onChange });
@@ -621,18 +689,7 @@ export class AgentPanel {
     // 07/10/2026 (parité Inbox ATLAS) : « Offre fournisseur reçue » et « Classer dans Outlook » (arbre complet, nouveau dossier).
     const offre = this.$('agent-offre');
     if (offre && !this.mobile) renderOffreRecue(offre, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue, repondre: (html: string) => this.repondreHtml(html) });
-    const classer = this.$('agent-classer');
-    if (classer) {
-      renderClasserOutlook(classer, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue });
-      // Traités à ranger (08/10/2026) : mail déjà répondu → la carte « Classer » passe en tête, suggestion mise en avant.
-      void fetchTraites(it.messageId).then(r => {
-        const t = r.traites?.[0];
-        if (!t || t.statut !== 'a_ranger' || this.destroyed || this.item !== it || !classer.isConnected) return;
-        const etat = this.$('agent-state');
-        if (etat?.parentElement) etat.insertAdjacentElement('afterend', classer);
-        renderClasserOutlook(classer, { messageId: it.messageId, mailbox: it.mailbox, onInfo, delegue: this.delegue, repondu: t, ...(t.destination.projetId ? { projetId: t.destination.projetId, projetLibelle: t.destination.libelle } : {}) });
-      }).catch(() => { /* suggestion facultative */ });
-    }
+    // « Classer ce mail » : dessinée avec la vue du mail (projet et mail répondu déjà connus), cf. chargerClasser.
     // 07/10/2026 (fin de la parité Inbox ATLAS) : reclasser, pièces → projet, RDV, tiers, prospection.
     const parite = this.$('agent-parite');
     if (parite) {
@@ -667,6 +724,33 @@ export class AgentPanel {
         },
       });
     }
+  }
+
+  /**
+   * Carte « Classer ce mail » avec ce que la vue du mail sait déjà (projet, mail répondu) ; sinon la
+   * carte le demande elle-même. Traités à ranger (08/10/2026) : mail déjà répondu → la carte passe en
+   * tête, suggestion mise en avant.
+   */
+  private chargerClasser(o: { projetId?: string; projetLibelle?: string; projetPropose?: boolean; sansProjet?: boolean; repondu?: TraiteARanger; traiteAFaire?: boolean } = { traiteAFaire: true }): void {
+    const it = this.item;
+    const classer = this.$('agent-classer');
+    if (!it || !classer) return;
+    const base = { messageId: it.messageId, mailbox: it.mailbox, conversationId: it.conversationId, onInfo: showToast, delegue: this.delegue };
+    const { traiteAFaire, repondu, ...projet } = o;
+    const enTete = () => { const etat = this.$('agent-state'); if (etat?.parentElement) etat.insertAdjacentElement('afterend', classer); };
+    if (repondu) {
+      enTete();
+      renderClasserOutlook(classer, { ...base, repondu, ...(repondu.destination.projetId ? { projetId: repondu.destination.projetId, projetLibelle: repondu.destination.libelle } : projet) });
+      return;
+    }
+    renderClasserOutlook(classer, { ...base, ...projet });
+    if (!traiteAFaire) return;
+    void fetchTraites(it.messageId).then(r => {
+      const t = r.traites?.[0];
+      if (!t || t.statut !== 'a_ranger' || this.destroyed || this.item !== it || !classer.isConnected) return;
+      enTete();
+      renderClasserOutlook(classer, { ...base, repondu: t, ...(t.destination.projetId ? { projetId: t.destination.projetId, projetLibelle: t.destination.libelle } : {}) });
+    }).catch(() => { /* suggestion facultative */ });
   }
 
   /**
@@ -816,8 +900,53 @@ export class AgentPanel {
     wrap.hidden = false;
   }
 
-  // ── Correspondant (fiche ATLAS via /api/plugin/atlas/*, sans IA) ──
+  // ── Correspondant (fiche calculée par le worker, sans IA) ──
 
+  /** Fiche du correspondant (vue du mail ou atlas/correspondant) ; null = expéditeur sans adresse. */
+  private afficherCorrespondant(f: FicheCorrespondant | null): void {
+    const host = this.$('agent-correspondant');
+    const it = this.item;
+    if (!host || !it || this.destroyed) return;
+    if (!f) { host.innerHTML = `<p class="agent-muted">${it.fromEmail ? 'Fiche ATLAS indisponible.' : 'Expéditeur inconnu.'}</p>`; return; }
+    if (f.interne) {
+      host.innerHTML = `<div class="agent-corr-name">${escapeHtml(it.fromName || f.email)}</div><div class="agent-muted">Collègue GOOD VIBES</div>`;
+      return;
+    }
+    const details: string[] = [];
+    const n = f.projetsEnCours.length;
+    if (n) details.push(`${n} projet${n > 1 ? 's' : ''} en cours`);
+    if (f.ton) details.push(f.ton === 'Amical' ? 'tutoiement' : 'vouvoiement');
+    if (f.langue) details.push(`langue ${f.langue}`);
+    const fiche = this.$('agent-fiche-contact');
+    if (fiche && fiche.dataset.email !== f.email.toLowerCase()) { fiche.dataset.email = f.email.toLowerCase(); void renderFicheContact(fiche, { email: f.email }); }
+    host.innerHTML = `
+      <div class="agent-corr-name">${escapeHtml(f.nom || it.fromName || f.email)}${f.societe ? ` · ${escapeHtml(f.societe)}` : ''}${f.categorie ? ` <span class="agent-muted">(${escapeHtml(f.categorie.toLowerCase())})</span>` : ''}</div>
+      ${f.fonction ? `<div class="agent-muted">${escapeHtml(f.fonction)}</div>` : ''}
+      ${details.length ? `<div class="agent-muted">${escapeHtml(details.join(' · '))}</div>` : ''}
+      ${f.connu ? '' : '<div class="agent-muted">Pas encore de fiche dans ATLAS.</div>'}
+      <button type="button" class="btn btn-secondary btn-block agent-btn" id="agent-corr-open">Ouvrir dans ATLAS</button>
+    `;
+    this.$('agent-corr-open')?.addEventListener('click', () => {
+      if (n === 1) openExternal(`${ATLAS_BASE}/projet/${encodeURIComponent(f.projetsEnCours[0].id)}`);
+      else this.openInAtlas();
+    });
+  }
+
+  /** Fiche seule (la vue ne l'avait pas prête) ; worker plus ancien : calcul d'avant dans le volet. */
+  private async correspondantSeul(): Promise<void> {
+    const it = this.item;
+    if (!it?.fromEmail) { this.afficherCorrespondant(null); return; }
+    try {
+      const f = await fetchCorrespondant(it.fromEmail, it.fromName);
+      if (!this.destroyed && this.item === it) this.afficherCorrespondant(f);
+    } catch (e) {
+      if (this.destroyed) return;
+      if (e instanceof AtlasError && e.status === 404) { void this.loadCorrespondant(); return; }
+      this.afficherCorrespondant(null);
+    }
+  }
+
+  /** Ancien calcul dans le volet (tables entières) : seulement si le worker n'a pas encore la route correspondant. */
   private async loadCorrespondant(): Promise<void> {
     const host = () => this.$('agent-correspondant');
     const it = this.item;

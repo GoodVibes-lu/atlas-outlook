@@ -13,7 +13,7 @@
  * Nouvel Outlook pour Mac : seules API utilisées : displayNewMessageForm (Mailbox 1.6, gardé par
  * supportsMailbox) ; repli : texte copié et lien mailto.
  */
-import { fetchSecurite, fetchPrevenir, marquerSur, mettreEnQuarantaine, type Prevenir, type SecuriteMail } from '../api/securite';
+import { fetchSecurite, fetchPrevenir, marquerSur, mettreEnQuarantaine, type Prevenir, type ReponseSecurite, type SecuriteMail } from '../api/securite';
 import { annulerAction } from '../api/agent';
 import { copierTexte } from './agent-outils';
 import { escapeHtml } from '../utils/html';
@@ -29,6 +29,8 @@ export interface CtxSecurite {
   onInfo?: InfoFn;
   /** Prévenu quand le mail est (ou n'est plus) protégé : l'appelant peut masquer ses actions automatiques. */
   onProtege?: (protege: boolean) => void;
+  /** Réponse déjà reçue (partie `securite` de la vue du mail) : pas d'appel à agent/securite. */
+  reponse?: ReponseSecurite | null;
 }
 
 const dateCourte = (iso?: string) => {
@@ -72,8 +74,12 @@ export async function renderSecurite(host: HTMLElement, ctx: CtxSecurite): Promi
   host.hidden = true;
   host.innerHTML = '';
   let r;
-  try { r = await fetchSecurite(ctx.messageId, ctx.mailbox); }
-  catch { return; } // sécurité indisponible : pas de bandeau (le reste du panneau fonctionne)
+  // Vue du mail (lot 1 « vitesse ») : verdict de l'agent déjà reçu, aucun appel de plus.
+  if (ctx.reponse) r = ctx.reponse;
+  else {
+    try { r = await fetchSecurite(ctx.messageId, ctx.mailbox); }
+    catch { return; } // sécurité indisponible : pas de bandeau (le reste du panneau fonctionne)
+  }
   const s = r.securite;
   ctx.onProtege?.(!!r.protege);
   if (!s || s.niveau === 'faible') return;

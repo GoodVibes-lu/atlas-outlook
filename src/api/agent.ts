@@ -60,6 +60,15 @@ function lireReponseSansEtat(d: any): AgentStateResult | null {
  * Le worker répond HTTP 404 `{ status: 'pending' }` tant que le message n'a pas été lu.
  * `absent` = route pas encore déployée (404 sans corps « pending ») ou réponse inattendue.
  */
+/** Réponse de agent/state (ou la partie `etat` de agent/vue : { status, data }) → résultat lisible. */
+export function lireEtatAgent(r: { status: number; data: any }): AgentStateResult {
+  const lu = lireReponseSansEtat(r?.data);
+  if (lu) return lu;
+  if (r?.status !== 200) return { kind: 'absent' };
+  const state = (r.data?.state && typeof r.data.state === 'object' ? r.data.state : r.data) as InboxMessageState;
+  return state && typeof state.pile === 'string' ? { kind: 'state', state } : { kind: 'absent' };
+}
+
 export async function fetchAgentState(messageId: string, mailbox: string): Promise<AgentStateResult> {
   if (!messageId) return { kind: 'absent' };
   const qs = `messageId=${encodeURIComponent(messageId)}&mailbox=${encodeURIComponent(mailbox || '')}`;
@@ -96,6 +105,21 @@ export function invalidateJournee(): void {
 }
 
 /**
+ * Derniers compteurs connus, gardés sur le poste (lot 1 « vitesse », 09/10/2026) : le bandeau les
+ * affiche tout de suite à l'ouverture du panneau, avant même la connexion, puis se met à jour.
+ */
+const CLE_JOURNEE = 'atlas_addin_journee';
+export function journeeMemorisee(): AgentJournee | null {
+  try {
+    const x = JSON.parse(localStorage.getItem(CLE_JOURNEE) || 'null');
+    return x && typeof x === 'object' && typeof x.aTraiter === 'number' && Date.now() - Number(x.ts || 0) < 12 * 3_600_000 ? x.j || null : null;
+  } catch { return null; }
+}
+function memoriserJournee(j: AgentJournee): void {
+  try { localStorage.setItem(CLE_JOURNEE, JSON.stringify({ j, ts: Date.now(), aTraiter: j.aTraiter })); } catch { /* stockage indisponible */ }
+}
+
+/**
  * Compteurs de la journée. Rafraîchis au plus une fois par minute (ouverture du panneau et
  * changement de mail) : entre deux, renvoie la dernière valeur connue.
  */
@@ -121,6 +145,7 @@ export async function fetchJournee(): Promise<AgentJournee | null> {
           : {}),
       };
       journeeCache = { data: j, ts: Date.now() };
+      memoriserJournee(j);
       return j;
     } catch (e) {
       console.warn('[agent] journée indisponible :', (e as Error).message);

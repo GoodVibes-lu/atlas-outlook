@@ -17,25 +17,18 @@
  * compteurs du bandeau cliquables (liste par pile, filtre des nouveaux expéditeurs).
  */
 
-import { LinkPanel } from './components/link-panel';
-import { ComposePanel } from './components/compose-panel';
-import { ProjectInfoPanel } from './components/project-info';
-import { CreateProjectPanel } from './components/create-project';
-import { SettingsPanel } from './components/settings';
-import { IAPanel } from './components/ia-panel';
+// Lot 1 « vitesse » (09/10/2026) : seul l'onglet « Ce mail » (AgentPanel) est chargé au démarrage ;
+// les autres onglets, les réglages et la fenêtre du tableau de bord sont chargés à la demande.
+// L'ancien balayage du volet (auto-sweep, accès direct à la boîte coupé par Microsoft) est retiré :
+// le rangement automatique est fait par l'agent du worker.
 import { AgentPanel } from './components/agent-panel';
-import { QuickDraftPanel } from './components/quick-draft';
-import { SendCheckPanel } from './components/send-check-panel';
-import { ReunionPointPanel } from './components/reunion-point';
 import { lireElementReunion } from './api/reunion';
 import { refreshJourneeBanner } from './components/journee-banner';
 import { isMobile } from './api/platform';
 import { initRoamingStorage } from './api/roaming-storage';
-import { purgeLegacySecrets } from './api/worker';
-import { maybeAutoSweep } from './api/auto-sweep';
+import { purgeLegacySecrets, prechaufferConnexion } from './api/worker';
 import { icon } from './ui/icons';
 import { humanError } from './api/net';
-import { ouvrirTableauDialogue } from './api/dialogue-tableau';
 import type { AddinMode } from './types';
 
 // ── State ──
@@ -167,7 +160,9 @@ function renderApp(): void {
   // Tableau de bord en grande fenêtre (07/10/2026) : seule voie sur Outlook Mac (pas d'application
   // dans la barre de gauche). La fenêtre vit tant que ce panneau reste ouvert.
   app.querySelector('#btn-tableau')?.addEventListener('click', () => {
-    ouvrirTableauDialogue({ onErreur: (message) => showToast(message, 'error') });
+    void import('./api/dialogue-tableau')
+      .then(m => m.ouvrirTableauDialogue({ onErreur: (message) => showToast(message, 'error') }))
+      .catch(e => showToast(humanError(e), 'error'));
   });
 
   app.querySelector('#btn-settings')?.addEventListener('click', () => {
@@ -248,73 +243,53 @@ function switchTab(tabId: string): void {
   const content = document.getElementById('panel-content')!;
   const userName = getUserName();
 
-  switch (tabId) {
-    case 'agent':
-      currentPanel = new AgentPanel(content, (target) => switchTab(target));
-      break;
-    case 'reunion':
-      currentPanel = new ReunionPointPanel(content);
-      break;
-    case 'quick':
-      currentPanel = new QuickDraftPanel(content);
-      break;
-    case 'check':
-      currentPanel = new SendCheckPanel(content);
-      break;
-    case 'ia':
-      currentPanel = new IAPanel(content);
-      break;
-    case 'link':
-      currentPanel = new LinkPanel(content, userName);
-      break;
-    case 'info':
-      currentPanel = new ProjectInfoPanel(content);
-      break;
-    case 'create':
-      currentPanel = new CreateProjectPanel(content, userName);
-      break;
-    case 'compose':
-      currentPanel = new ComposePanel(content, userName);
-      break;
-    case 'reply':
-      // Reply tab reuses ComposePanel in reply mode
-      currentPanel = new ComposePanel(content, userName, { isReply: true });
-      break;
-    case 'settings':
-      currentPanel = new SettingsPanel(content, () => {
-        // After saving settings, re-render to show main panels
-        renderApp();
-      });
-      break;
+  if (tabId === 'agent') {
+    currentPanel = new AgentPanel(content, (target) => switchTab(target));
+    return;
   }
+  // Onglets chargés à la demande : squelette tout de suite, panneau dès que son code est là.
+  content.innerHTML = '<div class="panel-scroll"><div class="state-loading" aria-busy="true" aria-label="Chargement"><div class="skeleton-line" style="width:92%"></div><div class="skeleton-line" style="width:76%"></div><div class="skeleton-line" style="width:58%"></div></div></div>';
+  const demande = tabId;
+  void chargerPanneau(tabId, content, userName).then(p => {
+    if (currentTab !== demande) { p?.destroy(); return; }
+    currentPanel = p;
+  }).catch(e => {
+    if (currentTab === demande) content.innerHTML = `<div class="panel-scroll"><p class="agent-error" role="alert">${humanError(e)}</p></div>`;
+  });
+}
+
+async function chargerPanneau(tabId: string, content: HTMLElement, userName: string): Promise<{ destroy: () => void } | null> {
+  switch (tabId) {
+    case 'reunion': return new (await import('./components/reunion-point')).ReunionPointPanel(content);
+    case 'quick': return new (await import('./components/quick-draft')).QuickDraftPanel(content);
+    case 'check': return new (await import('./components/send-check-panel')).SendCheckPanel(content);
+    case 'ia': return new (await import('./components/ia-panel')).IAPanel(content);
+    case 'link': return new (await import('./components/link-panel')).LinkPanel(content, userName);
+    case 'info': return new (await import('./components/project-info')).ProjectInfoPanel(content);
+    case 'create': return new (await import('./components/create-project')).CreateProjectPanel(content, userName);
+    case 'compose': return new (await import('./components/compose-panel')).ComposePanel(content, userName);
+    // Reply tab reuses ComposePanel in reply mode
+    case 'reply': return new (await import('./components/compose-panel')).ComposePanel(content, userName, { isReply: true });
+    case 'settings': return new (await import('./components/settings')).SettingsPanel(content, () => {
+      // After saving settings, re-render to show main panels
+      renderApp();
+    });
+  }
+  return null;
 }
 
 // ── Office.js Initialization ──
-
-// Sweep auto au démarrage + à chaque changement de mail. Le throttle 2min
-// évite le spam API. Affiche un toast discret si N mails archivés.
-async function triggerAutoSweep(): Promise<void> {
-  // Sur mobile, pas de balayage depuis le téléphone : le rangement est fait par l'agent serveur.
-  if (isMobile()) return;
-  try {
-    const r = await maybeAutoSweep();
-    if (r && r.archived > 0) {
-      showToast(`${r.archived} mail${r.archived > 1 ? 's' : ''} archivé${r.archived > 1 ? 's' : ''} automatiquement`, 'success');
-    }
-  } catch (e) {
-    console.warn('[ATLAS] auto-sweep failed:', e);
-  }
-}
 
 Office.onReady(async (info) => {
   if (info.host === Office.HostType.Outlook) {
     console.log('[ATLAS] Outlook Add-in loaded');
     // Hydrate localStorage depuis roamingSettings AVANT le 1er renderApp, et efface les
     // anciens secrets (clé Anthropic, jeton Airtable) du poste et de la boîte.
+    // Connexion lancée tout de suite (jeton de la session si encore valable, sinon connexion
+    // silencieuse), en parallèle du premier rendu : la vue du mail l'attend déjà en cours.
+    prechaufferConnexion();
     await initRoamingStorage();
     renderApp();
-    // Sweep auto en background (silencieux si rien à faire)
-    triggerAutoSweep();
 
     // Quand le task-pane est ÉPINGLÉ par l'utilisateur (icône 📌 en haut),
     // il reste ouvert pendant qu'il change de mail. Sans handler, le contenu
@@ -327,8 +302,6 @@ Office.onReady(async (info) => {
           console.log('[ATLAS] ItemChanged → re-render');
           currentTab = '';
           renderApp();
-          // Sweep auto à chaque changement de mail (throttled 2min)
-          triggerAutoSweep();
         },
       );
     } catch (e) {

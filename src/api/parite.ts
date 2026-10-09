@@ -41,8 +41,9 @@ export const importerLotDossier = (p: { mailbox?: string; projetId: string; doss
 
 // ── Reclasser ──
 
-export async function fetchProjetDuMail(messageId: string, mailbox?: string): Promise<{ id: string; libelle: string } | null> {
-  const r = await lire<{ projet?: { id: string; libelle: string } | null }>(`reclasser?${qs({ messageId, mailbox })}`);
+export async function fetchProjetDuMail(messageId: string, mailbox?: string, conversationId?: string): Promise<{ id: string; libelle: string } | null> {
+  // Fil donné (Office.js) : le worker lit l'index des mails liés sans relire le mail (09/10/2026).
+  const r = await lire<{ projet?: { id: string; libelle: string } | null }>(`reclasser?${qs({ messageId, mailbox, conversationId })}`);
   return r.projet || null;
 }
 export interface ReponseReclassement { delies: number; deplacer: 'non' | 'ranger' | 'creer'; dossierVers?: { id: string; chemin: string }; dossierACreer?: string }

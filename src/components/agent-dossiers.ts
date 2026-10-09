@@ -145,6 +145,12 @@ export interface CtxClasser extends CtxDossiers {
    * la suggestion du worker mise en avant (« Répondu : le ranger dans … ? »), un clic range.
    */
   repondu?: TraiteARanger;
+  /** Fil du mail (Office.js) : le worker trouve le projet sans relire le mail. */
+  conversationId?: string;
+  /** Projet reconnu par l'agent (pas encore lié dans ATLAS) : présenté comme « probable ». */
+  projetPropose?: boolean;
+  /** La vue du mail a déjà répondu « aucun projet » : rien à redemander. */
+  sansProjet?: boolean;
 }
 
 /** Message d'un refus du worker (texte du serveur s'il en donne un), sinon message lisible. */
@@ -230,12 +236,12 @@ export function renderClasserOutlook(host: HTMLElement, ctx: CtxClasser): void {
   // 1. Dossier du projet
   const suggestion = async () => {
     try {
-      if (!projet) projet = await fetchProjetDuMail(ctx.messageId, ctx.mailbox || undefined).catch(() => null);
+      if (!projet && !ctx.sansProjet) projet = await fetchProjetDuMail(ctx.messageId, ctx.mailbox || undefined, ctx.conversationId).catch(() => null);
       if (!host.isConnected) return;
       if (!projet) { sugg.innerHTML = '<p class="agent-muted">Mail lié à aucun projet : choisis le dossier ci-dessous.</p>'; return; }
       const d = await fetchDossierProjet(projet.id, ctx.mailbox || undefined, ctx.messageId);
       if (!host.isConnected) return;
-      const titre = `<div class="agent-carte-titre">${icon('folder', 14)} Projet ${escapeHtml(projet.libelle)}</div>`;
+      const titre = `<div class="agent-carte-titre">${icon('folder', 14)} ${ctx.projetPropose ? 'Projet probable' : 'Projet'} ${escapeHtml(projet.libelle)}</div>`;
       if (d.existant && d.dejaRange) {
         sugg.innerHTML = `${titre}<p class="status-linked">${icon('check-circle', 14)}Déjà classé dans « ${escapeHtml(d.existant.chemin)} »</p>`;
         return;

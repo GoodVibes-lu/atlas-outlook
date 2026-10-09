@@ -12,19 +12,9 @@ const GRAPH_URL = 'https://graph.microsoft.com/v1.0';
 
 // ── Token + API Base Management ──
 //
-// L'addin a 2 sources d'authentification possibles :
-//   A. CALLBACK TOKEN Office.js — toujours dispo, ZÉRO config, mais ne marche
-//      QUE sur l'endpoint Outlook REST (outlook.office.com/api/v2.0). Limité à
-//      la mailbox courante de l'utilisateur. Parfait pour nos besoins :
-//      list folders, scan messages d'un sender, move, create folder.
-//   B. GRAPH TOKEN custom — stocké en localStorage (SSO ou token desktop).
-//      Plus puissant (toute la Graph API) mais nécessite config utilisateur.
-//
-// On essaie d'abord A (gratuit, immédiat). Si échec → fallback B. Le base URL
-// retourné dépend de la source.
-//
-// Outlook REST v2.0 a une shape quasi-identique à Graph v1.0 pour
-// /me/messages et /me/mailFolders, donc nos helpers marchent sur les 2.
+// Historique : le complément lisait la boîte avec le jeton de rappel d'Office.js (API REST d'Outlook)
+// ou un jeton SSO. Microsoft les a coupés (cf. getApiContext) ; seul le jeton Graph collé à la main
+// (Réglages) reste utilisable ici. Le reste passe par le worker.
 
 let cachedToken: string | null = null;
 let cachedBase: string | null = null;
@@ -36,65 +26,19 @@ interface ApiContext {
 }
 
 /**
- * Récupère un token + base URL utilisables pour les appels mailbox.
- * Préfère le callback token Office.js (gratuit, immédiat).
+ * Jeton + base URL pour un appel DIRECT à la boîte depuis le complément.
+ *
+ * Lot 1 « vitesse » (09/10/2026) : Microsoft ne donne plus de jeton de boîte au complément (jeton
+ * de rappel Exchange coupé, SSO sans accès à la boîte sur le nouvel Outlook pour Mac). Les deux
+ * tentatives d'avant (jeton de rappel, puis SSO SANS délai maximal) échouaient à chaque ouverture,
+ * parfois après une longue attente, et entraient en concurrence avec la vraie connexion au worker.
+ * On ne les tente plus : seul reste le jeton Graph collé à la main (Réglages, session seulement).
+ * Tout ce qui lit ou range un mail passe par le worker (règle rangementClicAutorise).
  */
 export async function getApiContext(): Promise<ApiContext> {
   if (cachedToken && cachedBase && Date.now() < tokenExpiry) {
     return { token: cachedToken, base: cachedBase };
   }
-
-  const errors: string[] = [];
-
-  // ── A. Callback token Office.js avec isRest:true (préféré) ──
-  try {
-    if (typeof Office !== 'undefined' && Office.context?.mailbox?.getCallbackTokenAsync) {
-      const result = await new Promise<Office.AsyncResult<string>>((resolve) => {
-        try {
-          Office.context.mailbox.getCallbackTokenAsync({ isRest: true }, (res) => resolve(res));
-        } catch (e) {
-          errors.push(`isRest exception: ${(e as Error).message?.slice(0, 80)}`);
-          resolve({ status: Office.AsyncResultStatus.Failed, value: '' } as Office.AsyncResult<string>);
-        }
-      });
-      if (result.status === Office.AsyncResultStatus.Succeeded && result.value) {
-        const restUrl = (Office.context.mailbox as any).restUrl || 'https://outlook.office.com/api';
-        const base = `${String(restUrl).replace(/\/$/, '')}/v2.0`;
-        console.info('[Mailbox API] using callback REST token, base =', base);
-        cachedToken = result.value;
-        cachedBase = base;
-        tokenExpiry = Date.now() + 50 * 60 * 1000;
-        return { token: cachedToken, base };
-      }
-      const err = (result as any).error;
-      errors.push(`isRest status=${result.status}${err ? ` (${err.code}: ${err.message?.slice(0, 60)})` : ''}`);
-    } else {
-      errors.push('Office.context.mailbox.getCallbackTokenAsync indispo');
-    }
-  } catch (err) {
-    errors.push(`isRest catch: ${(err as Error).message?.slice(0, 80)}`);
-  }
-
-  // ── B. SSO Office.auth.getAccessToken (Graph) ──
-  try {
-    if (typeof Office !== 'undefined' && Office.auth) {
-      const ssoToken = await Office.auth.getAccessToken({ allowSignInPrompt: true });
-      if (ssoToken) {
-        console.info('[Mailbox API] using Office SSO token (Graph)');
-        cachedToken = ssoToken;
-        cachedBase = GRAPH_URL;
-        tokenExpiry = Date.now() + 50 * 60 * 1000;
-        return { token: ssoToken, base: GRAPH_URL };
-      }
-      errors.push('SSO retour vide');
-    } else {
-      errors.push('Office.auth indispo');
-    }
-  } catch (err) {
-    errors.push(`SSO: ${(err as Error).message?.slice(0, 80)}`);
-  }
-
-  // ── C. Token Graph collé manuellement (session seulement, jamais persistant) ──
   const stored = readGraphToken();
   if (stored) {
     console.info('[Mailbox API] using localStorage Graph token');
@@ -103,10 +47,8 @@ export async function getApiContext(): Promise<ApiContext> {
     tokenExpiry = Date.now() + 30 * 60 * 1000;
     return { token: stored, base: GRAPH_URL };
   }
-  errors.push('aucun jeton collé');
-
-  throw new AtlasError('session', 'Outlook ne donne pas à ATLAS l\'accès à ta boîte sur ce poste : rouvre Outlook puis réessaie.', {
-    service: 'outlook', route: 'jeton boîte', detail: errors.join(' / '),
+  throw new AtlasError('session', 'Outlook ne donne plus à ATLAS l\'accès direct à ta boîte : cette action passe par ATLAS.', {
+    service: 'outlook', route: 'jeton boîte', detail: 'accès direct à la boîte coupé par Microsoft ; aucun jeton collé',
   });
 }
 
