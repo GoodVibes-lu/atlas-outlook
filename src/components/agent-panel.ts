@@ -39,7 +39,7 @@
  * d'écriture (actions, rappels) restent disponibles : ils appellent le worker, pas Office.js.
  */
 
-import { fetchAgentState, fetchEmailSuggestions, decideExpediteur, fetchDetections, type EmailActionSuggestion, type AgentPile } from '../api/agent';
+import { fetchAgentState, fetchEmailSuggestions, decideExpediteur, fetchDetections, definirPreferenceTri, ciblePreference, type EmailActionSuggestion, type AgentPile } from '../api/agent';
 import type { InboxMessageState, InboxEngagement } from '../api/inbox-agent.types';
 import { renderJournal } from './agent-lists';
 import { refreshJourneeBanner } from './journee-banner';
@@ -373,6 +373,7 @@ export class AgentPanel {
         ${s.categorie ? `<span class="agent-cat">· ${escapeHtml(humanize(s.categorie))}</span>` : ''}
       </div>
       ${pile === 'a_filtrer' ? this.filtreHtml(s) : ''}
+      ${this.preferenceHtml(s, pile)}
       ${s.resume ? `<p class="agent-resume">« ${escapeHtml(s.resume)} »</p>` : ''}
       ${facts.length ? `<ul class="agent-facts">${facts.join('')}</ul>` : ''}
 
@@ -389,6 +390,7 @@ export class AgentPanel {
       </div>
     `;
     if (pile === 'a_filtrer') this.bindFiltre(s);
+    this.bindPreference(s);
     if (blanc) return;
     this.$('agent-main-action')?.addEventListener('click', () => {
       if (action) this.runAction(action.type, action.cible?.id, action.cible?.table);
@@ -432,6 +434,47 @@ export class AgentPanel {
         } catch (e) {
           box.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; });
           showToast(`${humanError(e)}`, 'error');
+        }
+      });
+    });
+  }
+
+  // ── Préférence de tri (09/10/2026) : « Toujours me montrer ce type de mail » / « C'est du bruit » ──
+
+  private preferenceHtml(s: EtatAvecBrouillon, pile: AgentPile): string {
+    const email = s.from?.email || this.item?.fromEmail || '';
+    const auto = /^(newsletter|notification_systeme|expediteur_refuse)$/.test(String(s.categorie || '')) || /(no-?reply|notifications?|notice|alerts?|mailer|newsletters?|automated|billing|invoice|receipts?)/i.test(email);
+    if (!email || (pile !== 'bruit' && !auto && !s.preference)) return '';
+    const etat = s.preference ? escapeHtml(s.preference.raison) : pile === 'bruit' ? 'Classé en bruit.' : 'Envoi automatisé.';
+    return `
+      <div class="agent-filtre" id="agent-preference">
+        <div class="agent-muted">${etat}</div>
+        <div class="agent-filtre-btns">
+          <button type="button" class="btn btn-secondary agent-btn" data-pref="montrer">Toujours me montrer ce type de mail</button>
+          <button type="button" class="btn btn-secondary agent-btn" data-pref="bruit">C'est du bruit</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private bindPreference(s: EtatAvecBrouillon): void {
+    const box = this.$('agent-preference');
+    const email = s.from?.email || this.item?.fromEmail || '';
+    if (!box || !email) return;
+    box.querySelectorAll<HTMLButtonElement>('button[data-pref]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const effet = btn.dataset.pref === 'bruit' ? 'bruit' : 'montrer';
+        box.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = true; });
+        try {
+          const r = await definirPreferenceTri(email, effet);
+          if (this.destroyed) return;
+          const cible = ciblePreference(r);
+          box.innerHTML = `<div class="agent-muted">${effet === 'montrer' ? 'Toujours montré' : 'Bruit désormais'} : ${escapeHtml(cible)}${r.reclasses ? ` (${r.reclasses} mail${r.reclasses > 1 ? 's' : ''} récent${r.reclasses > 1 ? 's' : ''} reclassé${r.reclasses > 1 ? 's' : ''})` : ''}.</div>`;
+          showToast(effet === 'montrer' ? `Toujours montré : ${cible}` : `Bruit désormais : ${cible}`, 'success');
+          refreshJourneeBanner(document.getElementById('journee-host'), { onInfo: showToast }).catch(() => { /* bandeau facultatif */ });
+        } catch (e) {
+          box.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; });
+          showToast(humanError(e), 'error');
         }
       });
     });

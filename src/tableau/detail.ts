@@ -13,6 +13,7 @@ import { deposerBrouillon, programmerEnvoi, redigerArgo, remplirModeleTableau } 
 import { confirmerDansLaPage, confirmerParModale, envoyerDirect } from './envoi-direct';
 import {
   fetchEquipe, relacherMail, attribuerMail, ajouterCommentaire, fetchModeles, demanderRelance,
+  definirPreferenceTri, ciblePreference,
   type ModeleReponse,
 } from '../api/agent';
 import { copierTexte, renderActionsMetier } from '../components/agent-outils';
@@ -51,6 +52,7 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
         ${m.famille === 'mandats' ? '' : `<button type="button" class="tb-btn is-ghost" data-a="projet">${icon('folder', 14)}Projet ${kbd('l')}</button>`}
       </div>
     </div>
+    ${preferenceVisible(m) ? `<div class="tb-panel" id="tb-preference">${preferenceHtml(m.famille === 'personnes' ? 'Envoi automatisé, montré avec les personnes.' : 'Envoi automatisé, rangé à part.')}</div>` : ''}
     <div class="tb-panel" id="tb-propositions"><div class="tb-h">L'agent propose</div><div class="tb-note">Chargement…</div></div>
     <div class="tb-panel" id="tb-dossier-projet" hidden></div>
     ${envoye ? '' : `<div class="tb-panel" id="tb-offre"></div>`}
@@ -79,6 +81,8 @@ export function renderDetail(host: HTMLElement, m: TableauMail, ctx: Ctx): void 
     try { const r = await demanderRelance(m.messageId, jours); toast(r.relanceLe ? `Relance prévue le ${r.relanceLe.slice(8, 10)}/${r.relanceLe.slice(5, 7)} sans réponse` : 'Relance prévue', 'success'); }
     catch (e) { toast(humanError(e), 'error'); }
   });
+  const pref = host.querySelector<HTMLElement>('#tb-preference');
+  if (pref) brancherPreference(pref, m.from?.email || '', ctx);
   on('[data-raccourci="r"]', () => void composer(host, m, ctx, 'argo'));
   on('[data-raccourci="t"]', () => void composer(host, m, ctx, 'modele'));
 
@@ -353,8 +357,47 @@ export function renderDigest(host: HTMLElement, d: DigestNewsletter, ctx: Ctx): 
   host.innerHTML = `<div class="tb-panel is-raised">
     <div class="tb-detail-h"><h3>${h(d.nom)}</h3><div class="tb-detail-meta"><span>${h(d.expediteur)}</span><span>${d.nb} mail${d.nb > 1 ? 's' : ''} en 14 jours</span></div></div>
     <div class="tb-actions">${d.desinscription ? `<button type="button" class="tb-btn" id="tb-desinscr">${icon('x', 14)}Se désinscrire</button>` : ''}</div>
+    <div id="tb-preference-nl">${preferenceHtml('Newsletter regroupée dans le digest.')}</div>
     <div>${d.mails.map((m, i) => `<div class="tb-eng"><p>${h(m.subject || '(sans objet)')}<br><small>${h(m.resume || '')}</small></p><button type="button" class="tb-btn is-ghost" data-i="${i}">${icon('external', 14)}</button></div>`).join('')}</div>
   </div>`;
   host.querySelector('#tb-desinscr')?.addEventListener('click', () => d.desinscription && ctx.openLink(d.desinscription));
+  const pref = host.querySelector<HTMLElement>('#tb-preference-nl');
+  if (pref) brancherPreference(pref, d.expediteur, ctx);
   host.querySelectorAll<HTMLButtonElement>('[data-i]').forEach(b => b.addEventListener('click', () => ctx.actions.ouvrir(d.mails[Number(b.dataset.i)])));
+}
+
+// ── Préférence de tri (09/10/2026) : « Toujours me montrer ce type de mail » / « C'est du bruit » ──
+
+const RE_AUTO = /(no-?reply|do-?not-?reply|donotreply|notifications?|notice|alerts?|mailer|newsletters?|automated|billing|invoice|receipts?|failed-payments)/i;
+
+/** Mail automatisé (notification, newsletter, facture d'un service) : le geste a du sens. */
+function preferenceVisible(m: TableauMail): boolean {
+  return m.famille === 'notifications' || m.famille === 'newsletters' || m.famille === 'factures' || RE_AUTO.test(m.from?.email || '');
+}
+
+function preferenceHtml(etat: string): string {
+  return `<div class="tb-h">Ce type de mail</div><p class="tb-note">${h(etat)} L'agent apprend aussi seul de ce que tu lis, gardes ou écartes.</p>
+    <div class="tb-actions"><button type="button" class="tb-btn" data-pref="montrer">Toujours me montrer ce type de mail</button>
+    <button type="button" class="tb-btn is-ghost" data-pref="bruit">C'est du bruit</button></div>`;
+}
+
+/** Branche les deux boutons : appliqué tout de suite (et aux 14 derniers jours), « Annuler » dans le toast. */
+function brancherPreference(zone: HTMLElement, from: string, ctx: Ctx): void {
+  zone.querySelectorAll<HTMLButtonElement>('[data-pref]').forEach(b => b.addEventListener('click', async () => {
+    const effet = b.dataset.pref === 'bruit' ? 'bruit' : 'montrer';
+    zone.querySelectorAll<HTMLButtonElement>('[data-pref]').forEach(x => { x.disabled = true; });
+    try {
+      const r = await definirPreferenceTri(from, effet);
+      const cible = ciblePreference(r);
+      const recl = r.reclasses ? ` (${r.reclasses} mail${r.reclasses > 1 ? 's' : ''} récent${r.reclasses > 1 ? 's' : ''} reclassé${r.reclasses > 1 ? 's' : ''})` : '';
+      toast(effet === 'montrer' ? `Toujours montré : ${cible}${recl}` : `Bruit désormais : ${cible}${recl}`, 'success', async () => {
+        try { await definirPreferenceTri(from, 'oublier'); toast('Préférence retirée', 'info'); await ctx.rafraichir(true); }
+        catch (e) { toast(humanError(e), 'error'); }
+      });
+      await ctx.rafraichir(true);
+    } catch (e) {
+      toast(humanError(e), 'error');
+      zone.querySelectorAll<HTMLButtonElement>('[data-pref]').forEach(x => { x.disabled = false; });
+    }
+  }));
 }

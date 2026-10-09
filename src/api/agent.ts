@@ -196,6 +196,24 @@ export async function decideExpediteur(email: string, decision: 'accepter' | 're
   invalidateJournee();
 }
 
+/**
+ * Préférence de tri (09/10/2026, worker/inbox-agent/routes-preferences.ts) : « Toujours me montrer ce
+ * type de mail » / « C'est du bruit » / « Oublier ». Portée choisie par le worker depuis l'expéditeur
+ * (domaine pour une adresse d'envoi automatique, sinon l'adresse) ; appliquée tout de suite et aux
+ * mails des 14 derniers jours de sa boîte. Les compteurs sont relus ensuite.
+ */
+export interface PreferenceTri { ok: boolean; portee: 'expediteur' | 'domaine' | 'type'; valeur: string; effet: 'montrer' | 'bruit' | null; reclasses: number; ecrits: number }
+export async function definirPreferenceTri(from: string, effet: 'montrer' | 'bruit' | 'oublier'): Promise<PreferenceTri> {
+  const r = await pluginFetch<PreferenceTri>('POST', 'agent/preferences', { from: String(from || '').trim().toLowerCase(), effet });
+  invalidateJournee();
+  return r;
+}
+
+/** Libellé court de la cible d'une préférence (« @anthropic.com », « info@markcom.lu »). */
+export function ciblePreference(r: Pick<PreferenceTri, 'portee' | 'valeur'>): string {
+  return r.portee === 'domaine' ? `@${r.valeur}` : r.portee === 'type' ? r.valeur.replace(/_/g, ' ') : r.valeur;
+}
+
 /** Ce que l'agent a fait récemment (plus récent d'abord). */
 export async function fetchJournal(limite = 30): Promise<AgentJournalAction[]> {
   const r = await pluginFetch<{ actions?: AgentJournalAction[]; journal?: AgentJournalAction[] }>('GET', `agent/journal?limite=${Math.max(1, Math.min(100, Math.round(limite)))}`);

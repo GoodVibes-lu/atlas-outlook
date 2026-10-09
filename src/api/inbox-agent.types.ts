@@ -77,6 +77,8 @@ export interface InboxMessageState {
    * 'direction' = INBOX_AGENT_VIP ; 'client' = tiers lié à un projet non clôturé ; 'partenaire'.
    */
   correspondant?: InboxCorrespondant;
+  /** Préférence de la personne qui a décidé de la pile (09/10/2026, miroir de src/types/inbox-agent.types.ts). */
+  preference?: { effet: 'montrer' | 'bruit'; source: 'explicite' | 'appris' | 'defaut'; raison: string };
   /** Newsletter : lien de désinscription (en-tête List-Unsubscribe, https de préférence). */
   desinscription?: string;
   /**
