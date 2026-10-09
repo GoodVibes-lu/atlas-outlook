@@ -24,7 +24,7 @@
  */
 
 import {
-  fetchActions, executerAction, annulerAction, mettrePlusTard, retirerPlusTard, demanderRelance,
+  fetchActions, executerAction, ecarterSuggestion, annulerAction, mettrePlusTard, retirerPlusTard, demanderRelance,
   annulerRelance, poserQuestion, fetchResumeFil, fetchRattrapage,
   traduire, fetchModeles, remplirModele, fetchFicheContact, verifierPiecesLourdes, creerLienCourt, deposerPiecesLourdes, fetchDossiersFactures,
   type DepotPiecesLourdes,
@@ -289,6 +289,7 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
           <div data-dossier-liste="${i}" hidden></div>
         </div>` : ''}
         <button type="button" class="btn btn-primary btn-block agent-btn" data-exec="${i}">${escapeHtml(a.libelle)}</button>
+        <button type="button" class="agent-link" data-ecarter="${i}" title="Ne plus proposer cette action pour ce correspondant">Pas pertinent</button>
         <div class="agent-carte-resultat" data-res="${i}" hidden></div>
       </div>`;
     }).join('')}
@@ -309,6 +310,37 @@ export async function renderActionsMetier(host: HTMLElement, ctx: { messageId: s
       } catch (e) {
         btn.disabled = false;
         ctx.onInfo?.(`Annulation impossible : ${messageErreur(e)}`, 'error');
+      }
+    });
+  });
+
+  // « Pas pertinent » (10/10/2026) : un clic écarte la carte ; le refus est retenu pour ce correspondant.
+  host.querySelectorAll<HTMLButtonElement>('button[data-ecarter]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const i = Number(btn.dataset.ecarter);
+      const a = cartes[i];
+      const carte = host.querySelector<HTMLElement>(`[data-carte="${i}"]`);
+      if (!a || !carte) return;
+      btn.disabled = true;
+      try {
+        await ecarterSuggestion({ messageId: ctx.messageId, mailbox: ctx.mailbox || undefined, type: a.type });
+        carte.classList.add('is-fait');
+        carte.innerHTML = `<div class="agent-fait" role="status"><span>Écarté : « ${escapeHtml(a.libelle)} » ne sera plus proposé pour ce correspondant.</span>
+          <span class="agent-fait-btns"><button type="button" class="btn btn-secondary agent-btn" data-retablir>Annuler</button></span></div>`;
+        const undo = carte.querySelector<HTMLButtonElement>('[data-retablir]');
+        undo?.addEventListener('click', async () => {
+          undo.disabled = true;
+          try {
+            await ecarterSuggestion({ messageId: ctx.messageId, mailbox: ctx.mailbox || undefined, type: a.type, retablir: true });
+            if (host.isConnected) void renderActionsMetier(host, ctx);
+          } catch (e) {
+            undo.disabled = false;
+            ctx.onInfo?.(`Annulation impossible : ${messageErreur(e)}`, 'error');
+          }
+        });
+      } catch (e) {
+        btn.disabled = false;
+        ctx.onInfo?.(`Impossible d'écarter : ${messageErreur(e)}`, 'error');
       }
     });
   });

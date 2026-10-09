@@ -301,6 +301,11 @@ export async function fetchActions(messageId: string, mailbox: string): Promise<
  * est RENVOYÉ (pas levé) pour que le panneau puisse demander le choix ; les erreurs techniques
  * (réseau, 5xx, jeton) sont levées.
  */
+/** « Pas pertinent » (10/10/2026) : la suggestion n'est plus proposée à ce correspondant ; `retablir` annule. */
+export async function ecarterSuggestion(args: { messageId: string; mailbox?: string; type: string; retablir?: boolean }): Promise<void> {
+  await pluginFetch('POST', 'agent/actions/ecarter', args);
+}
+
 export async function executerAction(args: {
   messageId: string; mailbox?: string; type: string; donnees?: Record<string, unknown>; choix?: Record<string, unknown>;
 }): Promise<ResultatExecution> {
