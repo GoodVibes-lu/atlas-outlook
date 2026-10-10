@@ -581,14 +581,21 @@ function renderRelance(host: HTMLElement, ctx: { messageId: string; onInfo?: Inf
 
 // ── Résumé du fil ──
 
-export function renderResumeFil(host: HTMLElement, ctx: { conversationId: string; mailbox: string }): void {
+export function renderResumeFil(host: HTMLElement, ctx: { conversationId: string; mailbox: string; deja?: { lignes: string[]; nbMails: number; misAJour: string } | null }): void {
   if (!ctx.conversationId) { host.hidden = true; return; }
   host.hidden = false;
   host.innerHTML = `
-    <button type="button" class="btn btn-secondary btn-block agent-btn" id="agent-resume-fil-btn">Résumer le fil</button>
+    <button type="button" class="btn btn-secondary btn-block agent-btn" id="agent-resume-fil-btn">${ctx.deja ? 'Actualiser le résumé' : 'Résumer le fil'}</button>
     <div id="agent-resume-fil" hidden></div>`;
   const btn = host.querySelector<HTMLButtonElement>('#agent-resume-fil-btn')!;
   const out = host.querySelector<HTMLElement>('#agent-resume-fil')!;
+  // Lot 5 (10/10/2026) : long fil (plus de 5 mails) déjà résumé par l'agent à l'arrivée, affiché d'emblée.
+  if (ctx.deja?.lignes.length) {
+    out.hidden = false;
+    out.innerHTML = `<div class="agent-section-title">Le fil en bref (${ctx.deja.nbMails} mails)</div>
+      <ul class="agent-resume-fil">${ctx.deja.lignes.map(l => `<li>${escapeHtml(l)}</li>`).join('')}</ul>`;
+    host.prepend(out);
+  }
   btn.addEventListener('click', async () => {
     btn.disabled = true;
     out.hidden = false;

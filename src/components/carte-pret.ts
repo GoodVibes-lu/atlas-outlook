@@ -10,11 +10,13 @@
  * Aussi : réglages d'autonomie de la personne (trier, ranger, lier : seul / me proposer / rien).
  * Rien n'est envoyé chez un client.
  */
-import { annulerAction } from '../api/agent';
+import { annulerAction, executerAction } from '../api/agent';
+import { openExternal } from '../api/platform';
+import { lienAtlasOuvrable } from './agent-outils';
 import { humanError } from '../api/net';
 import {
   changerProjet, chercherProjets, delierProjet, ecrireAutonomie, lierEtClasser, lireAutonomie,
-  type NiveauAutonomie, type ResultatLiaison, type VuePrete,
+  type NiveauAutonomie, type ParcoursPret, type ResultatLiaison, type VuePrete,
 } from '../api/projet-mail';
 import { escapeHtml } from '../utils/html';
 import { icon } from '../ui/icons';
@@ -77,12 +79,61 @@ export function monterChoixProjet(host: HTMLElement, choisir: (p: { id: string; 
   q.focus();
 }
 
-/** Carte « Prêt » ; masquée s'il n'y a ni projet ni candidat (ou si la personne a réglé « rien »). */
+/**
+ * Lot 4 : LE parcours métier en tête de la carte (devis, créa, posts CM, paid, régie, staffing, devis
+ * fournisseur, presse, fiche manquante, rendez-vous), prérempli, en un clic. Une action déjà faite
+ * seule (autonomie) est affichée « Fait ». Rien ne part chez un client sans ton clic.
+ */
+function monterParcours(zone: HTMLElement, p: ParcoursPret, ctx: CtxPret): void {
+  const fait = (texte: string) => `<p class="status-linked">${icon('check-circle', 14)}${escapeHtml(texte)}</p>`;
+  const lien = p.lien ? lienAtlasOuvrable(p.lien) : '';
+  zone.innerHTML = `
+    <div class="agent-carte-titre">${icon('bolt', 14)} ${escapeHtml(p.titre)}</div>
+    <div class="agent-muted">${escapeHtml(p.note)}</div>
+    ${p.action ? `<p class="agent-resume">${escapeHtml(p.action.apercu || p.action.libelle)}</p>` : ''}
+    ${(p.action?.avertissements || []).map(w => `<div class="agent-muted">${escapeHtml(w)}</div>`).join('')}
+    ${p.fait ? fait('Fait, comme tu l\'as demandé.')
+      : p.action ? `<button type="button" class="btn btn-primary btn-block agent-btn" data-parcours>${escapeHtml(p.action.libelle)}</button>`
+      : lien ? '<button type="button" class="btn btn-secondary btn-block agent-btn" data-ouvrir>Ouvrir dans ATLAS</button>' : ''}
+    ${p.verrou === 'client' && !p.fait ? '<div class="agent-muted">Rien ne part chez le client sans ton clic.</div>' : ''}
+    <div data-parcours-msg></div>`;
+  zone.querySelector('[data-ouvrir]')?.addEventListener('click', () => openExternal(lien));
+  const b = zone.querySelector<HTMLButtonElement>('[data-parcours]');
+  b?.addEventListener('click', async () => {
+    const msg = zone.querySelector<HTMLElement>('[data-parcours-msg]')!;
+    b.disabled = true; b.textContent = 'En cours…';
+    try {
+      const r = await executerAction({ messageId: ctx.messageId, type: p.action!.type, ...(ctx.mailbox ? { mailbox: ctx.mailbox } : {}) });
+      if (r.ok) {
+        const l = lienAtlasOuvrable(r.cible?.lien, r.cible);
+        b.replaceWith(Object.assign(document.createElement('div'), { innerHTML: fait(r.simule ? `${r.resume} (simulé)` : r.resume) }));
+        if (l) { const o = Object.assign(document.createElement('button'), { type: 'button', className: 'agent-link', textContent: 'Ouvrir dans ATLAS' }); o.addEventListener('click', () => openExternal(l)); msg.appendChild(o); }
+        ctx.onInfo?.(r.resume, 'success');
+      } else {
+        b.disabled = false; b.textContent = p.action!.libelle;
+        // Choix humain requis (projet…) : la carte « Actions » plus bas le propose, jamais deviné.
+        msg.innerHTML = `<p class="agent-muted">${escapeHtml(r.resume || r.erreur || 'Un choix est nécessaire')} : voir « Actions » plus bas.</p>`;
+      }
+    } catch (e) {
+      b.disabled = false; b.textContent = p.action!.libelle;
+      msg.innerHTML = `<p class="agent-error" role="alert">Impossible pour le moment : ${escapeHtml(humanError(e))}</p>`;
+    }
+  });
+}
+
+/** Carte « Prêt » ; masquée s'il n'y a ni parcours, ni projet, ni candidat (ou si la personne a réglé « rien »). */
 export function renderCartePret(host: HTMLElement, pret: VuePrete | null, ctx: CtxPret): void {
   const auto = pret?.autonomie;
   const rien = !!auto && auto.lier === 'suggerer' && auto.ranger === 'suggerer';
-  if (!pret || rien || (!pret.projet && !pret.candidats?.length)) { host.hidden = true; host.innerHTML = ''; return; }
+  const parcours = pret?.parcours || null;
+  const projetVisible = !!pret && !rien && (!!pret.projet || !!pret.candidats?.length);
+  if (!pret || (!projetVisible && !parcours)) { host.hidden = true; host.innerHTML = ''; return; }
   host.hidden = false;
+  if (!projetVisible) {
+    host.innerHTML = '<div class="agent-section-title">Prêt</div><div class="agent-carte" data-parcours-zone></div>';
+    monterParcours(host.querySelector<HTMLElement>('[data-parcours-zone]')!, parcours!, ctx);
+    return;
+  }
   let projet = pret.projet;
   let lie = !!pret.lie || !!pret.auto?.lie;
   let occupe = false;
@@ -104,6 +155,7 @@ export function renderCartePret(host: HTMLElement, pret: VuePrete | null, ctx: C
       : '';
     host.innerHTML = `
       <div class="agent-section-title">Prêt</div>
+      ${parcours ? '<div class="agent-carte" data-parcours-zone></div>' : ''}
       <div class="agent-carte">
         ${titre}${autoFait}${message ? `<p class="status-linked">${icon('check-circle', 14)}${escapeHtml(message)}</p>` : ''}
         ${boutons}${candidats}
@@ -115,6 +167,8 @@ export function renderCartePret(host: HTMLElement, pret: VuePrete | null, ctx: C
         <div data-choix hidden></div>
         <div data-err hidden></div>
       </div>`;
+    const zone = host.querySelector<HTMLElement>('[data-parcours-zone]');
+    if (zone && parcours) monterParcours(zone, parcours, ctx);
     const err = host.querySelector<HTMLElement>('[data-err]')!;
     const erreur = (texte: string, e: unknown) => { err.hidden = false; err.innerHTML = `<p class="agent-error" role="alert">${escapeHtml(texte)} : ${escapeHtml(humanError(e))}</p>`; };
     const lier = async (p: { id: string; libelle: string }, changer: boolean, btn?: HTMLButtonElement) => {

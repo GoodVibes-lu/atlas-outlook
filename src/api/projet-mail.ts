@@ -17,7 +17,21 @@ export interface VuePrete {
   dossier?: { existant: { id: string; chemin: string } | null; propose: string | null } | null;
   auto?: { lie?: boolean; range?: boolean; actionRangementId?: string; categorie?: boolean; motif?: string; at: string };
   autonomie?: { lier: NiveauAutonomie; ranger: NiveauAutonomie; trier: NiveauAutonomie } | null;
+  /** Lot 4 : LE parcours métier préparé à l'arrivée (src/utils/inbox-parcours.ts › ParcoursPrepare). */
+  parcours?: ParcoursPret | null;
   prepareLe: string;
+}
+
+export interface ParcoursPret {
+  id: string;
+  titre: string;
+  note: string;
+  action?: { type: string; libelle: string; apercu: string; confiance: number; avertissements?: string[] };
+  lien?: string;
+  verrou: 'interne' | 'client';
+  source: 'regles' | 'ia';
+  /** L'action qui porte le parcours est déjà faite (seule, selon ton autonomie, ou au clic). */
+  fait?: boolean;
 }
 
 export interface ResultatLiaison {

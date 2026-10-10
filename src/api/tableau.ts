@@ -185,6 +185,21 @@ export const fetchReactivite = () => lecture<ReactiviteVue>('tableau/reactivite'
 // ── Traités à ranger (08/10/2026) ──
 
 /** Mails répondus à ranger (sa boîte) ; `messageId` : ce mail seulement (panneau « Ce mail »). */
+// ── Boîte zéro du soir (lot 6, 10/10/2026) ──
+export interface ElementBoiteZero { messageId: string; libelle: string }
+export interface BoiteZero {
+  /** Soir d'un jour ouvré (après 17 h) : la proposition est montrée. */
+  fenetre: boolean;
+  plan: { ranger: ElementBoiteZero[]; archiver: ElementBoiteZero[]; rappeler: ElementBoiteZero[] };
+  /** Autonomie « ranger : seul » : ATLAS le fait seul le soir. */
+  seul: boolean;
+  dernier: { at: string; resume: string; seul: boolean; annulable: boolean } | null;
+}
+export const fetchBoiteZero = () => lecture<BoiteZero>('tableau/boite-zero');
+export const appliquerBoiteZero = (choix: { ranger?: boolean; archiver?: boolean; rappeler?: boolean } = {}) =>
+  ecriture<{ resume: string; erreurs: number }>('POST', 'tableau/boite-zero', choix);
+export const annulerBoiteZero = () => ecriture<{ annules: number; erreurs: number }>('POST', 'tableau/boite-zero/annuler', {});
+
 export const fetchTraites = (messageId?: string) =>
   lecture<{ mailbox: string; traites: TraiteARanger[]; rangesSeuls: TraiteARanger[] }>(`tableau/traites${messageId ? `?messageId=${encodeURIComponent(messageId)}` : ''}`);
 /** « Ranger » : dossier proposé par défaut, ou un autre dossier (existant, ou chemin à créer). */

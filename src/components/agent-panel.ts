@@ -57,6 +57,8 @@ import { renderEquipe } from './agent-equipe';
 import { convertToRestId, getGraphToken } from '../api/graph';
 import { renderOffreRecue, renderClasserOutlook } from './agent-dossiers';
 import { renderCartePret } from './carte-pret';
+import { renderReponsePrete } from './reponse-prete';
+import { renderBoiteZero, soirDeSemaine } from './boite-zero';
 import { fetchTraites, type TraiteARanger } from '../api/tableau';
 import { renderPlusActions } from './agent-parite';
 import { renderSecurite } from './agent-securite';
@@ -171,6 +173,9 @@ export class AgentPanel {
   private suggestions: EmailActionSuggestion[] | null = null;
   /** Empreinte de l'état affiché (vue mémorisée) : la vue fraîche ne redessine que s'il a changé. */
   private signatureEtat = '';
+  /** Lot 5 : réponse prête affichée (le bloc « Brouillon » de l'état est alors masqué) ; texte en cours d'édition = jamais redessiné. */
+  private reponseAffichee = false;
+  private reponseEnCours = false;
 
   constructor(root: HTMLElement, navigate: (tabId: string) => void) {
     this.root = root;
@@ -206,6 +211,7 @@ export class AgentPanel {
         <section id="agent-securite" class="agent-securite" hidden></section>
 
         <section id="agent-pret" class="agent-section" hidden></section>
+        <section id="agent-reponse-prete" class="agent-section" hidden></section>
 
         <div id="agent-state" class="agent-state">
           <div class="state-loading" aria-busy="true" aria-label="Chargement du mail"><div class="skeleton-line skeleton-lg" style="width:58%"></div><div class="skeleton-line" style="width:92%"></div><div class="skeleton-line" style="width:76%"></div></div>
@@ -246,6 +252,8 @@ export class AgentPanel {
         <section id="agent-modeles" class="agent-section" hidden></section>
 
         <section id="agent-question" class="agent-section"></section>
+
+        <section id="agent-boite-zero" class="agent-section" hidden></section>
 
         <section class="agent-section">
           <button type="button" class="agent-link" id="agent-journal-toggle" aria-expanded="false">${icon('activity', 14)}Ce que l'agent a fait</button>
@@ -329,6 +337,18 @@ export class AgentPanel {
         onChange: p => this.chargerClasser(p ? { projetId: p.id, projetLibelle: p.libelle } : { sansProjet: true }),
       });
     }
+    // Lot 5 (10/10/2026) : réponse prête de l'agent (une seule relecture), réponses courtes, long fil résumé.
+    const rep = this.$('agent-reponse-prete');
+    if (rep && !this.reponseEnCours) {
+      this.reponseAffichee = renderReponsePrete(rep, v.reponse || null, v.reponsesCourtes || [], {
+        messageId: it.messageId, mailbox: it.mailbox, mobile: this.mobile, onInfo: showToast,
+        ...(this.mobile ? {} : { ouvrirDansOutlook: (texte: string) => this.repondreAvec(texte) }),
+      });
+      rep.addEventListener('focusin', () => { this.reponseEnCours = true; }, { once: true });
+      if (this.reponseAffichee) { const b = this.$('agent-brouillon'); if (b) { b.hidden = true; b.innerHTML = ''; } }
+    }
+    const fil = this.$('agent-resume-fil-wrap');
+    if (fil && v.resumeFil?.lignes.length && it.conversationId) renderResumeFil(fil, { conversationId: it.conversationId, mailbox: it.mailbox, deja: v.resumeFil });
     if (memorisee) return;
     this.chargerClasser({
       ...(v.dossier && v.projet && !v.pret?.auto?.range ? { dossier: v.dossier } : {}),
@@ -683,6 +703,9 @@ export class AgentPanel {
   // ── Outils à la demande (actions métier, rappels, résumé du fil, question) ──
 
   private renderOutils(): void {
+    // Lot 6 (10/10/2026) : boîte zéro du soir (jour de semaine après 17 h seulement : aucun appel en journée).
+    const bz = this.$('agent-boite-zero');
+    if (bz && soirDeSemaine()) void renderBoiteZero(bz, { style: 'volet', onInfo: showToast });
     const it = this.item;
     if (!it) return;
     const onInfo = showToast;
@@ -851,14 +874,13 @@ export class AgentPanel {
     const host = this.$('agent-brouillon');
     if (!host) return;
     const b = s.brouillon;
-    if (!b || (!b.graphId && !b.resumeIntention)) { host.hidden = true; host.innerHTML = ''; return; }
+    if (this.reponseAffichee || !b || (!b.graphId && !b.resumeIntention)) { host.hidden = true; host.innerHTML = ''; return; }
     const depose = !!b.cree && !!b.graphId;
     // displayMessageForm (Mailbox 1.0) + convertToEwsId (Mailbox 1.3) : bureau et web seulement ;
     // sur mobile, displayMessageForm n'existe pas : le brouillon est dans le fil / dossier Brouillons.
     const peutOuvrir = depose && !this.mobile && supportsMailbox('1.3');
-    const lienWeb = depose && !this.mobile
-      ? `https://outlook.office.com/mail/drafts/id/${encodeURIComponent(b.graphId)}`
-      : '';
+    // Outlook de bureau seulement (nouvel Outlook pour Mac) : jamais de lien vers Outlook sur le web.
+    const lienWeb = '';
     const alertes = (b.alertes || []).filter(a => a && a.message);
     host.hidden = false;
     host.innerHTML = `

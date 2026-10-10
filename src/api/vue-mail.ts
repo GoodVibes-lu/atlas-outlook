@@ -38,8 +38,20 @@ export interface VueMail {
   pret?: VuePrete | null;
   /** Dossier Outlook du projet déjà connu (plus d'appel séparé). */
   dossier?: { existant: { id: string; chemin: string } | null; propose: string | null } | null;
+  /** Lot 5 (10/10/2026) : réponse prête de l'agent (une seule relecture), réponses courtes, résumé du long fil. */
+  reponse?: ReponsePrete | null;
+  reponsesCourtes?: string[];
+  resumeFil?: { lignes: string[]; nbMails: number; misAJour: string } | null;
   aCharger: string[];
   ms?: number;
+}
+
+export interface ReponsePrete {
+  texte: string;
+  resumeIntention: string;
+  motif?: string;
+  alertes?: Array<{ code: string; message: string; gravite: 'bloquant' | 'avertissement' }>;
+  depose: boolean;
 }
 
 export async function fetchVueMail(p: { messageId: string; conversationId?: string; from?: string; nom?: string }): Promise<VueMail> {
@@ -56,6 +68,9 @@ export async function fetchVueMail(p: { messageId: string; conversationId?: stri
     traite: r?.traite || null,
     pret: r?.pret && typeof r.pret === 'object' ? r.pret : null,
     dossier: r?.dossier && typeof r.dossier === 'object' ? r.dossier : null,
+    reponse: r?.reponse && typeof r.reponse.texte === 'string' ? r.reponse : null,
+    reponsesCourtes: Array.isArray(r?.reponsesCourtes) ? r.reponsesCourtes.map(String).slice(0, 3) : [],
+    resumeFil: r?.resumeFil && Array.isArray(r.resumeFil.lignes) ? r.resumeFil : null,
     aCharger: Array.isArray(r?.aCharger) ? r.aCharger.map(String) : [],
     ...(typeof r?.ms === 'number' ? { ms: r.ms } : {}),
   };
